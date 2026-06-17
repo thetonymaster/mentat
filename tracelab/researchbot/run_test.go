@@ -76,6 +76,11 @@ func TestRunPropagatesStdoutWriteError(t *testing.T) {
 	if err := Run(context.Background(), p, rec, failingWriter{}, &errBuf); err == nil {
 		t.Fatal("expected error when stdout write fails, got nil")
 	}
+	// Run shuts the provider down before writing the answer, so cleanup must
+	// have happened even though the write itself failed.
+	if !rec.shutdownCalled.Load() {
+		t.Fatal("provider Shutdown was not called on the stdout-write error path — resource leak")
+	}
 }
 
 func TestRunErrors(t *testing.T) {
