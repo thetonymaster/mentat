@@ -7,20 +7,51 @@ import (
 
 func TestByOpIsStableSortedAndEnvelopeSpansForest(t *testing.T) {
 	t0 := time.Unix(0, 0)
-	tr := &Trace{
-		RunID: "r1",
-		Spans: []*Span{
-			{Name: "invoke_agent", Start: t0, End: t0.Add(3 * time.Second), Attrs: map[string]string{"gen_ai.operation.name": "invoke_agent"}},
-			{Name: "execute_tool search", Start: t0.Add(1 * time.Second), End: t0.Add(2 * time.Second), Attrs: map[string]string{"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "search"}},
-			{Name: "execute_tool summarize", Start: t0.Add(2 * time.Second), End: t0.Add(2500 * time.Millisecond), Attrs: map[string]string{"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "summarize"}},
+	tests := []struct {
+		name         string
+		tr           *Trace
+		op           string
+		wantToolName []string // expected gen_ai.tool.name of ByOp(op) results, in order
+		wantEnvelope time.Duration
+	}{
+		{
+			name: "ByOp stable-sorted and envelope spans forest",
+			tr: &Trace{
+				RunID: "r1",
+				Spans: []*Span{
+					{Name: "invoke_agent", Start: t0, End: t0.Add(3 * time.Second), Attrs: map[string]string{"gen_ai.operation.name": "invoke_agent"}},
+					{Name: "execute_tool search", Start: t0.Add(1 * time.Second), End: t0.Add(2 * time.Second), Attrs: map[string]string{"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "search"}},
+					{Name: "execute_tool summarize", Start: t0.Add(2 * time.Second), End: t0.Add(2500 * time.Millisecond), Attrs: map[string]string{"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "summarize"}},
+				},
+			},
+			op:           "execute_tool",
+			wantToolName: []string{"search", "summarize"},
+			wantEnvelope: 3 * time.Second,
+		},
+		{
+			name:         "empty trace: no matching ops and zero envelope",
+			tr:           &Trace{},
+			op:           "execute_tool",
+			wantToolName: nil,
+			wantEnvelope: 0,
 		},
 	}
-	tools := tr.ByOp("execute_tool")
-	if len(tools) != 2 || tools[0].Attr("gen_ai.tool.name") != "search" || tools[1].Attr("gen_ai.tool.name") != "summarize" {
-		t.Fatalf("ByOp order wrong: %v", tools)
-	}
-	if tr.Envelope() != 3*time.Second {
-		t.Fatalf("envelope = %v, want 3s", tr.Envelope())
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.tr.ByOp(tt.op)
+			if len(got) != len(tt.wantToolName) {
+				t.Fatalf("ByOp(%q) len = %d, want %d: %v", tt.op, len(got), len(tt.wantToolName), got)
+			}
+			for i, want := range tt.wantToolName {
+				if name := got[i].Attr("gen_ai.tool.name"); name != want {
+					t.Fatalf("ByOp(%q)[%d] gen_ai.tool.name = %q, want %q", tt.op, i, name, want)
+				}
+			}
+			if env := tt.tr.Envelope(); env != tt.wantEnvelope {
+				t.Fatalf("Envelope() = %v, want %v", env, tt.wantEnvelope)
+			}
+		})
 	}
 }
 
@@ -67,11 +98,5 @@ func TestAttrFloat(t *testing.T) {
 				t.Fatalf("AttrFloat(%q) = (%f, %v), want (%f, %v)", tt.key, got, ok, tt.wantVal, tt.wantOK)
 			}
 		})
-	}
-}
-
-func TestEnvelopeEmpty(t *testing.T) {
-	if got := (&Trace{}).Envelope(); got != 0 {
-		t.Fatalf("Envelope() on empty Trace = %v, want 0", got)
 	}
 }
