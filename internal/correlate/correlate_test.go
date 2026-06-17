@@ -109,6 +109,40 @@ func TestResolveTimeoutZeroSpans(t *testing.T) {
 	}
 }
 
+// TestResolveHonorsContextCancellation proves that a cancelled context interrupts
+// the poll loop immediately — even though Timeout is generous (5s), the function
+// must return a context.Canceled-wrapped error before the timeout fires.
+// If Resolve ignores ctx, this test HANGS for ~5s and then passes without the
+// cancellation error, which would make the assertion fail (wrong error or nil error).
+func TestResolveHonorsContextCancellation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+
+	// Return one span so the loop keeps polling (not zero-spans timeout path).
+	st.EXPECT().Query(gomock.Any(), gomock.Any()).
+		Return([]core.TraceRef{{TraceID: "x"}}, nil).AnyTimes()
+	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).
+		Return(&trace.Trace{RunID: "x", Spans: []*trace.Span{{Name: "s"}}}, nil).AnyTimes()
+
+	// Pre-cancel the context so the loop sees cancellation on its first iteration.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Generous timeout: without ctx check the loop would run for 5s.
+	c := New(func() string { return "run-cancel" }, PollConfig{
+		Interval:  time.Millisecond,
+		StableFor: 100, // would need 100 stable polls — never reached
+		Timeout:   5 * time.Second,
+	})
+	_, err := c.Resolve(ctx, st, "run-cancel")
+	if err == nil {
+		t.Fatal("want error on cancelled context, got nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("want errors.Is(err, context.Canceled), got: %v", err)
+	}
+}
+
 // TestResolveMultiTraceForestMerge proves architecture invariant §2:
 // Resolve merges Roots and Spans from EVERY matching TraceRef into one forest.
 func TestResolveMultiTraceForestMerge(t *testing.T) {

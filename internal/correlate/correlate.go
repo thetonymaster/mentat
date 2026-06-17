@@ -48,6 +48,10 @@ func (c *correlator) Resolve(ctx context.Context, store core.TraceStore, runID s
 	var merged *trace.Trace
 
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("correlate: context cancelled resolving run %q: %w", runID, err)
+		}
+
 		refs, err := store.Query(ctx, core.TraceQuery{Tag: "test.run.id", Value: runID})
 		if err != nil {
 			return nil, fmt.Errorf("correlate: query: %w", err)
@@ -80,6 +84,10 @@ func (c *correlator) Resolve(ctx context.Context, store core.TraceStore, runID s
 			}
 			return merged, nil // deadline reached but spans present — return best effort
 		}
-		time.Sleep(c.poll.Interval)
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("correlate: context cancelled resolving run %q: %w", runID, ctx.Err())
+		case <-time.After(c.poll.Interval):
+		}
 	}
 }
