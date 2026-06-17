@@ -30,6 +30,9 @@ func New(idFn func() string, poll PollConfig) core.Correlator {
 // Inject sets spec.RunID and spec.Tags["test.run.id"] to a fresh run ID and
 // returns it (spec §5 — tag-first correlation).
 func (c *correlator) Inject(_ context.Context, spec *core.RunSpec) string {
+	if spec == nil {
+		panic("correlate: Inject called with nil *RunSpec (engine must construct it)")
+	}
 	id := c.idFn()
 	spec.RunID = id
 	if spec.Tags == nil {

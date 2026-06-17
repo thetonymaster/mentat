@@ -3,6 +3,7 @@ package correlate
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,26 @@ func TestInjectSetsRunIDAndTag(t *testing.T) {
 	if id != "fixed-id" || spec.RunID != "fixed-id" || spec.Tags["test.run.id"] != "fixed-id" {
 		t.Fatalf("inject wrong: id=%q spec=%+v", id, spec)
 	}
+}
+
+// TestInjectNilSpecPanics proves invariant §4: a nil *RunSpec is a caller-unreachable
+// wiring bug (the engine always constructs the spec), so Inject panics with an explicit,
+// descriptive message rather than a bare runtime nil-pointer dereference.
+func TestInjectNilSpecPanics(t *testing.T) {
+	c := New(func() string { return "fixed-id" }, PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("want panic on nil spec, got none")
+		}
+		msg := fmt.Sprintf("%v", r)
+		if !strings.Contains(msg, "correlate: Inject called with nil") {
+			t.Fatalf("panic message not descriptive enough: %q", msg)
+		}
+	}()
+
+	c.Inject(context.Background(), nil)
 }
 
 func TestResolveStablePollsUntilCountStable(t *testing.T) {
