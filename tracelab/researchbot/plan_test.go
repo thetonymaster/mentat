@@ -98,9 +98,23 @@ func TestValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "tool whitespace-only name",
+			plan: &Plan{Scenario: "x", Steps: []Step{
+				{Tool: &ToolStep{Name: "   "}},
+			}},
+			wantErr: true,
+		},
+		{
 			name: "chat missing model",
 			plan: &Plan{Scenario: "x", Steps: []Step{
 				{Chat: &ChatStep{Finish: "end_turn"}},
+			}},
+			wantErr: true,
+		},
+		{
+			name: "chat whitespace-only model",
+			plan: &Plan{Scenario: "x", Steps: []Step{
+				{Chat: &ChatStep{Model: "   ", Finish: "end_turn"}},
 			}},
 			wantErr: true,
 		},
