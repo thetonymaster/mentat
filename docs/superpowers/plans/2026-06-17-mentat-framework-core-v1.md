@@ -225,6 +225,7 @@ git commit -m "feat(core): gen_ai keys and Trace forest model"
 **Files:**
 - Create: `internal/core/core.go`
 - Test: `internal/core/core_test.go`
+- Generate: `internal/core/mocks/mock_core.go` (uber gomock — used by later tasks)
 
 **Interfaces:**
 - Consumes: `trace.Trace` (Task 1).
@@ -346,11 +347,30 @@ func ExtractAnswer(stdout string) string { return strings.TrimSpace(stdout) }
 Run: `go test ./internal/core/ -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Generate uber gomock mocks for the core interfaces**
+
+Later tasks (correlate, engine, steps) mock `TraceStore`/`Driver` with gomock rather
+than hand-rolled fakes (per `CLAUDE.md` → Testing rules). Add the runtime + tool:
+```bash
+go get go.uber.org/mock@latest
+go install go.uber.org/mock/mockgen@latest
+```
+Add this directive in `internal/core/core.go` right after the `package core` clause:
+```go
+//go:generate mockgen -source=core.go -destination=mocks/mock_core.go -package=mocks
+```
+Generate and verify it builds:
+```bash
+go generate ./internal/core/... && go build ./internal/core/...
+```
+Expected: `internal/core/mocks/mock_core.go` exists with `MockDriver`, `MockTraceStore`,
+`MockCorrelator`, `MockComparator`, `MockReporter`, `MockJudge`.
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add internal/core/core.go internal/core/core_test.go
-git commit -m "feat(core): Evidence/Verdict/Driver/TraceStore/Correlator contracts"
+git add internal/core/core.go internal/core/core_test.go internal/core/mocks/mock_core.go go.mod go.sum
+git commit -m "feat(core): contracts + uber gomock mocks for core interfaces"
 ```
 
 ---
@@ -1028,31 +1048,12 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/mock/gomock"
+
 	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/core/mocks"
 	"github.com/thetonymaster/mentat/internal/trace"
 )
-
-// growStore returns a trace whose span count grows for the first 2 calls, then stabilizes.
-type growStore struct {
-	calls int
-}
-
-func (s *growStore) GetByID(_ context.Context, id string) (*trace.Trace, error) {
-	s.calls++
-	n := s.calls
-	if n > 3 {
-		n = 3 // stabilize at 3 spans
-	}
-	tr := &trace.Trace{RunID: id}
-	for i := 0; i < n; i++ {
-		tr.Spans = append(tr.Spans, &trace.Span{Name: "span"})
-	}
-	return tr, nil
-}
-func (s *growStore) Query(_ context.Context, q core.TraceQuery) ([]core.TraceRef, error) {
-	return []core.TraceRef{{TraceID: q.Value}}, nil
-}
-func (s *growStore) Caps() core.StoreCaps { return core.StoreCaps{} }
 
 func TestInjectSetsRunIDAndTag(t *testing.T) {
 	c := New(func() string { return "fixed-id" }, PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
@@ -1064,8 +1065,28 @@ func TestInjectSetsRunIDAndTag(t *testing.T) {
 }
 
 func TestResolveStablePollsUntilCountStable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	st.EXPECT().Query(gomock.Any(), gomock.Any()).
+		Return([]core.TraceRef{{TraceID: "x"}}, nil).AnyTimes()
+	// Span count grows 1,2,3 then stays at 3 — Resolve must wait for stability.
+	calls := 0
+	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, id string) (*trace.Trace, error) {
+			calls++
+			n := calls
+			if n > 3 {
+				n = 3
+			}
+			tr := &trace.Trace{RunID: id}
+			for i := 0; i < n; i++ {
+				tr.Spans = append(tr.Spans, &trace.Span{Name: "span"})
+			}
+			return tr, nil
+		}).AnyTimes()
+
 	c := New(func() string { return "x" }, PollConfig{Interval: time.Millisecond, StableFor: 2, Timeout: time.Second})
-	tr, err := c.Resolve(context.Background(), &growStore{}, "x")
+	tr, err := c.Resolve(context.Background(), st, "x")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}

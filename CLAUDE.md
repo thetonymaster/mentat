@@ -65,7 +65,9 @@ from Tempo, and run **comparators** that assert how it behaved and what it produ
   the `core` interfaces (`Driver`, `TraceStore`, `Correlator`, `Comparator`,
   `Reporter`, `Judge`) rather than hand-rolling fakes:
   - Install: `go install go.uber.org/mock/mockgen@latest`
-  - Declare with `//go:generate mockgen -source=internal/core/core.go -destination=internal/core/mocks/mock_core.go -package=mocks`
+  - Declare next to the interfaces (e.g. in `internal/core/core.go`):
+    `//go:generate mockgen -source=core.go -destination=mocks/mock_core.go -package=mocks`
+    (mockgen paths are relative to the file's package dir)
   - Regenerate with `go generate ./...`; commit generated mocks.
   - Use `gomock.NewController(t)`, set `.EXPECT()` expectations, assert via the
     controller's automatic `t.Cleanup` finish.

@@ -578,14 +578,16 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/mock/gomock"
+
 	"github.com/thetonymaster/mentat/internal/config"
 	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/core/mocks"
 	"github.com/thetonymaster/mentat/internal/correlate"
-	"github.com/thetonymaster/mentat/internal/store"
 	"github.com/thetonymaster/mentat/internal/trace"
 )
 
-func TestDriveProducesEvidenceFromFakeStore(t *testing.T) {
+func TestDriveProducesEvidenceFromStore(t *testing.T) {
 	cfg := config.Config{
 		OTLPEndpoint: "http://localhost:4318",
 		Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
@@ -593,14 +595,16 @@ func TestDriveProducesEvidenceFromFakeStore(t *testing.T) {
 			"echo": {Adapter: "shell", Command: []string{"sh", "-c", "echo hi"}, MaxConcurrency: 1},
 		},
 	}
-	// A store that returns a fixed one-span trace for the injected run id.
 	tr := &trace.Trace{Spans: []*trace.Span{{Name: "root"}}, Roots: []*trace.Span{{Name: "root"}}}
-	st := store.NewInMemStore(map[string]*trace.Trace{}) // overridden below via fixedStore
-	_ = st
-	fixed := &fixedStore{tr: tr}
+
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "run-1"}}, nil).AnyTimes()
+	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(tr, nil).AnyTimes()
+
 	cor := correlate.New(func() string { return "run-1" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
 
-	eng, err := Build(cfg, fixed, cor)
+	eng, err := Build(cfg, st, cor)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -612,14 +616,6 @@ func TestDriveProducesEvidenceFromFakeStore(t *testing.T) {
 		t.Fatalf("evidence wrong: %+v", ev)
 	}
 }
-
-type fixedStore struct{ tr *trace.Trace }
-
-func (s *fixedStore) GetByID(context.Context, string) (*trace.Trace, error) { return s.tr, nil }
-func (s *fixedStore) Query(_ context.Context, q core.TraceQuery) ([]core.TraceRef, error) {
-	return []core.TraceRef{{TraceID: q.Value}}, nil
-}
-func (s *fixedStore) Caps() core.StoreCaps { return core.StoreCaps{} }
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -769,13 +765,15 @@ package steps
 
 import (
 	"bytes"
-	"context"
 	"testing"
 	"time"
+
+	"go.uber.org/mock/gomock"
 
 	"github.com/cucumber/godog"
 	"github.com/thetonymaster/mentat/internal/config"
 	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/core/mocks"
 	"github.com/thetonymaster/mentat/internal/correlate"
 	"github.com/thetonymaster/mentat/internal/engine"
 	"github.com/thetonymaster/mentat/internal/genai"
@@ -796,8 +794,12 @@ func TestFeatureExercisesGrammarAgainstFakeEngine(t *testing.T) {
 		OTLPEndpoint: "x",
 		Targets:      map[string]config.Target{"bot": {Adapter: "shell", Command: []string{"sh", "-c", "echo hi"}, MaxConcurrency: 1}},
 	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "r"}}, nil).AnyTimes()
+	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(happyTrace(), nil).AnyTimes()
 	cor := correlate.New(func() string { return "r" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
-	eng, _ := engine.Build(cfg, &stubStore{tr: happyTrace()}, cor)
+	eng, _ := engine.Build(cfg, st, cor)
 
 	feature := `Feature: grammar
   Scenario: happy
@@ -823,14 +825,6 @@ func TestFeatureExercisesGrammarAgainstFakeEngine(t *testing.T) {
 		t.Fatalf("expected passing suite, status=%d\n%s", status, out.String())
 	}
 }
-
-type stubStore struct{ tr *trace.Trace }
-
-func (s *stubStore) GetByID(context.Context, string) (*trace.Trace, error) { return s.tr, nil }
-func (s *stubStore) Query(_ context.Context, q core.TraceQuery) ([]core.TraceRef, error) {
-	return []core.TraceRef{{TraceID: q.Value}}, nil
-}
-func (s *stubStore) Caps() core.StoreCaps { return core.StoreCaps{} }
 ```
 
 - [ ] **Step 3: Run the test to verify it fails**
