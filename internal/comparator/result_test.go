@@ -49,7 +49,10 @@ func TestResultContainsPassesAndFails(t *testing.T) {
 		t.Fatalf("want pass, got %+v err=%v", v, err)
 	}
 	fail := core.Evidence{Output: core.Output{Answer: "I could not find any information."}}
-	v, _ = NewResult().Compare(context.Background(), fail, ResultExpectation{Matcher: "contains", Want: "Q3 revenue"})
+	v, err = NewResult().Compare(context.Background(), fail, ResultExpectation{Matcher: "contains", Want: "Q3 revenue"})
+	if err != nil {
+		t.Fatalf("unexpected error on contains-miss: %v", err)
+	}
 	if v.Pass {
 		t.Fatal("want fail when substring absent")
 	}
