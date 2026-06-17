@@ -3,12 +3,18 @@ package researchbot
 import (
 	"bytes"
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
+
+// failingWriter always fails on Write, simulating a broken stdout.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("write failed") }
 
 // recordingExporter wraps InMemoryExporter and counts spans received via
 // ExportSpans before delegating to the inner exporter. This lets tests verify
@@ -52,6 +58,23 @@ func TestRunWritesOnlyAnswerToStdout(t *testing.T) {
 	// Plan emits a root span + one tool span = at least 2 spans exported.
 	if got := rec.received.Load(); got < 2 {
 		t.Fatalf("expected ≥2 spans (root+tool) to be exported before Shutdown, got %d", got)
+	}
+	// Run owns the provider lifecycle: Shutdown must run on the success path too.
+	if !rec.shutdownCalled.Load() {
+		t.Fatal("provider Shutdown was not called on the success path — resource leak")
+	}
+}
+
+func TestRunPropagatesStdoutWriteError(t *testing.T) {
+	p := &Plan{
+		Scenario: "happy",
+		Output:   "Q3 revenue grew 12%",
+		Steps:    []Step{{Tool: &ToolStep{Name: "search"}}},
+	}
+	var errBuf bytes.Buffer
+	rec := newRecordingExporter()
+	if err := Run(context.Background(), p, rec, failingWriter{}, &errBuf); err == nil {
+		t.Fatal("expected error when stdout write fails, got nil")
 	}
 }
 

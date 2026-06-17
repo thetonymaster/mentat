@@ -25,6 +25,8 @@ func Run(ctx context.Context, p *Plan, exp sdktrace.SpanExporter, stdout, stderr
 	if err := tp.Shutdown(ctx); err != nil {
 		return fmt.Errorf("shutdown tracer provider: %w", err)
 	}
-	fmt.Fprintln(stdout, p.Output)
+	if _, err := fmt.Fprintln(stdout, p.Output); err != nil {
+		return fmt.Errorf("write answer to stdout: %w", err)
+	}
 	return nil
 }

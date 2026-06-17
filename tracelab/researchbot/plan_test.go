@@ -98,6 +98,13 @@ func TestValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "chat missing model",
+			plan: &Plan{Scenario: "x", Steps: []Step{
+				{Chat: &ChatStep{Finish: "end_turn"}},
+			}},
+			wantErr: true,
+		},
+		{
 			name: "valid chat step",
 			plan: &Plan{Scenario: "x", Steps: []Step{
 				{Chat: &ChatStep{Model: "m", Finish: "end_turn"}},

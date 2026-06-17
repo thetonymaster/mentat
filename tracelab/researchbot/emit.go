@@ -24,8 +24,10 @@ func Emit(ctx context.Context, tr trace.Tracer, p *Plan) error {
 	))
 	defer root.End()
 
-	for _, s := range p.Steps {
+	for i, s := range p.Steps {
 		switch {
+		case s.Chat != nil && s.Tool != nil:
+			return fmt.Errorf("emit: step %d has both chat and tool", i)
 		case s.Chat != nil:
 			_, sp := tr.Start(ctx, "chat "+s.Chat.Model, trace.WithAttributes(
 				attribute.String(AttrOp, OpChat),
@@ -41,6 +43,8 @@ func Emit(ctx context.Context, tr trace.Tracer, p *Plan) error {
 				attribute.String(AttrToolResult, s.Tool.Result),
 			))
 			sp.End()
+		default:
+			return fmt.Errorf("emit: step %d has neither chat nor tool", i)
 		}
 	}
 	return nil

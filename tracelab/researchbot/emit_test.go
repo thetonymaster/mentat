@@ -82,6 +82,38 @@ func TestEmitNilPlanReturnsError(t *testing.T) {
 	}
 }
 
+func TestEmitRejectsMalformedSteps(t *testing.T) {
+	tests := []struct {
+		name string
+		plan *Plan
+	}{
+		{
+			name: "step with both chat and tool",
+			plan: &Plan{Scenario: "x", Steps: []Step{
+				{Chat: &ChatStep{Model: "m"}, Tool: &ToolStep{Name: "t"}},
+			}},
+		},
+		{
+			name: "step with neither chat nor tool",
+			plan: &Plan{Scenario: "x", Steps: []Step{{}}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			exp := tracetest.NewInMemoryExporter()
+			tp, err := NewTracerProvider(ctx, exp)
+			if err != nil {
+				t.Fatalf("provider: %v", err)
+			}
+			defer tp.Shutdown(ctx) //nolint:errcheck
+			if err := Emit(ctx, tp.Tracer("test"), tt.plan); err == nil {
+				t.Fatalf("expected error for %s, got nil", tt.name)
+			}
+		})
+	}
+}
+
 func TestEmit(t *testing.T) {
 	tests := []struct {
 		name      string

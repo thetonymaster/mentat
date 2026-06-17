@@ -58,6 +58,8 @@ func (p *Plan) Validate() error {
 			return fmt.Errorf("plan: step %d has neither chat nor tool", i)
 		case s.Tool != nil && s.Tool.Name == "":
 			return fmt.Errorf("plan: step %d tool missing name", i)
+		case s.Chat != nil && s.Chat.Model == "":
+			return fmt.Errorf("plan: step %d chat missing model", i)
 		}
 	}
 	return nil
