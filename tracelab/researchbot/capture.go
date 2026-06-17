@@ -98,7 +98,7 @@ func CaptureFixture(ctx context.Context, p *Plan) ([]byte, error) {
 	for _, s := range ordered {
 		attrs := make(map[string]string, len(s.Attributes))
 		for _, kv := range s.Attributes {
-			attrs[string(kv.Key)] = kv.Value.Emit()
+			attrs[string(kv.Key)] = kv.Value.String()
 		}
 		parent := -1
 		if s.Parent.IsValid() {
