@@ -185,6 +185,21 @@ func TestBudgetsCompare(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			// A negative input_tokens parses cleanly but is out of domain
+			// (token counts are >= 0); left unchecked it reduces the total and
+			// can mask an over-budget run as a false pass.
+			name:    "tokens: negative input_tokens returns error",
+			ev:      core.Evidence{Trace: rawAttrTrace(genai.InTokens, "-100000")},
+			exp:     BudgetExpectation{MaxTokens: IntPtr(5000)},
+			wantErr: true,
+		},
+		{
+			name:    "tokens: negative output_tokens returns error",
+			ev:      core.Evidence{Trace: rawAttrTrace(genai.OutTokens, "-100000")},
+			exp:     BudgetExpectation{MaxTokens: IntPtr(5000)},
+			wantErr: true,
+		},
+		{
 			// A malformed cost_usd alongside a valid one must error, not be
 			// silently dropped (which would let `seen` mask the bad value and
 			// undercount the total to a false pass).
@@ -211,6 +226,29 @@ func TestBudgetsCompare(t *testing.T) {
 			ev:   core.Evidence{Trace: tokenTrace(100, 50)}, // no CostUSD attr
 			exp:  BudgetExpectation{MaxCostUSD: floatPtr(0.10)},
 			// MaxCostUSD set but no span has the attribute → error, not false pass
+			wantErr: true,
+		},
+		{
+			// A negative cost parses cleanly but is out of domain (cost >= 0);
+			// unchecked it reduces the total toward a false pass.
+			name:    "cost: negative cost_usd returns error",
+			ev:      core.Evidence{Trace: rawAttrTrace(genai.CostUSD, "-0.5")},
+			exp:     BudgetExpectation{MaxCostUSD: floatPtr(0.10)},
+			wantErr: true,
+		},
+		{
+			// ParseFloat("NaN") succeeds with no error; NaN > threshold is
+			// ALWAYS false in Go, so an unchecked NaN cost silently PASSES any
+			// budget. This row pins that NaN now hard-errors instead.
+			name:    "cost: NaN cost_usd returns error",
+			ev:      core.Evidence{Trace: rawAttrTrace(genai.CostUSD, "NaN")},
+			exp:     BudgetExpectation{MaxCostUSD: floatPtr(0.10)},
+			wantErr: true,
+		},
+		{
+			name:    "cost: +Inf cost_usd returns error",
+			ev:      core.Evidence{Trace: rawAttrTrace(genai.CostUSD, "+Inf")},
+			exp:     BudgetExpectation{MaxCostUSD: floatPtr(0.10)},
 			wantErr: true,
 		},
 		// --- MaxLatency ---

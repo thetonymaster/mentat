@@ -3,6 +3,7 @@ package comparator
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 
@@ -51,6 +52,9 @@ func (budgets) Compare(_ context.Context, ev core.Evidence, e core.Expectation) 
 				if err != nil {
 					return core.Verdict{}, fmt.Errorf("budgets: span[%d] (%q) invalid %s=%q: %w", i, s.Name, key, raw, err)
 				}
+				if n < 0 {
+					return core.Verdict{}, fmt.Errorf("budgets: span[%d] (%q) %s=%q out of range: must be a value >= 0", i, s.Name, key, raw)
+				}
 				total += n
 			}
 		}
@@ -71,6 +75,9 @@ func (budgets) Compare(_ context.Context, ev core.Evidence, e core.Expectation) 
 			c, err := strconv.ParseFloat(raw, 64)
 			if err != nil {
 				return core.Verdict{}, fmt.Errorf("budgets: span[%d] (%q) invalid %s=%q: %w", i, s.Name, genai.CostUSD, raw, err)
+			}
+			if c < 0 || math.IsNaN(c) || math.IsInf(c, 0) {
+				return core.Verdict{}, fmt.Errorf("budgets: span[%d] (%q) %s=%q out of range: must be a finite value >= 0", i, s.Name, genai.CostUSD, raw)
 			}
 			cost += c
 			seen = true
