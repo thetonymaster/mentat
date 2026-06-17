@@ -80,7 +80,27 @@ func TestInjectInvalidRunIDPanics(t *testing.T) {
 	}
 }
 
+// TestResolveStablePollsUntilCountStable pins the stability-detection path: Resolve
+// must return because the span count was observed stable for StableFor consecutive
+// polls, NOT because the deadline fired. We assert the exact GetByID poll count to
+// convergence so the test can ONLY pass via the stability path.
+//
+// Span count per GetByID call#N is min(N, 3): grows 1,2,3 then stays 3. With
+// StableFor:2, the loop (one ref ⇒ one GetByID per iteration) behaves as:
+//
+//	call#1 → 1   (1 != lastCount -1)   stable=0  lastCount=1
+//	call#2 → 2   (2 != 1)              stable=0  lastCount=2
+//	call#3 → 3   (3 != 2)              stable=0  lastCount=3
+//	call#4 → 3   (3 == 3, >0)          stable=1  (1 < 2, keep going)
+//	call#5 → 3   (3 == 3, >0)          stable=2  (2 >= 2) → RETURN
+//
+// So convergence requires exactly 5 GetByID calls. Timeout is 1s with a 1ms interval,
+// so a timeout-exit (which would happen if StableFor were ignored/broken) would take
+// on the order of ~1000 polls — a wildly different count. Asserting calls == 5 thus
+// genuinely distinguishes the stability-exit from the timeout fallback.
 func TestResolveStablePollsUntilCountStable(t *testing.T) {
+	const wantPolls = 5 // GetByID calls to stability per the trace above
+
 	ctrl := gomock.NewController(t)
 	st := mocks.NewMockTraceStore(ctrl)
 	st.EXPECT().Query(gomock.Any(), gomock.Any()).
@@ -108,6 +128,11 @@ func TestResolveStablePollsUntilCountStable(t *testing.T) {
 	}
 	if len(tr.Spans) != 3 {
 		t.Fatalf("want 3 stable spans, got %d", len(tr.Spans))
+	}
+	// The exact poll count proves Resolve exited via the stability path, not the
+	// ~1000-poll timeout fallback.
+	if calls != wantPolls {
+		t.Fatalf("want %d GetByID polls to stability (stability-exit), got %d", wantPolls, calls)
 	}
 }
 
