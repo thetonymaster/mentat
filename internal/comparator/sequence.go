@@ -27,8 +27,12 @@ func (sequence) Compare(_ context.Context, ev core.Evidence, e core.Expectation)
 		return core.Verdict{}, fmt.Errorf("sequence: Evidence.Trace is nil")
 	}
 	var actual []string
-	for _, s := range ev.Trace.ByOp(genai.OpExecuteTool) {
-		actual = append(actual, s.Attr(genai.ToolName))
+	for i, s := range ev.Trace.ByOp(genai.OpExecuteTool) {
+		name := s.Attr(genai.ToolName)
+		if name == "" {
+			return core.Verdict{}, fmt.Errorf("sequence: execute_tool span[%d] (%q) missing %s", i, s.Name, genai.ToolName)
+		}
+		actual = append(actual, name)
 	}
 
 	v := core.Verdict{Pass: true}

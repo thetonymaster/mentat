@@ -23,6 +23,15 @@ func toolTrace(names ...string) *trace.Trace {
 	return tr
 }
 
+// toolTraceMissingName builds a trace with a single execute_tool span that has
+// no gen_ai.tool.name attribute, to exercise the malformed-evidence path.
+func toolTraceMissingName() *trace.Trace {
+	return &trace.Trace{Spans: []*trace.Span{{
+		Name:  "execute_tool",
+		Attrs: map[string]string{genai.Op: genai.OpExecuteTool},
+	}}}
+}
+
 func TestSequenceName(t *testing.T) {
 	if got := NewSequence().Name(); got != "sequence" {
 		t.Fatalf("Name() = %q, want %q", got, "sequence")
@@ -64,6 +73,12 @@ func TestSequenceCompare(t *testing.T) {
 			exp:      SequenceExpectation{},
 			wantPass: true,
 			wantErr:  false,
+		},
+		{
+			name:    "execute_tool span missing tool name returns error",
+			ev:      core.Evidence{Trace: toolTraceMissingName()},
+			exp:     SequenceExpectation{Order: []string{"search"}},
+			wantErr: true,
 		},
 		{
 			name:    "nil Trace returns error",
