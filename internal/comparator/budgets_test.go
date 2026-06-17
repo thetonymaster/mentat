@@ -3,6 +3,7 @@ package comparator
 import (
 	"context"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -123,6 +124,24 @@ func TestBudgetsFailsOverTokenCap(t *testing.T) {
 func TestBudgetsName(t *testing.T) {
 	if got := NewBudgets().Name(); got != "budgets" {
 		t.Fatalf("Name() = %q, want %q", got, "budgets")
+	}
+}
+
+// A malformed cost_usd as the ONLY cost-bearing span must surface the parse
+// error ("invalid"), not fall through to the "cost not available" guard: the
+// ParseFloat runs before the seen-check, so the bad value is caught first.
+// Pins the precise error the malformed value produces.
+func TestBudgetsMalformedOnlyCostIsInvalidNotUnavailable(t *testing.T) {
+	ev := core.Evidence{Trace: rawAttrTrace(genai.CostUSD, "free")}
+	_, err := NewBudgets().Compare(context.Background(), ev, BudgetExpectation{MaxCostUSD: floatPtr(0.10)})
+	if err == nil {
+		t.Fatal("want error for malformed-only cost_usd, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid") || !strings.Contains(err.Error(), genai.CostUSD) {
+		t.Fatalf("want an 'invalid %s' error, got %q", genai.CostUSD, err.Error())
+	}
+	if strings.Contains(err.Error(), "cost not available") {
+		t.Fatalf("malformed-only cost wrongly reported as unavailable: %q", err.Error())
 	}
 }
 
