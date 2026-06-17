@@ -1,0 +1,8 @@
+scenario: over_budget
+output: "Q3 revenue grew 12% (verbose)."
+tokens: { input: 9000, output: 4000 }
+cost_usd: 0.45
+steps:
+  - tool: { name: search,    args: "q3", result: "doc-1" }
+  - tool: { name: fetch_doc, args: "doc-1", result: "table" }
+  - tool: { name: summarize, args: "table", result: "summary" }

@@ -22,24 +22,45 @@ echo
 echo "==> per-package coverage"
 # Lines look like: "ok  github.com/x/pkg  0.12s  coverage: 83.4% of statements"
 # or:              "?   github.com/x/cmd  [no test files]"
+# Go 1.24+ also emits (leading tab, no ok/? prefix) for coverable-but-untested pkgs:
+#   "\tgithub.com/x/cmd/capture\tcoverage: 0.0% of statements"
+#
+# Package extraction: pull the first token that looks like a module path (contains '/').
+# This works for all three formats regardless of field position.
 fail=0
 no_tests=""
+exempt=""
+
+# is_exempt <pkg>: returns 0 if pkg matches */cmd/* or */cmd (trailing) or */mocks or */mocks/*
+is_exempt() {
+  case "$1" in
+    */cmd/*|*/cmd|*/mocks|*/mocks/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 while IFS= read -r line; do
+  # Extract the import path: first whitespace-delimited token containing a '/'
+  pkg="$(printf '%s' "${line}" | grep -oE '[^[:space:]]+/[^[:space:]]+' | head -1)"
+  [ -z "${pkg}" ] && continue
+
   case "${line}" in
     *"[no test files]"*)
-      pkg="$(printf '%s' "${line}" | awk '{print $2}')"
       no_tests="${no_tests}  ${pkg}\n"
       ;;
     *"coverage:"*)
-      pkg="$(printf '%s' "${line}" | awk '{print $2}')"
       pct="$(printf '%s' "${line}" | sed -E 's/.*coverage: ([0-9.]+)%.*/\1/')"
-      # integer compare via awk (handles decimals)
-      below="$(awk -v p="${pct}" -v m="${MIN}" 'BEGIN{print (p+0 < m+0) ? "1" : "0"}')"
-      if [ "${below}" = "1" ]; then
-        printf '  BELOW  %-55s %s%%\n' "${pkg}" "${pct}"
-        fail=1
+      if is_exempt "${pkg}"; then
+        exempt="${exempt}  ${pkg}\n"
       else
-        printf '  ok     %-55s %s%%\n' "${pkg}" "${pct}"
+        # integer compare via awk (handles decimals)
+        below="$(awk -v p="${pct}" -v m="${MIN}" 'BEGIN{print (p+0 < m+0) ? "1" : "0"}')"
+        if [ "${below}" = "1" ]; then
+          printf '  BELOW  %-55s %s%%\n' "${pkg}" "${pct}"
+          fail=1
+        else
+          printf '  ok     %-55s %s%%\n' "${pkg}" "${pct}"
+        fi
       fi
       ;;
   esac
@@ -49,8 +70,14 @@ EOF
 
 if [ -n "${no_tests}" ]; then
   echo
-  echo "==> packages with NO test files (warning — cmd/ and mocks/ are exempt):"
+  echo "==> packages with NO test files (warning):"
   printf "%b" "${no_tests}"
+fi
+
+if [ -n "${exempt}" ]; then
+  echo
+  echo "==> packages EXEMPT from floor (cmd/ and mocks/ — intentionally untested):"
+  printf "%b" "${exempt}"
 fi
 
 echo

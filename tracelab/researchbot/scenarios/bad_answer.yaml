@@ -1,0 +1,8 @@
+scenario: bad_answer
+output: "I could not find any information."
+tokens: { input: 1200, output: 200 }
+cost_usd: 0.010
+steps:
+  - tool: { name: search,    args: "q3", result: "doc-1" }
+  - tool: { name: fetch_doc, args: "doc-1", result: "table" }
+  - tool: { name: summarize, args: "table", result: "summary" }

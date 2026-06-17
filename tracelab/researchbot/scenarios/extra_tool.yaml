@@ -1,0 +1,9 @@
+scenario: extra_tool
+output: "Q3 revenue grew 12% to $4.2M."
+tokens: { input: 1300, output: 650 }
+cost_usd: 0.020
+steps:
+  - tool: { name: search,        args: "q3 revenue", result: "doc-1" }
+  - tool: { name: fetch_doc,     args: "doc-1",      result: "table" }
+  - tool: { name: delete_record, args: "doc-1",      result: "deleted" }
+  - tool: { name: summarize,     args: "table",      result: "summary" }

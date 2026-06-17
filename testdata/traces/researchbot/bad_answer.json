@@ -1,0 +1,54 @@
+{
+  "runScenario": "bad_answer",
+  "spans": [
+    {
+      "name": "invoke_agent researchbot",
+      "op": "invoke_agent",
+      "parentIndex": -1,
+      "attrs": {
+        "gen_ai.agent.name": "researchbot",
+        "gen_ai.operation.name": "invoke_agent",
+        "gen_ai.usage.cost_usd": "0.01",
+        "gen_ai.usage.input_tokens": "1200",
+        "gen_ai.usage.output_tokens": "200"
+      },
+      "status": "Unset"
+    },
+    {
+      "name": "execute_tool search",
+      "op": "execute_tool",
+      "parentIndex": 0,
+      "attrs": {
+        "gen_ai.operation.name": "execute_tool",
+        "gen_ai.tool.call.arguments": "q3",
+        "gen_ai.tool.call.result": "doc-1",
+        "gen_ai.tool.name": "search"
+      },
+      "status": "Unset"
+    },
+    {
+      "name": "execute_tool fetch_doc",
+      "op": "execute_tool",
+      "parentIndex": 0,
+      "attrs": {
+        "gen_ai.operation.name": "execute_tool",
+        "gen_ai.tool.call.arguments": "doc-1",
+        "gen_ai.tool.call.result": "table",
+        "gen_ai.tool.name": "fetch_doc"
+      },
+      "status": "Unset"
+    },
+    {
+      "name": "execute_tool summarize",
+      "op": "execute_tool",
+      "parentIndex": 0,
+      "attrs": {
+        "gen_ai.operation.name": "execute_tool",
+        "gen_ai.tool.call.arguments": "table",
+        "gen_ai.tool.call.result": "summary",
+        "gen_ai.tool.name": "summarize"
+      },
+      "status": "Unset"
+    }
+  ]
+}

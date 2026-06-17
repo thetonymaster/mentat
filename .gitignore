@@ -2,6 +2,8 @@
 /bin/
 *.out
 cover.out
+/researchbot
+/capture
 
 # Python (skill scripts)
 __pycache__/
