@@ -3,11 +3,17 @@ package correlate
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/trace"
 )
+
+// runIDRe constrains run IDs to characters that are safe inside an
+// OTEL_RESOURCE_ATTRIBUTES value (k=v,k=v format): it must be non-empty and must
+// not contain the reserved delimiters ',' or '='.
+var runIDRe = regexp.MustCompile(`^[A-Za-z0-9._:-]+$`)
 
 // PollConfig controls the stable-poll behaviour of Resolve.
 type PollConfig struct {
@@ -34,6 +40,9 @@ func (c *correlator) Inject(_ context.Context, spec *core.RunSpec) string {
 		panic("correlate: Inject called with nil *RunSpec (engine must construct it)")
 	}
 	id := c.idFn()
+	if !runIDRe.MatchString(id) {
+		panic(fmt.Sprintf("correlate: idFn returned invalid run id %q (must match [A-Za-z0-9._:-]+; it becomes an OTEL resource-attribute value and must not contain delimiters)", id))
+	}
 	spec.RunID = id
 	if spec.Tags == nil {
 		spec.Tags = map[string]string{}

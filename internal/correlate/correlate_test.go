@@ -44,6 +44,42 @@ func TestInjectNilSpecPanics(t *testing.T) {
 	c.Inject(context.Background(), nil)
 }
 
+// TestInjectInvalidRunIDPanics proves invariant §4: the run id becomes an
+// OTEL_RESOURCE_ATTRIBUTES value (k=v,k=v format) downstream, so an id containing
+// the reserved delimiters ',' or '=' (or an empty id) would silently corrupt that
+// variable and break correlation. A bad id from idFn is a wiring bug (bad generator),
+// so Inject panics with a descriptive "invalid run id" message.
+func TestInjectInvalidRunIDPanics(t *testing.T) {
+	tests := []struct {
+		name string
+		id   string
+	}{
+		{name: "comma delimiter", id: "bad,id"},
+		{name: "equals delimiter", id: "bad=id"},
+		{name: "empty", id: ""},
+		{name: "space", id: "bad id"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			c := New(func() string { return tt.id }, PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Fatalf("want panic on invalid run id %q, got none", tt.id)
+				}
+				msg := fmt.Sprintf("%v", r)
+				if !strings.Contains(msg, "invalid run id") {
+					t.Fatalf("panic message not descriptive enough: %q", msg)
+				}
+			}()
+
+			c.Inject(context.Background(), &core.RunSpec{})
+		})
+	}
+}
+
 func TestResolveStablePollsUntilCountStable(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	st := mocks.NewMockTraceStore(ctrl)
