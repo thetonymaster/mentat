@@ -3,6 +3,7 @@ package comparator
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/thetonymaster/mentat/internal/core"
@@ -40,11 +41,16 @@ func (budgets) Compare(_ context.Context, ev core.Evidence, e core.Expectation) 
 
 	if exp.MaxTokens != nil {
 		total := 0
-		for _, s := range ev.Trace.Spans {
-			if n, ok := s.AttrInt(genai.InTokens); ok {
-				total += n
-			}
-			if n, ok := s.AttrInt(genai.OutTokens); ok {
+		for i, s := range ev.Trace.Spans {
+			for _, key := range []string{genai.InTokens, genai.OutTokens} {
+				raw := s.Attr(key)
+				if raw == "" {
+					continue
+				}
+				n, err := strconv.Atoi(raw)
+				if err != nil {
+					return core.Verdict{}, fmt.Errorf("budgets: span[%d] (%q) invalid %s=%q: %w", i, s.Name, key, raw, err)
+				}
 				total += n
 			}
 		}
@@ -57,11 +63,17 @@ func (budgets) Compare(_ context.Context, ev core.Evidence, e core.Expectation) 
 	if exp.MaxCostUSD != nil {
 		cost := 0.0
 		seen := false
-		for _, s := range ev.Trace.Spans {
-			if c, ok := s.AttrFloat(genai.CostUSD); ok {
-				cost += c
-				seen = true
+		for i, s := range ev.Trace.Spans {
+			raw := s.Attr(genai.CostUSD)
+			if raw == "" {
+				continue
 			}
+			c, err := strconv.ParseFloat(raw, 64)
+			if err != nil {
+				return core.Verdict{}, fmt.Errorf("budgets: span[%d] (%q) invalid %s=%q: %w", i, s.Name, genai.CostUSD, raw, err)
+			}
+			cost += c
+			seen = true
 		}
 		if !seen {
 			return core.Verdict{}, fmt.Errorf("budgets: cost not available (no %s attribute); add a pricing table or drop the cost assertion", genai.CostUSD)

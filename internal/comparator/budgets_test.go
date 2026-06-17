@@ -24,6 +24,19 @@ func tokenTrace(in, out int) *trace.Trace {
 	}}}
 }
 
+// rawAttrTrace builds a trace with a single invoke_agent span carrying a single
+// raw (possibly non-numeric) attribute under the given key. Used to exercise the
+// present-but-malformed code paths.
+func rawAttrTrace(key, raw string) *trace.Trace {
+	return &trace.Trace{Spans: []*trace.Span{{
+		Name: "invoke_agent",
+		Attrs: map[string]string{
+			genai.Op: genai.OpInvokeAgent,
+			key:      raw,
+		},
+	}}}
+}
+
 // costTrace builds a trace whose single span carries a cost_usd attribute.
 func costTrace(cost float64) *trace.Trace {
 	return &trace.Trace{Spans: []*trace.Span{{
@@ -33,6 +46,28 @@ func costTrace(cost float64) *trace.Trace {
 			genai.CostUSD: strconv.FormatFloat(cost, 'f', 6, 64),
 		},
 	}}}
+}
+
+// costAndRawTrace builds a trace with one span carrying a valid cost and a
+// second span carrying a raw (non-numeric) cost value, to prove a malformed
+// value is not silently masked by a valid one.
+func costAndRawTrace(validCost float64, raw string) *trace.Trace {
+	return &trace.Trace{Spans: []*trace.Span{
+		{
+			Name: "invoke_agent",
+			Attrs: map[string]string{
+				genai.Op:      genai.OpInvokeAgent,
+				genai.CostUSD: strconv.FormatFloat(validCost, 'f', 6, 64),
+			},
+		},
+		{
+			Name: "invoke_agent",
+			Attrs: map[string]string{
+				genai.Op:      genai.OpInvokeAgent,
+				genai.CostUSD: raw,
+			},
+		},
+	}}
 }
 
 // latencyTrace builds a trace whose spans have real Start/End so Envelope() is
@@ -117,6 +152,27 @@ func TestBudgetsCompare(t *testing.T) {
 			ev:       core.Evidence{Trace: tokenTrace(9000, 4000)},
 			exp:      BudgetExpectation{MaxTokens: IntPtr(5000)},
 			wantPass: false,
+		},
+		{
+			name:    "tokens: malformed input_tokens returns error",
+			ev:      core.Evidence{Trace: rawAttrTrace(genai.InTokens, "abc")},
+			exp:     BudgetExpectation{MaxTokens: IntPtr(5000)},
+			wantErr: true,
+		},
+		{
+			name:    "tokens: malformed output_tokens returns error",
+			ev:      core.Evidence{Trace: rawAttrTrace(genai.OutTokens, "1.5")},
+			exp:     BudgetExpectation{MaxTokens: IntPtr(5000)},
+			wantErr: true,
+		},
+		{
+			// A malformed cost_usd alongside a valid one must error, not be
+			// silently dropped (which would let `seen` mask the bad value and
+			// undercount the total to a false pass).
+			name:    "cost: malformed cost_usd alongside valid returns error",
+			ev:      core.Evidence{Trace: costAndRawTrace(0.03, "free")},
+			exp:     BudgetExpectation{MaxCostUSD: floatPtr(0.10)},
+			wantErr: true,
 		},
 		// --- MaxCostUSD ---
 		{
