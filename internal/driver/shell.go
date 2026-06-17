@@ -1,0 +1,72 @@
+package driver
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"sort"
+	"strings"
+
+	"github.com/thetonymaster/mentat/internal/core"
+)
+
+type shell struct{}
+
+func NewShell() core.Driver { return shell{} }
+
+func (shell) Run(ctx context.Context, spec core.RunSpec) (core.RunResult, error) {
+	if len(spec.Command) == 0 {
+		return core.RunResult{}, fmt.Errorf("shell: empty command for target %q", spec.Target)
+	}
+	cmd := exec.CommandContext(ctx, spec.Command[0], spec.Command[1:]...)
+
+	// Base env = inherited, plus explicit spec.Env, plus injected correlation.
+	env := os.Environ()
+	for k, v := range spec.Env {
+		env = append(env, k+"="+v)
+	}
+	if ra := resourceAttrs(spec.Tags); ra != "" {
+		env = append(env, "OTEL_RESOURCE_ATTRIBUTES="+ra)
+	}
+	cmd.Env = env
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	runErr := cmd.Run()
+
+	exit := 0
+	if ee, ok := runErr.(*exec.ExitError); ok {
+		exit = ee.ExitCode()
+	} else if runErr != nil {
+		return core.RunResult{}, fmt.Errorf("shell: exec %v: %w (stderr: %s)", spec.Command, runErr, stderr.String())
+	}
+
+	out := core.Output{
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
+		ExitCode: exit,
+		Answer:   core.ExtractAnswer(stdout.String()),
+	}
+	return core.RunResult{RunID: spec.RunID, Output: out}, nil
+}
+
+// resourceAttrs renders spec.Tags as the OTEL_RESOURCE_ATTRIBUTES value
+// (k=v,k=v) with sorted keys for determinism.
+func resourceAttrs(tags map[string]string) string {
+	if len(tags) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(tags))
+	for k := range tags {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+tags[k])
+	}
+	return strings.Join(parts, ",")
+}
