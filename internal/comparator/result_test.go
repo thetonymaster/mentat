@@ -7,6 +7,40 @@ import (
 	"github.com/thetonymaster/mentat/internal/core"
 )
 
+// TestResultName asserts the comparator self-identifies as "result".
+func TestResultName(t *testing.T) {
+	if got := NewResult().Name(); got != "result" {
+		t.Fatalf("Name() = %q, want %q", got, "result")
+	}
+}
+
+// TestResultWrongExpectationType asserts that passing a non-ResultExpectation
+// returns a non-nil error and Pass==false (no silent fallback).
+func TestResultWrongExpectationType(t *testing.T) {
+	v, err := NewResult().Compare(context.Background(), core.Evidence{}, "not a ResultExpectation")
+	if err == nil {
+		t.Fatal("want error for non-ResultExpectation, got nil")
+	}
+	if v.Pass {
+		t.Fatalf("want Pass=false on type error, got Pass=true")
+	}
+}
+
+// TestResultJSONSubsetObjectVsArray asserts that a json-subset where Want is a
+// JSON object and ev.Output.Body is a JSON array returns Pass=false, err=nil.
+// This exercises the subset non-map-got branch in subset().
+func TestResultJSONSubsetObjectVsArray(t *testing.T) {
+	ev := core.Evidence{Output: core.Output{Body: []byte(`[1,2,3]`)}}
+	exp := ResultExpectation{Matcher: "json-subset", Want: `{"a":1}`}
+	v, err := NewResult().Compare(context.Background(), ev, exp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if v.Pass {
+		t.Fatal("want Pass=false when Want is object but Body is array")
+	}
+}
+
 // TestResultContainsPassesAndFails is kept verbatim from the brief.
 func TestResultContainsPassesAndFails(t *testing.T) {
 	pass := core.Evidence{Output: core.Output{Answer: "Q3 revenue grew 12%"}}

@@ -76,7 +76,10 @@ func TestBudgetsPassesUnderTokenCap(t *testing.T) {
 
 func TestBudgetsFailsOverTokenCap(t *testing.T) {
 	ev := core.Evidence{Trace: tokenTrace(9000, 4000)}
-	v, _ := NewBudgets().Compare(context.Background(), ev, BudgetExpectation{MaxTokens: IntPtr(5000)})
+	v, err := NewBudgets().Compare(context.Background(), ev, BudgetExpectation{MaxTokens: IntPtr(5000)})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if v.Pass {
 		t.Fatal("want fail over token cap")
 	}
