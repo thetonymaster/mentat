@@ -1,4 +1,4 @@
-# Trace Behaviour Test Framework (working name: TBT) — Design
+# Mentat — Trace Behaviour Test Framework — Design
 
 **Date:** 2026-06-16
 **Status:** Approved design, pending implementation plan
@@ -220,8 +220,8 @@ in Phase 3.
 ## 7. Module layout (Go monorepo)
 
 ```
-cmd/agentctl/         generic agent driver CLI
-cmd/tbt/              test runner (embeds godog) — thin in v1
+cmd/mentatctl/         generic SUT driver CLI (agent/service subcommands)
+cmd/mentat/              test runner (embeds godog) — thin in v1
 internal/engine/      scenario lifecycle + composition root (engine.Build)
 internal/registry/    per-seam registries (RegisterStore/Driver/Comparator/...)
 internal/steps/       godog step definitions + step grammar
@@ -239,9 +239,9 @@ testdata/traces/      golden OTLP fixtures captured from tracelab (feed inmem st
 tracelab/             test-harness SUTs: researchbot (agent), orderflow (microsvc)
 ```
 
-The `tracelab` test harness (the SUTs we develop TBT against, including the
+The `tracelab` test harness (the SUTs we develop Mentat against, including the
 deterministic agent fixture) has its own design:
-`2026-06-17-tbt-test-harness-design.md`.
+`2026-06-17-mentat-test-harness-design.md`.
 
 Core contracts:
 
@@ -302,7 +302,7 @@ comparator).
 ### 7.1 Dependency injection & extensibility seams
 
 Every seam above is an interface; concrete implementations are injected at a single
-**composition root** (`engine.Build(cfg)`), which reads `tbt.yaml`, resolves each
+**composition root** (`engine.Build(cfg)`), which reads `mentat.yaml`, resolves each
 dependency *by name* from its registry, and constructor-injects it into the Engine.
 The Engine depends only on the interfaces — never on a concrete Tempo, shell
 adapter, or Claude.
@@ -405,7 +405,7 @@ on command. Three layers:
   final output**; running `features/` must produce a passing scenario (exercising
   sequence + budgets + a deterministic result matcher).
 - **L3 — meta-test (testing the tester):** drive `tracelab`'s deliberately *bad*
-  scenarios and assert TBT reports **failure** (non-zero exit + expected
+  scenarios and assert Mentat reports **failure** (non-zero exit + expected
   `Verdict.Reasons`). This proves comparators detect the violations they claim to.
 
 Production users point the framework at their own Tempo; the compose file is
@@ -413,7 +413,7 @@ dev/test infrastructure only.
 
 ## 13. Phasing
 
-1. **v1 slice:** godog -> `agentctl` shell adapter (captures trace ID + output) ->
+1. **v1 slice:** godog -> `mentatctl` shell adapter (captures trace ID + output) ->
    correlate + stable-poll -> **sequence + budgets + deterministic result**
    comparators -> JUnit. Hermetic E2E green/red proof.
 2. **Portability:** minimal **`http` driver adapter** -> a microservice runs
@@ -457,10 +457,20 @@ dev/test infrastructure only.
   (`google/wire` rejected for now). Every seam (store, driver, comparator, matcher,
   judge, correlator, reporter) is an interface resolved by name. (Section 7.1.)
 
-## 15. Open items to confirm before first push
+## 15. Naming (decided) and open items
 
-- **Module path.** Default `github.com/<owner>/trace`; set `<owner>` to your
-  GitHub org/user (one-line change in `go.mod`). This is the only intentional
-  placeholder in the spec and must be set before the first push.
-- **CLI names.** Working names `tbt` (runner) and `agentctl` (driver) — rename if
-  preferred.
+- **Name: Mentat.** Runner CLI `mentat`; config file `mentat.yaml`. A single
+  driver CLI `mentatctl` with domain subcommands — `mentatctl agent …`
+  (shell/mcp adapters) and `mentatctl service …` (http/grpc adapters) — over one
+  generic `Driver` interface.
+- **`mentatctl agent` is the first-class v1 surface, optimised for ergonomics.**
+  The common flow is one line:
+  `mentatctl agent run --adapter shell:research-agent --prompt "Summarize Q3"` —
+  it injects baggage, drives the agent, resolves the trace, and prints the captured
+  output + resolved trace ID. Adapter, baggage, and Tempo settings default from
+  `mentat.yaml` and are overridable by flag/env. Conveniences: `--scenario` for
+  harness SUTs, `--json` for machine output, `--wait`/`--timeout` for trace polling,
+  and a bare `mentatctl agent run` using config defaults. `mentatctl service`
+  mirrors the same ergonomics at Phase 2.
+- **Module path:** `github.com/<owner>/mentat` — set `<owner>` to your GitHub
+  org/user. The only remaining placeholder; must be set before the first push.

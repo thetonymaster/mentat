@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>TBT — Trace Behaviour Test Framework · Architecture</title>
+<title>Mentat — Trace Behaviour Test Framework · Architecture</title>
 <style>
   :root {
     --bg: #0f1117;
@@ -151,7 +151,7 @@
 
 <header class="top">
   <div class="brand">
-    <h1>TBT · Trace Behaviour Test Framework</h1>
+    <h1>Mentat · Trace Behaviour Test Framework</h1>
     <span class="tag">architecture · 2026-06-17 · working draft</span>
   </div>
   <div class="controls">
@@ -293,7 +293,7 @@
     <div>
       <div class="node build" data-path="agent" data-phase="1">
         <div class="n-name">Agent path</div>
-        <div class="n-desc"><code>agentctl</code> shell/mcp → agent run. Output = final answer. Trace = <code>invoke_agent</code> / <code>execute_tool</code> spans.</div>
+        <div class="n-desc"><code>mentatctl</code> shell/mcp → agent run. Output = final answer. Trace = <code>invoke_agent</code> / <code>execute_tool</code> spans.</div>
       </div>
       <div class="node build" data-path="msvc" data-phase="2">
         <div class="n-name">Microservice path</div>
@@ -358,7 +358,7 @@
   <h2 class="section">Extensibility — dependency injection &amp; seams</h2>
   <div class="root-band">
     <div class="t">Composition root — <code>engine.Build(cfg)</code></div>
-    <div class="d">Reads <code>tbt.yaml</code>, resolves each dependency <b>from its registry by name</b>, and constructor-injects the chosen implementations into the Engine. The Engine depends only on the <b>interfaces</b> above — never on a concrete Tempo, shell adapter, or Claude. Idiomatic Go DI: <b>interfaces + constructor injection + a registry per seam</b> (no framework; <code>google/wire</code> optional for compile-time wiring).</div>
+    <div class="d">Reads <code>mentat.yaml</code>, resolves each dependency <b>from its registry by name</b>, and constructor-injects the chosen implementations into the Engine. The Engine depends only on the <b>interfaces</b> above — never on a concrete Tempo, shell adapter, or Claude. Idiomatic Go DI: <b>interfaces + constructor injection + a registry per seam</b> (no framework; <code>google/wire</code> optional for compile-time wiring).</div>
   </div>
   <div class="inject-arrows">▼ ▼ ▼ ▼ ▼ ▼ ▼</div>
   <div class="seams">

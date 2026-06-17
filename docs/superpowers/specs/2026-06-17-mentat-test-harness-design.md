@@ -1,4 +1,4 @@
-# TBT Test Harness (`tracelab`) — Design
+# Mentat Test Harness (`tracelab`) — Design
 
 **Date:** 2026-06-17
 **Status:** Approved design, pending implementation plan
@@ -7,9 +7,9 @@
 
 ## 1. Purpose & guiding principle
 
-`tracelab` is the **system-under-test we build TBT against** — realistic,
+`tracelab` is the **system-under-test we build Mentat against** — realistic,
 deterministic, OpenTelemetry-instrumented, baggage-aware. It exists before the
-framework so TBT always has a concrete target to develop and dogfood against.
+framework so Mentat always has a concrete target to develop and dogfood against.
 
 **Guiding principle:** a test framework is only trustworthy if we can prove it goes
 **red on bad behaviour**, not merely green on good. So every SUT must produce both
@@ -128,11 +128,11 @@ mock — validating the framework's correlation against a faithful target.
 
 1. **L1 — unit (no infra):** comparators run against golden JSON traces loaded via
    the `inmem` / `otlp-file` `TraceStore`. Fast, deterministic, no Tempo.
-2. **L2 — hermetic E2E:** `make harness-up` (Tempo + Collector + SUT); `agentctl`
-   (researchbot) or `http` (orderflow) drives a scenario; full pipeline runs; assert
-   **green** on the good scenarios.
+2. **L2 — hermetic E2E:** `make harness-up` (Tempo + Collector + SUT);
+   `mentatctl agent` (researchbot) or `mentatctl service` (orderflow) drives a
+   scenario; full pipeline runs; assert **green** on the good scenarios.
 3. **L3 — meta-test (testing the tester):** drive the **bad** scenarios and assert
-   TBT reports **failure** — non-zero exit and the expected `Verdict.Reasons`. This
+   Mentat reports **failure** — non-zero exit and the expected `Verdict.Reasons`. This
    proves the comparators detect the violations they claim to.
 
 ## 8. Golden-trace capture
@@ -160,7 +160,7 @@ in emitted telemetry is a visible diff, not a silent surprise.
   we get speed *and* cross-process authenticity.
 - **No real LLM in the hermetic path** — scripted plans keep agent tests
   deterministic and key-free; `--live` is an opt-in demo only.
-- **Every SUT ships known-bad scenarios** so the meta-test layer can prove TBT fails
+- **Every SUT ships known-bad scenarios** so the meta-test layer can prove Mentat fails
   correctly. The harness is co-designed with the comparators it must trip.
 - **Goldens are captured artifacts, reviewed on change** — telemetry drift is a
   visible diff.
