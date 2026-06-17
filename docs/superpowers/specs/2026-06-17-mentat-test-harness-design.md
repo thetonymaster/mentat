@@ -55,8 +55,8 @@ It emits an `invoke_agent` root span with `chat` and `execute_tool {name}` child
 carrying OTel GenAI attributes (`gen_ai.tool.name`, `gen_ai.tool.call.arguments`/
 `result`, `gen_ai.usage.input_tokens`/`output_tokens`, `gen_ai.usage.cost_usd`,
 `gen_ai.response.finish_reasons`) and prints the final answer to stdout (the
-boundary `Output`). It reads injected baggage and runs a `BaggageSpanProcessor`
-(Section 6).
+boundary `Output`). It honors `OTEL_RESOURCE_ATTRIBUTES` from standard OTel init, so
+the injected `test.run.id` lands as a resource attribute on every span (Section 6).
 
 **Scenario coverage:**
 
@@ -113,16 +113,21 @@ identical across modes.
   which use generous thresholds or the injected fixed latencies.
 - Same scenario in → same trace structure + same `Output` out.
 
-## 6. Baggage (the integration contract, exercised for real)
+## 6. Correlation contract (exercised for real, per adapter)
 
-Both SUTs implement exactly what the framework requires of any real SUT:
-1. The W3C **baggage propagator** (extract inbound `test.run.id`, `test.scenario`,
-   `test.case`).
-2. A **`BaggageSpanProcessor`** that stamps those entries onto every span as
-   attributes, making them queryable (`{ test.run.id = "<uuid>" }`).
+Each SUT implements exactly what the framework requires for its transport (spec §5):
 
-This means the hermetic E2E exercises the genuine baggage correlation path, not a
-mock — validating the framework's correlation against a faithful target.
+- **`researchbot` (spawned via shell):** standard OTel init with OTLP export. The
+  driver passes `OTEL_RESOURCE_ATTRIBUTES=test.run.id=<uuid>,…`, so the default
+  resource stamps `test.run.id` on every span — **no custom code**. Validates the
+  resource-attribute path.
+- **`orderflow` (http services):** the W3C **baggage propagator** + a
+  **`BaggageSpanProcessor`** copying `test.run.id` onto every span. Validates the
+  baggage path and cross-process propagation.
+
+Either way the tag lands on every span and is queryable
+(`{ .test.run.id = "<uuid>" }`), so the hermetic E2E exercises the genuine
+correlation path, not a mock — against a faithful target.
 
 ## 7. Test pyramid this enables
 

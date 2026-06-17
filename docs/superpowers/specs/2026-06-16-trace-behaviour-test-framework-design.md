@@ -91,9 +91,11 @@ lost.
 5. The trace backend sits behind a pluggable `TraceStore` interface; Tempo is one
    implementation (Section 7). Comparators staying in-memory keeps a new store to
    ~two methods.
-6. Correlation is **baggage-first**: a `test.run.id` carried as W3C baggage and
-   stamped onto every span survives the SUT starting its *own* root trace, which
-   `traceparent` alone does not (Section 5).
+6. Correlation is **tag-first**: a unique `test.run.id` lands on every span (a
+   resource attribute via `OTEL_RESOURCE_ATTRIBUTES` for spawned agents, baggage for
+   http/grpc) and we resolve by querying that tag — merging the ≥1 traces a run may
+   produce. Survives the SUT starting its own root trace, which `traceparent` alone
+   does not (Section 5).
 
 ## 4. Architecture
 
@@ -111,7 +113,7 @@ Engine  -- scenario lifecycle: configure -> drive -> fetch -> compare -> report
    |        - http/grpc adapter (Phase 2/5)
    |        - mcp adapter (Phase 5)
    |        - tracetest adapter (Phase 5, optional)
-   |        injects baggage + traceparent, returns {TraceID, Output}
+   |        injects run-id tag (env/baggage) + traceparent, returns {RunID, Output}
    |
    +--> Trace layer -- TraceStore iface (Tempo impl; jaeger/file/inmem) -> Trace
    |
@@ -134,9 +136,9 @@ makes comparators portable across agents and microservices. Structural comparato
 
 ### 4.1 Engine concurrency
 
-Concurrency safety is **structural**: every run carries a unique `test.run.id` as
-baggage, stamped on every span, so concurrent runs are independently resolvable in
-the trace store — no cross-talk. That property is what makes any parallelism safe.
+Concurrency safety is **structural**: every run carries a unique `test.run.id` tag
+on every span (Section 5), so concurrent runs are independently resolvable in the
+trace store — no cross-talk. That property is what makes any parallelism safe.
 
 - **Unit of work = the scenario.** Steps run sequentially within a scenario; one
   `When` = one run (v1). `@runs(N)` repeats are sub-units (Section 9).
@@ -158,33 +160,34 @@ the trace store — no cross-talk. That property is what makes any parallelism s
 
 ## 5. Correlation: getting *this run's* trace
 
-**Baggage-first.** W3C `traceparent` only correlates if the SUT *adopts* the
-injected trace ID — but many agent frameworks mint their own root trace and ignore
-it. W3C **baggage** does not have this problem: it propagates across every hop
-(including new traces the SUT starts itself) and, with a baggage→span-attribute
-processor, lands a queryable tag on *every* span. So baggage is the primary
-mechanism; `traceparent` is a complement (a clean single trace ID when the SUT
-honors it).
+**Tag-first, resolved by run id.** We do not rely on the SUT adopting our injected
+trace id — many agent frameworks mint their own root trace and ignore `traceparent`.
+Instead the driver tags the run with a unique `test.run.id` (UUID) that lands on
+**every** span, and we resolve by querying the store for that tag. `traceparent` is
+still minted as a *complement* (when the SUT adopts it we also get a clean primary
+trace id), but it is never required.
 
-1. **Inject baggage.** The driver sets `test.run.id=<uuid>` (plus
-   `test.scenario`, `test.case`) as W3C baggage — the `baggage` header for
-   http/grpc, env for shell/mcp — and also mints a `traceparent`.
-2. **SUT propagates.** The SUT's W3C baggage propagator carries the entries
-   through every downstream hop.
-3. **Stamp onto spans.** A `BaggageSpanProcessor` in the SUT copies `test.run.id`
-   onto every span as an attribute, making it queryable.
-4. **Resolve + stable poll.** Resolve via `TraceStore.Query` (TraceQL
-   `{ test.run.id = "<uuid>" }` for Tempo); fetch and poll until the span count is
-   unchanged for K consecutive iterations (handles ingestion lag) or timeout.
+**Injection is per-adapter** — the tag reaches spans differently per transport:
 
-**Integration contract** (the one thing required of the SUT): honor the W3C baggage
-propagator and run a baggage→span-attribute processor. OTel ships both for major
-languages, and the `fakeagent`/harness fixtures do exactly this, so the hermetic
-E2E exercises the real baggage path.
+| Adapter | Driver injects | SUT contract |
+|---|---|---|
+| shell / mcp (spawned process) | `OTEL_RESOURCE_ATTRIBUTES=test.run.id=<uuid>,…` env (+ `TRACEPARENT`) | standard OTel init — the default resource honors `OTEL_RESOURCE_ATTRIBUTES`, so every span carries `test.run.id` as a **resource attribute**. No custom code. |
+| http / grpc (request) | `baggage: test.run.id=<uuid>,…` header (+ `traceparent`) | W3C baggage propagator **+** a `BaggageSpanProcessor` to copy baggage → span attribute (baggage is not auto-stamped). |
 
-**No silent fallbacks.** Trace-not-found within timeout, or an unexpected
-multi-trace match, is a hard failure with a descriptive message (run ID, elapsed
-time, last-seen span count). We never guess which trace to use.
+**Resolution (uniform across adapters):**
+1. `Correlator.Inject` mints `test.run.id` (+ `test.scenario`, `test.case`) into the
+   `RunSpec`; the adapter applies it via its transport above.
+2. Drive the SUT.
+3. `Correlator.Resolve` queries the store for **all** traces carrying the tag
+   (Tempo: `{ resource.test.run.id = "<id>" || span.test.run.id = "<id>" }`) and
+   **merges them into one `Evidence.Trace` forest** — a run legitimately spans ≥1
+   root trace (multi-turn / sub-agent). Poll until the span count is stable for K
+   iterations (ingestion lag) or timeout.
+
+**Multiple traces are normal, not an error.** The unique per-run tag means every
+matching trace belongs to this run, so merging is unambiguous. The hard-failure
+cases are **zero** traces within timeout, or a store/query error — reported with run
+id, elapsed time, and last-seen span count. **No silent fallbacks; we never guess.**
 
 ## 6. Authoring UX (hybrid)
 
@@ -270,20 +273,23 @@ deterministic agent fixture) has its own design:
 Core contracts:
 
 ```go
-// Driver launches/triggers the SUT and returns the correlated trace ID plus the
-// SUT's boundary output (agent final answer / HTTP response body+status+code).
+// Driver launches/triggers the SUT and returns the run id it tagged plus the SUT's
+// boundary output. The adapter applies spec.RunID via its transport (env for shell,
+// baggage header for http) — see Section 5.
 type Driver interface {
     Run(ctx context.Context, spec RunSpec) (RunResult, error)
 }
 
 type RunResult struct {
-    TraceID string
-    Output  Output // captured stdout / response body, status code, exit code
+    RunID          string // the correlation tag applied to this run (test.run.id)
+    PrimaryTraceID string // optional: set only if the SUT adopted our traceparent
+    Output         Output // captured stdout / response body, status code, exit code
 }
 
 // Evidence is everything a comparator may inspect about a single run.
 type Evidence struct {
-    Trace  *Trace
+    RunID  string
+    Trace  *Trace // a FOREST: >=1 root traces merged by run id (Section 5)
     Output Output
 }
 
@@ -306,10 +312,10 @@ type TraceStore interface {
     Caps() StoreCaps
 }
 
-// Correlation strategy: inject identity into the run, then resolve the trace.
+// Correlation: tag the run, then resolve + merge all of its traces.
 type Correlator interface {
-    Inject(ctx context.Context, spec *RunSpec) (runID string)
-    Resolve(ctx context.Context, store TraceStore, runID string) (*Trace, error)
+    Inject(ctx context.Context, spec *RunSpec) (runID string)                    // mints test.run.id into spec; adapter applies it
+    Resolve(ctx context.Context, store TraceStore, runID string) (*Trace, error) // fetch + merge ALL traces tagged runID
 }
 
 type Matcher  interface { Match(got, want Value) (Verdict, error) }                 // inside result comparator
@@ -318,10 +324,13 @@ type Reporter interface { Report(r ScenarioResult) error }
 ```
 
 `Expectation` is comparator-specific config parsed from the Gherkin step (or the
-sidecar YAML). The `Trace` is a tree of spans, each with ID, parent ID, name,
-kind, start/end, duration, status, and an attributes map, built from the
-`TraceStore`. `Output` is the driver-captured boundary result (Section 8, result
-comparator).
+sidecar YAML). The `Trace` is a **forest**: one or more root spans (a run may emit
+several root traces — multi-turn / sub-agent) plus a flat index of every span (ID,
+parent ID, name, kind, start/end, duration, status, attributes), built from the
+`TraceStore`. Comparators read the flat span set and the per-tree links; they never
+assume a single root. `Output` is the driver-captured boundary result (Section 8).
+`RunSpec` carries the target/adapter, the input (prompt or request), and the
+correlation tag the adapter injects.
 
 ### 7.1 Dependency injection & extensibility seams
 
@@ -357,9 +366,11 @@ expected **ordered subsequence** (extra spans allowed between matches) plus a
 **forbidden** set. Failure reasons show expected-vs-actual order.
 
 **Phase 1 — budgets (deterministic):** numeric thresholds over aggregates — total
-tokens (sum of `gen_ai.usage.*_tokens`), total cost (sum of
-`gen_ai.usage.cost_usd`), wall-clock latency (root span duration), error-span
-count. Thresholds parsed from the Gherkin step.
+tokens (sum of `gen_ai.usage.*_tokens`), total cost (sum of `gen_ai.usage.cost_usd`,
+or tokens × a pricing table in `mentat.yaml` when the attribute is absent),
+wall-clock latency (the run *envelope*: `max(end) − min(start)` across all spans,
+since a run may span multiple traces), and error-span count. Thresholds parsed from
+the Gherkin step.
 
 **Phase 1 — result (cross-modality, deterministic matchers first):** asserts on
 the *result* of the run, not the path taken. One comparator with pluggable
@@ -471,10 +482,11 @@ dev/test infrastructure only.
   (tags, reporters, config).
 - **Semantic result matcher = Claude** behind a pluggable `Judge` interface
   (Phase 4).
-- **Correlation is baggage-first** (`test.run.id` as W3C baggage, stamped onto
-  every span), with `traceparent` as a complement. Survives the SUT starting its
-  own root trace; the integration contract is one propagator + one span processor.
-  (Section 5.)
+- **Correlation is tag-first, resolved by run id, merging ≥1 traces.** A unique
+  `test.run.id` lands on every span — resource attribute via
+  `OTEL_RESOURCE_ATTRIBUTES` for spawned agents, baggage + processor for http/grpc —
+  and we query that tag. `traceparent` is an optional complement. Multiple traces
+  per run is normal, not an error. (Section 5.)
 - **Pluggable `TraceStore`.** Tempo is one implementation; `jaeger`/`otlp-file`/
   `inmem` are others. Comparators stay in-memory, so a new store is ~two methods.
 - **Extensibility via DI registries + a single composition root**, no framework
@@ -505,3 +517,40 @@ dev/test infrastructure only.
   `tracelab capture` mechanism), shell completion, and machine-friendly exit codes.
   `mentatctl service` mirrors this surface at Phase 2.
 - **Module path:** `github.com/thetonymaster/mentat`.
+
+## 16. Known limitations & risks (accepted)
+
+- **Sibling ordering depends on timestamps.** The sequence comparator sorts spans by
+  start time; across processes with clock skew (distributed `orderflow`, real agents)
+  sibling order can be unreliable. Same-process runs (e.g. `researchbot`) are fine.
+  We prefer parent-child happens-before where available and document the limit.
+- **GenAI semconv is experimental.** `gen_ai.*` attribute names may drift; a thin
+  attribute-mapping layer (config) isolates comparators + harness from churn rather
+  than hardcoding names in many places.
+- **Cost may be derived, not emitted.** When `gen_ai.usage.cost_usd` is absent,
+  budgets fall back to tokens × a `mentat.yaml` pricing table; otherwise a cost
+  assertion fails with a clear "cost not available" message.
+- **Judge non-determinism (Phase 4).** The LLM judge can itself flip verdicts; we use
+  temperature 0 + structured output and may add a judge vote. `@runs(N)` covers SUT
+  variance, not judge variance.
+- **`--last` is for interactive single runs** — the `~/.mentat/last` pointer races
+  under parallel suite runs and is not used by the runner.
+- **Captured goldens may contain sensitive data** (`tool.call.*`, response bodies).
+  Synthetic harness data is safe; `--save` on real agents needs care.
+- **Secrets:** the Phase-4 judge API key is read from env, never persisted or logged.
+
+## 17. To pin during planning (deferred specs)
+
+These are referenced above but defined as explicit deliverables in the v1 plan:
+
+- **Step grammar** — the finite v1 step set and each step's mapping to a
+  comparator + `Expectation`.
+- **`Output` shape + agent answer-extraction** — how the agent's "result" is
+  delimited from incidental stdout (e.g. last line, marker, or configured extractor).
+- **`mentat.yaml` schema** — targets (name → adapter + invocation), Tempo endpoint,
+  polling, per-target `max_concurrency`, pricing table; and how a scenario binds to a
+  target (named target vs inline adapter in the `Given` step).
+- **`mentat` runner CLI** — `mentat run [features/] --config --concurrency --tags
+  --junit --fail-fast`.
+- **L3 meta-test mechanism** — how "assert Mentat reports failure" is expressed and
+  run (e.g. a Go test shelling out to `mentat` against known-bad scenarios).
