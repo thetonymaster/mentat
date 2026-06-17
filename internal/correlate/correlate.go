@@ -75,6 +75,9 @@ func (c *correlator) Resolve(ctx context.Context, store core.TraceStore, runID s
 			if err != nil {
 				return nil, fmt.Errorf("correlate: get %s: %w", ref.TraceID, err)
 			}
+			if tr == nil {
+				return nil, fmt.Errorf("correlate: get %s returned nil trace", ref.TraceID)
+			}
 			m.Roots = append(m.Roots, tr.Roots...)
 			m.Spans = append(m.Spans, tr.Spans...)
 		}

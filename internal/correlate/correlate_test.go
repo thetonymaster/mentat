@@ -147,6 +147,26 @@ func TestResolveGetByIDError(t *testing.T) {
 	}
 }
 
+// TestResolveGetByIDNilTrace proves invariant §4: a misbehaving store returning
+// (nil, nil) from GetByID must produce a descriptive error, not a nil-pointer panic.
+func TestResolveGetByIDNilTrace(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	st.EXPECT().Query(gomock.Any(), gomock.Any()).
+		Return([]core.TraceRef{{TraceID: "nil-trace"}}, nil).Times(1)
+	st.EXPECT().GetByID(gomock.Any(), "nil-trace").
+		Return(nil, nil).Times(1)
+
+	c := New(func() string { return "run-nil" }, PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+	_, err := c.Resolve(context.Background(), st, "run-nil")
+	if err == nil {
+		t.Fatal("expected error from nil trace, got nil")
+	}
+	if !strings.Contains(err.Error(), "returned nil trace") {
+		t.Fatalf("want error mentioning nil trace, got: %v", err)
+	}
+}
+
 func TestResolveTimeoutZeroSpans(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	st := mocks.NewMockTraceStore(ctrl)
