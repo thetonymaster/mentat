@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TBT — Trace Behaviour Test Framework · Architecture</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --panel: #171a23;
+    --panel-2: #1d2130;
+    --ink: #e7e9ee;
+    --ink-dim: #9aa3b2;
+    --line: #2a2f3e;
+    --leverage: #38bdf8;   /* existing / leveraged */
+    --build: #fbbf24;      /* we build */
+    --core: #c084fc;       /* comparator core */
+    --p1: #34d399;
+    --p2: #2dd4bf;
+    --p3: #60a5fa;
+    --p4: #c084fc;
+    --p5: #94a3b8;
+    --shadow: 0 6px 24px rgba(0,0,0,.35);
+  }
+  * { box-sizing: border-box; }
+  html,body { margin:0; padding:0; background:var(--bg); color:var(--ink);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  code, .mono { font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace; }
+  a { color: var(--leverage); }
+
+  header.top {
+    position: sticky; top:0; z-index:50; backdrop-filter: blur(8px);
+    background: rgba(15,17,23,.82); border-bottom:1px solid var(--line);
+    padding: 14px 24px; display:flex; flex-wrap:wrap; gap:14px; align-items:center; justify-content:space-between;
+  }
+  .brand { display:flex; align-items:baseline; gap:12px; }
+  .brand h1 { font-size: 18px; margin:0; letter-spacing:.3px; }
+  .brand .tag { font-size:12px; color:var(--ink-dim); }
+  .controls { display:flex; gap:18px; flex-wrap:wrap; align-items:center; }
+  .ctl-group { display:flex; align-items:center; gap:6px; }
+  .ctl-group .lbl { font-size:11px; text-transform:uppercase; letter-spacing:.8px; color:var(--ink-dim); margin-right:4px; }
+  button.pill {
+    background:var(--panel-2); color:var(--ink); border:1px solid var(--line);
+    border-radius:999px; padding:5px 11px; font-size:12px; cursor:pointer; transition:.15s;
+  }
+  button.pill:hover { border-color:#3a4656; }
+  button.pill.active { background:var(--ink); color:#0f1117; border-color:var(--ink); font-weight:600; }
+
+  main { max-width: 1180px; margin: 0 auto; padding: 28px 24px 80px; }
+  .thesis { font-size: 15px; color:var(--ink-dim); line-height:1.6; max-width:860px; margin: 6px 0 30px; }
+  .thesis b { color:var(--ink); }
+
+  h2.section { font-size:13px; text-transform:uppercase; letter-spacing:1.4px; color:var(--ink-dim);
+    margin: 42px 0 16px; border-bottom:1px solid var(--line); padding-bottom:8px; }
+
+  /* flow bands */
+  .band { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+    padding:14px 18px; box-shadow:var(--shadow); position:relative; }
+  .band .role { font-size:11px; text-transform:uppercase; letter-spacing:.8px; color:var(--ink-dim); }
+  .band .title { font-size:15px; font-weight:600; margin-top:2px; }
+  .band .sub { font-size:12.5px; color:var(--ink-dim); margin-top:4px; line-height:1.5; }
+  .chev { text-align:center; color:var(--line); font-size:20px; line-height:1; margin:7px 0; }
+
+  .fanout { display:grid; grid-template-columns: repeat(3, 1fr); gap:16px; margin-top:2px; }
+  @media (max-width:820px){ .fanout { grid-template-columns:1fr; } }
+
+  .col { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px; box-shadow:var(--shadow); }
+  .col > .role { font-size:11px; text-transform:uppercase; letter-spacing:.8px; color:var(--ink-dim); }
+  .col > .colname { font-size:14px; font-weight:700; margin:3px 0 10px; }
+
+  .node { border:1px solid var(--line); border-radius:9px; padding:9px 11px; margin:8px 0;
+    background:var(--panel-2); transition:.18s; }
+  .node .n-name { font-size:13px; font-weight:600; display:flex; align-items:center; gap:8px; }
+  .node .n-desc { font-size:11.5px; color:var(--ink-dim); margin-top:3px; line-height:1.45; }
+  .node.lev { border-left:3px solid var(--leverage); }
+  .node.build { border-left:3px solid var(--build); }
+  .node.core { border-left:3px solid var(--core); }
+
+  .badge { font-size:10px; font-weight:700; padding:1.5px 7px; border-radius:999px; white-space:nowrap; }
+  .b-lev { background:rgba(56,189,248,.14); color:var(--leverage); border:1px solid rgba(56,189,248,.35); }
+  .b-build { background:rgba(251,191,36,.14); color:var(--build); border:1px solid rgba(251,191,36,.35); }
+  .b-p1 { background:rgba(52,211,153,.14); color:var(--p1); border:1px solid rgba(52,211,153,.4); }
+  .b-p2 { background:rgba(45,212,191,.14); color:var(--p2); border:1px solid rgba(45,212,191,.4); }
+  .b-p3 { background:rgba(96,165,250,.14); color:var(--p3); border:1px solid rgba(96,165,250,.4); }
+  .b-p4 { background:rgba(192,132,252,.14); color:var(--p4); border:1px solid rgba(192,132,252,.4); }
+  .b-p5 { background:rgba(148,163,184,.14); color:var(--p5); border:1px solid rgba(148,163,184,.4); }
+
+  .dim { opacity:.18; filter:grayscale(.6); }
+
+  /* portability spine */
+  .spine { display:grid; grid-template-columns: 1fr auto 1fr; gap:20px; align-items:center; margin-top:4px; }
+  @media (max-width:820px){ .spine { grid-template-columns:1fr; } }
+  .spine .merge { text-align:center; }
+  .spine .merge .ev { background:linear-gradient(180deg,var(--panel-2),var(--panel));
+    border:1.5px solid var(--core); border-radius:12px; padding:14px 16px; box-shadow:var(--shadow); }
+  .spine .merge .ev .t { font-weight:700; color:var(--core); }
+  .spine .merge .ev .d { font-size:11.5px; color:var(--ink-dim); margin-top:4px; }
+  .arrow-in { font-size:22px; color:var(--core); text-align:center; }
+
+  .matchers { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+  .matchers .m { font-size:11px; padding:2px 8px; border-radius:6px; background:var(--panel-2); border:1px solid var(--line); }
+  .matchers .m.sem { border-color:var(--p4); color:var(--p4); }
+
+  /* correlation steps */
+  .steps { display:grid; grid-template-columns: repeat(auto-fit, minmax(185px,1fr)); gap:14px; }
+  .step { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; position:relative; }
+  .step .num { position:absolute; top:-10px; left:-10px; width:24px; height:24px; border-radius:50%;
+    background:var(--leverage); color:#0f1117; font-weight:700; font-size:12px; display:grid; place-items:center; }
+  .step .st { font-size:13px; font-weight:600; }
+  .step .sd { font-size:11.5px; color:var(--ink-dim); margin-top:4px; line-height:1.45; }
+  .step.fail .num { background:#f87171; }
+
+  /* phasing */
+  .phases { display:grid; grid-template-columns: repeat(5,1fr); gap:12px; }
+  @media (max-width:980px){ .phases { grid-template-columns:1fr; } }
+  .phase { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px; box-shadow:var(--shadow); }
+  .phase h3 { margin:0 0 4px; font-size:13px; display:flex; align-items:center; gap:8px; }
+  .phase ul { margin:8px 0 0; padding-left:16px; }
+  .phase li { font-size:12px; color:var(--ink-dim); margin:5px 0; line-height:1.4; }
+  .phase.cur { outline:2px solid var(--p1); }
+
+  .legend { display:flex; flex-wrap:wrap; gap:18px; font-size:12px; color:var(--ink-dim); margin-top:8px; }
+  .legend .k { display:flex; align-items:center; gap:7px; }
+  .swatch { width:14px; height:14px; border-radius:4px; display:inline-block; }
+
+  .note { font-size:12px; color:var(--ink-dim); margin-top:10px; line-height:1.55; }
+  .pre { background:#0b0d13; border:1px solid var(--line); border-radius:10px; padding:14px 16px;
+    font-size:12px; line-height:1.6; overflow:auto; color:#cdd3df; }
+  .pre .k { color:#7dd3fc; } .pre .v { color:#fbbf24; } .pre .c { color:#6b7280; }
+
+  /* dependency injection / seams */
+  .root-band { background:linear-gradient(180deg,var(--panel-2),var(--panel));
+    border:1.5px solid var(--build); border-radius:12px; padding:14px 18px; box-shadow:var(--shadow); }
+  .root-band .t { font-weight:700; }
+  .root-band .d { font-size:12.5px; color:var(--ink-dim); margin-top:5px; line-height:1.55; }
+  .root-band code { color:#fbbf24; }
+  .inject-arrows { text-align:center; color:var(--build); letter-spacing:24px; font-size:16px; margin:8px 0 2px; }
+  .seams { display:grid; grid-template-columns: repeat(auto-fit, minmax(250px,1fr)); gap:14px; }
+  .seam { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:13px 14px; box-shadow:var(--shadow); }
+  .seam .iface { font-size:13px; font-weight:700; color:var(--core); }
+  .seam .iface .arrow { color:var(--ink-dim); font-weight:400; }
+  .seam .impls { display:flex; flex-wrap:wrap; gap:6px; margin:9px 0 8px; }
+  .chip { font-size:11px; padding:2px 9px; border-radius:7px; border:1px solid var(--line); background:var(--panel-2); }
+  .chip.test { border-style:dashed; color:var(--ink-dim); }
+  .chip.plugin { border:1px dashed var(--build); color:var(--build); font-weight:600; }
+  .seam .reg { font-size:10.5px; color:var(--ink-dim); font-family: ui-monospace, Menlo, monospace; border-top:1px dashed var(--line); padding-top:7px; }
+  .seam .reg b { color:var(--ink); font-weight:600; }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <h1>TBT · Trace Behaviour Test Framework</h1>
+    <span class="tag">architecture · 2026-06-17 · working draft</span>
+  </div>
+  <div class="controls">
+    <div class="ctl-group">
+      <span class="lbl">As of phase</span>
+      <button class="pill" data-phase="5">All</button>
+      <button class="pill active" data-phase="1">v1</button>
+      <button class="pill" data-phase="2">P2</button>
+      <button class="pill" data-phase="3">P3</button>
+      <button class="pill" data-phase="4">P4</button>
+      <button class="pill" data-phase="5b">P5</button>
+    </div>
+    <div class="ctl-group">
+      <span class="lbl">Path</span>
+      <button class="pill active" data-path="both">Both</button>
+      <button class="pill" data-path="agent">Agents</button>
+      <button class="pill" data-path="msvc">Microservices</button>
+    </div>
+  </div>
+</header>
+
+<main>
+  <p class="thesis">
+    Assert <b>how a system behaved</b> — and <b>what it produced</b> — by inspecting its OpenTelemetry trace.
+    Write <b>Gherkin</b>, drive the system, fetch the trace from <b>Tempo</b>, and run <b>comparators</b>
+    that encode "correct behaviour." The comparator core is the stable center; the <b>trace source is a swappable adapter</b>,
+    so the same checks run against <b>AI/LLM agents</b> and <b>microservices</b> alike.
+    Toggle the controls above to see the system at each phase, or per target path.
+  </p>
+
+  <!-- ============ MAIN FLOW ============ -->
+  <h2 class="section">Pipeline — vertical flow</h2>
+
+  <div class="band lev" data-phase="1" data-path="both">
+    <div class="role">Spec layer · leverage</div>
+    <div class="title">Gherkin <code>.feature</code> → godog <span class="badge b-lev">existing</span></div>
+    <div class="sub">godog parses scenarios and dispatches each step to a Go step definition. We never write a parser/runner.</div>
+  </div>
+  <div class="chev">▼</div>
+
+  <div class="band build" data-phase="1" data-path="both">
+    <div class="role">Authoring · build</div>
+    <div class="title">Step grammar (Go) <span class="badge b-build">ours</span></div>
+    <div class="sub">Curated <code>Given/When/Then</code> steps. Inline expectations (data tables, docstrings) for common cases; optional sidecar YAML for complex shape patterns (P3).</div>
+  </div>
+  <div class="chev">▼</div>
+
+  <div class="band build" data-phase="1" data-path="both">
+    <div class="role">Orchestration · build</div>
+    <div class="title">Engine — scenario lifecycle <span class="badge b-build">ours</span></div>
+    <div class="sub">configure → drive → fetch → compare → report. Owns the run lifecycle and (P4) the <code>@runs(N)</code> repeat loop for non-determinism.</div>
+  </div>
+  <div class="chev">▼</div>
+
+  <div class="fanout">
+    <!-- DRIVER COLUMN -->
+    <div class="col" data-phase="1" data-path="both">
+      <div class="role">build</div>
+      <div class="colname">Driver layer</div>
+      <div class="node build" data-phase="1" data-path="agent">
+        <div class="n-name">shell adapter <span class="badge b-p1">v1</span></div>
+        <div class="n-desc">Launches a user agent as a process; captures stdout as Output.</div>
+      </div>
+      <div class="node build" data-phase="2" data-path="msvc">
+        <div class="n-name">http adapter <span class="badge b-p2">P2</span></div>
+        <div class="n-desc">Fires the request; captures response body + status.</div>
+      </div>
+      <div class="node build" data-phase="5b" data-path="msvc">
+        <div class="n-name">grpc adapter <span class="badge b-p5">P5</span></div>
+        <div class="n-desc">Same contract over gRPC.</div>
+      </div>
+      <div class="node build" data-phase="5b" data-path="agent">
+        <div class="n-name">mcp adapter <span class="badge b-p5">P5</span></div>
+        <div class="n-desc">Drives MCP-exposed agents.</div>
+      </div>
+      <div class="node lev" data-phase="5b" data-path="msvc">
+        <div class="n-name">tracetest adapter <span class="badge b-p5">P5</span> <span class="badge b-lev">opt</span></div>
+        <div class="n-desc">Shell out to <code>tracetest run</code> for teams already invested in it. Convenience, not required.</div>
+      </div>
+      <div class="note">All adapters: inject correlation, return <code>{TraceID, Output}</code>.</div>
+    </div>
+
+    <!-- TRACE COLUMN -->
+    <div class="col" data-phase="1" data-path="both">
+      <div class="role">leverage + thin glue</div>
+      <div class="colname">Trace layer</div>
+      <div class="node build" data-phase="1" data-path="both">
+        <div class="n-name">correlate + stable-poll <span class="badge b-p1">v1</span></div>
+        <div class="n-desc">W3C <code>traceparent</code> primary; <code>test.run.id</code> tag fallback. Poll Tempo until span count is stable.</div>
+      </div>
+      <div class="node lev" data-phase="1" data-path="both">
+        <div class="n-name">Tempo client <span class="badge b-lev">existing</span></div>
+        <div class="n-desc">trace-by-ID + TraceQL. Tempo owns storage/query — we never build a store.</div>
+      </div>
+      <div class="node build" data-phase="1" data-path="both">
+        <div class="n-name">normalize → Trace model <span class="badge b-p1">v1</span></div>
+        <div class="n-desc">Span tree: id, parent, name, kind, times, status, attrs. The portable currency.</div>
+      </div>
+    </div>
+
+    <!-- COMPARATOR COLUMN -->
+    <div class="col" data-phase="1" data-path="both">
+      <div class="role">build · the brains</div>
+      <div class="colname" style="color:var(--core)">Comparator core</div>
+      <div class="node core" data-phase="1" data-path="both">
+        <div class="n-name">sequence <span class="badge b-p1">v1</span></div>
+        <div class="n-desc">Ordered subsequence of tool/service spans + forbidden set. (No tool does ordering — ours.)</div>
+      </div>
+      <div class="node core" data-phase="1" data-path="both">
+        <div class="n-name">budgets <span class="badge b-p1">v1</span></div>
+        <div class="n-desc">Σ tokens / cost / latency / error count vs thresholds.</div>
+      </div>
+      <div class="node core" data-phase="1" data-path="both">
+        <div class="n-name">result <span class="badge b-p1">v1</span> <span class="badge b-p4">+sem P4</span></div>
+        <div class="n-desc">Asserts the run's output. Cross-modality, pluggable matchers.</div>
+        <div class="matchers">
+          <span class="m">exact</span><span class="m">contains</span><span class="m">regex</span>
+          <span class="m">json-subset</span><span class="m">status</span><span class="m">schema</span>
+          <span class="m sem">semantic · P4</span>
+        </div>
+      </div>
+      <div class="node core" data-phase="3" data-path="both">
+        <div class="n-name">shape <span class="badge b-p3">P3</span></div>
+        <div class="n-desc">Required/forbidden spans, parent-child, fan-out. TraceQL-backed; in-memory fallback.</div>
+      </div>
+    </div>
+  </div>
+  <div class="chev">▼</div>
+
+  <div class="band lev" data-phase="1" data-path="both">
+    <div class="role">Reporting · leverage + glue</div>
+    <div class="title">Reporter — godog JUnit + console <span class="badge b-lev">existing</span></div>
+    <div class="sub">Comparator <code>Verdict.Reasons</code> attached to step errors, so reports say <i>why</i> a behaviour failed (expected vs actual order), not just that it did.</div>
+  </div>
+
+  <!-- ============ PORTABILITY SPINE ============ -->
+  <h2 class="section">Why it's portable — one core, two paths</h2>
+  <div class="spine">
+    <div>
+      <div class="node build" data-path="agent" data-phase="1">
+        <div class="n-name">Agent path</div>
+        <div class="n-desc"><code>agentctl</code> shell/mcp → agent run. Output = final answer. Trace = <code>invoke_agent</code> / <code>execute_tool</code> spans.</div>
+      </div>
+      <div class="node build" data-path="msvc" data-phase="2">
+        <div class="n-name">Microservice path</div>
+        <div class="n-desc"><code>http</code>/<code>grpc</code> → request. Output = response body+status. Trace = service spans. <code>traceparent</code> propagation is native here.</div>
+      </div>
+    </div>
+    <div class="merge">
+      <div class="arrow-in">▶</div>
+      <div class="ev">
+        <div class="t">Evidence</div>
+        <div class="d"><code>{ Trace, Output }</code><br/>the single currency every comparator consumes</div>
+      </div>
+      <div class="arrow-in" style="transform:rotate(180deg)">▶</div>
+    </div>
+    <div>
+      <div class="node core" data-phase="1" data-path="both">
+        <div class="n-name">Comparator core</div>
+        <div class="n-desc">Same sequence / budgets / result / shape comparators run on either path. They don't know who fetched the trace or drove the SUT — <b>that's the whole design.</b></div>
+      </div>
+    </div>
+  </div>
+  <p class="note">Microservices exercise 3 of 4 comparators heavily (sequence, shape, budgets) plus deterministic result; the novel/risky <code>semantic</code> matcher is the one they don't need.</p>
+
+  <!-- ============ CORRELATION ============ -->
+  <h2 class="section">Correlation — baggage-first</h2>
+  <p class="note" style="margin-top:0">Baggage is the <b>primary</b> mechanism: it survives the agent starting its <i>own</i> root trace, and lands a queryable tag on <i>every</i> span. <code>traceparent</code> is a complement (a clean single trace ID when the SUT honors it).</p>
+  <div class="steps">
+    <div class="step" data-phase="1" data-path="both"><div class="num">1</div>
+      <div class="st">Inject baggage</div>
+      <div class="sd">Driver sets <code>test.run.id=&lt;uuid&gt;</code> (+ scenario/case) as W3C <b>baggage</b> — `baggage` header for http/grpc, env for shell/mcp. Also mints <code>traceparent</code>.</div></div>
+    <div class="step" data-phase="1" data-path="both"><div class="num">2</div>
+      <div class="st">SUT propagates</div>
+      <div class="sd">SUT's W3C baggage propagator carries it through every downstream hop — even across new traces the agent starts itself.</div></div>
+    <div class="step" data-phase="1" data-path="both"><div class="num">3</div>
+      <div class="st">Stamp onto spans</div>
+      <div class="sd">A <b>BaggageSpanProcessor</b> in the SUT copies <code>test.run.id</code> onto every span as an attribute → queryable.</div></div>
+    <div class="step" data-phase="1" data-path="both"><div class="num">4</div>
+      <div class="st">Resolve + stable-poll</div>
+      <div class="sd">TraceQL <code>{ test.run.id = "…" }</code> → trace(s); poll Tempo until span count is stable (ingestion lag).</div></div>
+    <div class="step fail" data-phase="1" data-path="both"><div class="num">!</div>
+      <div class="st">No silent fallback</div>
+      <div class="sd">Not-found / unexpected multi-trace = hard, descriptive failure. Never guess.</div></div>
+  </div>
+  <p class="note"><b>Integration contract</b> (the one thing we require of the SUT): honor the W3C baggage propagator + run a baggage→span-attribute processor. OTel ships these for major languages. Our <code>fakeagent</code> fixture does exactly this, so the hermetic E2E exercises the real baggage path.</p>
+
+  <!-- ============ CONTRACTS ============ -->
+  <h2 class="section">Core contracts</h2>
+  <div class="pre mono"><span class="c">// every seam is an interface; impls are injected at the composition root.</span>
+<span class="k">type</span> Driver     <span class="k">interface</span> { Run(ctx, RunSpec) (RunResult, error) }
+<span class="k">type</span> TraceStore <span class="k">interface</span> { GetByID(ctx, id) (*Trace, error); Query(ctx, TraceQuery) ([]TraceRef, error); Caps() StoreCaps }
+<span class="k">type</span> Correlator <span class="k">interface</span> { Inject(ctx, *RunSpec) (runID <span class="v">string</span>); Resolve(ctx, TraceStore, runID) (*Trace, error) }
+<span class="k">type</span> Comparator <span class="k">interface</span> { Compare(ctx, Evidence, Expectation) (Verdict, error) }
+<span class="k">type</span> Matcher    <span class="k">interface</span> { Match(got, want Value) (Verdict, error) }   <span class="c">// inside result comparator</span>
+<span class="k">type</span> Judge      <span class="k">interface</span> { Judge(ctx, got, criteria <span class="v">string</span>) (Verdict, error) } <span class="c">// semantic matcher → Claude</span>
+<span class="k">type</span> Reporter   <span class="k">interface</span> { Report(ScenarioResult) error }
+
+<span class="k">type</span> RunResult <span class="k">struct</span> { TraceID <span class="v">string</span>; Output Output }   <span class="c">// trace ID + boundary output</span>
+<span class="k">type</span> Evidence  <span class="k">struct</span> { Trace *Trace; Output Output }     <span class="c">// what a comparator sees</span>
+<span class="k">type</span> Verdict   <span class="k">struct</span> { Pass <span class="v">bool</span>; Reasons []<span class="v">string</span> }    <span class="c">// reasons → report</span></div>
+
+  <!-- ============ DEPENDENCY INJECTION ============ -->
+  <h2 class="section">Extensibility — dependency injection &amp; seams</h2>
+  <div class="root-band">
+    <div class="t">Composition root — <code>engine.Build(cfg)</code></div>
+    <div class="d">Reads <code>tbt.yaml</code>, resolves each dependency <b>from its registry by name</b>, and constructor-injects the chosen implementations into the Engine. The Engine depends only on the <b>interfaces</b> above — never on a concrete Tempo, shell adapter, or Claude. Idiomatic Go DI: <b>interfaces + constructor injection + a registry per seam</b> (no framework; <code>google/wire</code> optional for compile-time wiring).</div>
+  </div>
+  <div class="inject-arrows">▼ ▼ ▼ ▼ ▼ ▼ ▼</div>
+  <div class="seams">
+
+    <div class="seam" data-phase="1" data-path="both">
+      <div class="iface">TraceStore <span class="arrow">— resolved by name</span></div>
+      <div class="impls">
+        <span class="chip">tempo · P1</span>
+        <span class="chip">jaeger · P5</span>
+        <span class="chip test">otlp-file · test</span>
+        <span class="chip test">inmem · test</span>
+        <span class="chip plugin">＋ your store</span>
+      </div>
+      <div class="reg"><b>RegisterStore</b>(name, factory)</div>
+    </div>
+
+    <div class="seam" data-phase="1" data-path="both">
+      <div class="iface">Driver <span class="arrow">— resolved by URI scheme</span></div>
+      <div class="impls">
+        <span class="chip">shell: · P1</span>
+        <span class="chip">http: · P2</span>
+        <span class="chip">grpc: · P5</span>
+        <span class="chip">mcp: · P5</span>
+        <span class="chip">tracetest: · P5</span>
+        <span class="chip plugin">＋ your adapter</span>
+      </div>
+      <div class="reg"><b>RegisterDriver</b>(scheme, factory)</div>
+    </div>
+
+    <div class="seam" data-phase="1" data-path="both">
+      <div class="iface">Comparator</div>
+      <div class="impls">
+        <span class="chip">sequence · P1</span>
+        <span class="chip">budgets · P1</span>
+        <span class="chip">result · P1</span>
+        <span class="chip">shape · P3</span>
+        <span class="chip plugin">＋ your comparator</span>
+      </div>
+      <div class="reg"><b>RegisterComparator</b>(name, factory)</div>
+    </div>
+
+    <div class="seam" data-phase="1" data-path="both">
+      <div class="iface">Matcher <span class="arrow">— inside result</span></div>
+      <div class="impls">
+        <span class="chip">exact · P1</span>
+        <span class="chip">json-subset · P1</span>
+        <span class="chip">status · P1</span>
+        <span class="chip">schema · P1</span>
+        <span class="chip">semantic · P4</span>
+        <span class="chip plugin">＋ your matcher</span>
+      </div>
+      <div class="reg"><b>RegisterMatcher</b>(name, factory)</div>
+    </div>
+
+    <div class="seam" data-phase="4" data-path="agent">
+      <div class="iface">Judge <span class="arrow">— for semantic</span></div>
+      <div class="impls">
+        <span class="chip">claude · P4</span>
+        <span class="chip plugin">＋ your judge</span>
+      </div>
+      <div class="reg"><b>RegisterJudge</b>(name, factory)</div>
+    </div>
+
+    <div class="seam" data-phase="1" data-path="both">
+      <div class="iface">Correlator</div>
+      <div class="impls">
+        <span class="chip">baggage+tag · P1</span>
+        <span class="chip">traceparent · P1</span>
+        <span class="chip plugin">＋ your strategy</span>
+      </div>
+      <div class="reg"><b>RegisterCorrelator</b>(name, factory)</div>
+    </div>
+
+    <div class="seam" data-phase="1" data-path="both">
+      <div class="iface">Reporter</div>
+      <div class="impls">
+        <span class="chip">junit · P1</span>
+        <span class="chip">console · P1</span>
+        <span class="chip plugin">＋ your reporter</span>
+      </div>
+      <div class="reg"><b>RegisterReporter</b>(name, factory)</div>
+    </div>
+
+  </div>
+  <p class="note">Adding a capability = implement the interface + register a factory. <b>No engine change.</b> The <code>otlp-file</code> / <code>inmem</code> stores aren't just future-proofing — they let us unit/E2E test comparators with zero infrastructure. That's the pluggability paying rent immediately.</p>
+
+  <!-- ============ PHASING ============ -->
+  <h2 class="section">Phasing — each a verified checkpoint</h2>
+  <div class="phases">
+    <div class="phase cur" data-phasecard="1"><h3><span class="badge b-p1">v1</span> Thin E2E</h3>
+      <ul><li>godog → shell adapter</li><li>correlate + stable-poll</li><li><b>sequence + budgets + deterministic result</b></li><li>JUnit; hermetic green/red proof</li></ul></div>
+    <div class="phase" data-phasecard="2"><h3><span class="badge b-p2">P2</span> Portability</h3>
+      <ul><li><b>http adapter</b></li><li>microservice through the <i>same</i> comparators</li><li>response body/status result</li><li>proves swappable source</li></ul></div>
+    <div class="phase" data-phasecard="3"><h3><span class="badge b-p3">P3</span> Shape + span results</h3>
+      <ul><li><b>shape comparator</b> (TraceQL)</li><li>sidecar YAML expectations</li><li>span-attribute result source</li><li>per-tool / intermediate results</li></ul></div>
+    <div class="phase" data-phasecard="4"><h3><span class="badge b-p4">P4</span> Semantic</h3>
+      <ul><li><b>LLM-judge</b> result matcher (Claude)</li><li>pluggable <code>Judge</code></li><li><code>@runs(N)</code> non-determinism</li><li>pass policy: all / majority</li></ul></div>
+    <div class="phase" data-phasecard="5"><h3><span class="badge b-p5">P5</span> Breadth</h3>
+      <ul><li><b>grpc / mcp</b> adapters</li><li>optional <b>tracetest</b> adapter</li><li>wider SUT coverage</li></ul></div>
+  </div>
+
+  <!-- ============ LEGEND ============ -->
+  <h2 class="section">Legend</h2>
+  <div class="legend">
+    <span class="k"><span class="swatch" style="background:var(--leverage)"></span> Leverage existing (godog, OTel, Tempo, Tracetest)</span>
+    <span class="k"><span class="swatch" style="background:var(--build)"></span> We build</span>
+    <span class="k"><span class="swatch" style="background:var(--core)"></span> Comparator core (the brains)</span>
+  </div>
+  <p class="note">Open architectural questions to discuss are listed alongside this diagram in chat. This file is a brainstorming aid, not an approved build artifact.</p>
+</main>
+
+<script>
+  const state = { phase: 1, path: 'both' };
+  const phaseRank = { '1':1, '2':2, '3':3, '4':4, '5b':5, '5':5 };
+
+  function apply() {
+    const maxRank = state.phase === 5 ? 5 : phaseRank[String(state.phase)] || 5;
+    document.querySelectorAll('[data-phase]').forEach(el => {
+      const r = phaseRank[el.getAttribute('data-phase')] || 1;
+      const okPhase = r <= maxRank;
+      const p = el.getAttribute('data-path') || 'both';
+      const okPath = state.path === 'both' || p === 'both' || p === state.path;
+      el.classList.toggle('dim', !(okPhase && okPath));
+    });
+    // phase cards highlight current selection
+    document.querySelectorAll('[data-phasecard]').forEach(c => {
+      c.classList.toggle('cur', String(c.getAttribute('data-phasecard')) === String(maxRank) && state.phase !== 5);
+    });
+  }
+
+  document.querySelectorAll('button.pill[data-phase]').forEach(b => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('button.pill[data-phase]').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      const v = b.getAttribute('data-phase');
+      state.phase = v === '5b' ? 5 : (v === '5' ? 5 : parseInt(v,10));
+      state.phaseRaw = v;
+      // distinguish "All" (5) vs "P5" (5b): both rank 5, both show everything — fine.
+      apply();
+    });
+  });
+  document.querySelectorAll('button.pill[data-path]').forEach(b => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('button.pill[data-path]').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      state.path = b.getAttribute('data-path');
+      apply();
+    });
+  });
+  apply();
+</script>
+</body>
+</html>
