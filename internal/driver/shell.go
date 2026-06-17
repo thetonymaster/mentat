@@ -74,7 +74,18 @@ func resourceAttrs(tags map[string]string) string {
 	sort.Strings(keys)
 	parts := make([]string, 0, len(keys))
 	for _, k := range keys {
-		parts = append(parts, k+"="+tags[k])
+		parts = append(parts, otelEncode(k)+"="+otelEncode(tags[k]))
 	}
 	return strings.Join(parts, ",")
+}
+
+// otelEncode percent-encodes the OTEL_RESOURCE_ATTRIBUTES reserved delimiters
+// (',' and '=') per the OpenTelemetry resource spec. '%' is encoded first so
+// existing percent signs round-trip. Nothing else is encoded — a minimal
+// spec-compliant decoder reverses exactly this set.
+func otelEncode(s string) string {
+	s = strings.ReplaceAll(s, "%", "%25")
+	s = strings.ReplaceAll(s, ",", "%2C")
+	s = strings.ReplaceAll(s, "=", "%3D")
+	return s
 }

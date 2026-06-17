@@ -117,6 +117,35 @@ func TestShellAdditionalBranches(t *testing.T) {
 			},
 		},
 		{
+			name: "otel_reserved_chars_percent_encoded",
+			// A tag value containing the OTel-reserved delimiters ',' and '='
+			// must be percent-encoded, otherwise the produced
+			// OTEL_RESOURCE_ATTRIBUTES is malformed and a spec-compliant SDK
+			// discards the WHOLE variable, silently breaking correlation.
+			spec: core.RunSpec{
+				Command: []string{"sh", "-c", `printf '%s' "$OTEL_RESOURCE_ATTRIBUTES"`},
+				Tags: map[string]string{
+					"test.run.id": "abc-123",
+					"label":       "a,b=c",
+				},
+				RunID: "abc-123",
+			},
+			wantErr: false,
+			checkOutput: func(t *testing.T, res core.RunResult) {
+				t.Helper()
+				got := res.Output.Stdout
+				if !strings.Contains(got, "label=a%2Cb%3Dc") {
+					t.Fatalf("encoded label missing; OTEL_RESOURCE_ATTRIBUTES=%q", got)
+				}
+				if !strings.Contains(got, "test.run.id=abc-123") {
+					t.Fatalf("unaffected test.run.id missing; OTEL_RESOURCE_ATTRIBUTES=%q", got)
+				}
+				if strings.Contains(got, "a,b=c") {
+					t.Fatalf("raw reserved chars leaked unencoded; OTEL_RESOURCE_ATTRIBUTES=%q", got)
+				}
+			},
+		},
+		{
 			name: "empty_tags_no_otel_attr_injected",
 			// Guarantee hermeticity: if the host exports OTEL_RESOURCE_ATTRIBUTES,
 			// clear it so os.Environ() passes an empty value. The bash expansion
