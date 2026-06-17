@@ -457,7 +457,7 @@ dev/test infrastructure only.
   (`google/wire` rejected for now). Every seam (store, driver, comparator, matcher,
   judge, correlator, reporter) is an interface resolved by name. (Section 7.1.)
 
-## 15. Naming (decided) and open items
+## 15. Naming & identifiers (decided)
 
 - **Name: Mentat.** Runner CLI `mentat`; config file `mentat.yaml`. A single
   driver CLI `mentatctl` with domain subcommands — `mentatctl agent …`
@@ -472,5 +472,4 @@ dev/test infrastructure only.
   harness SUTs, `--json` for machine output, `--wait`/`--timeout` for trace polling,
   and a bare `mentatctl agent run` using config defaults. `mentatctl service`
   mirrors the same ergonomics at Phase 2.
-- **Module path:** `github.com/<owner>/mentat` — set `<owner>` to your GitHub
-  org/user. The only remaining placeholder; must be set before the first push.
+- **Module path:** `github.com/thetonymaster/mentat`.
