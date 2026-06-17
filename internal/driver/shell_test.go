@@ -2,8 +2,10 @@ package driver
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/thetonymaster/mentat/internal/core"
 )
@@ -35,9 +37,11 @@ func TestShellAdditionalBranches(t *testing.T) {
 	tests := []struct {
 		name        string
 		setup       func(t *testing.T)
+		ctx         func(t *testing.T) context.Context
 		spec        core.RunSpec
 		wantErr     bool
 		wantErrSub  string
+		wantErrIs   error
 		wantExit    int
 		checkOutput func(t *testing.T, res core.RunResult)
 	}{
@@ -68,6 +72,27 @@ func TestShellAdditionalBranches(t *testing.T) {
 			},
 			wantErr:    true,
 			wantErrSub: "definitely-not-a-real-binary-xyz",
+		},
+		{
+			name: "context_deadline_kills_process_returns_error",
+			// The process must START and then be killed by the deadline so we hit
+			// the ExitError+ctx.Err() branch (a pre-cancelled context would fail at
+			// Start and hit the other branch). 'sleep 5' far outlasts the 30ms
+			// deadline, so the deadline always fires first regardless of host load,
+			// while the test still completes in tens of ms.
+			ctx: func(t *testing.T) context.Context {
+				t.Helper()
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+				t.Cleanup(cancel)
+				return ctx
+			},
+			spec: core.RunSpec{
+				Command: []string{"sleep", "5"},
+				RunID:   "run-cancel",
+			},
+			wantErr:    true,
+			wantErrSub: "canceled",
+			wantErrIs:  context.DeadlineExceeded,
 		},
 		{
 			name: "multiple_tags_sorted_otel_attrs",
@@ -142,13 +167,20 @@ func TestShellAdditionalBranches(t *testing.T) {
 			if tt.setup != nil {
 				tt.setup(t)
 			}
-			res, err := NewShell().Run(context.Background(), tt.spec)
+			ctx := context.Background()
+			if tt.ctx != nil {
+				ctx = tt.ctx(t)
+			}
+			res, err := NewShell().Run(ctx, tt.spec)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err = %v, wantErr = %v", err, tt.wantErr)
 			}
 			if tt.wantErr {
 				if tt.wantErrSub != "" && !strings.Contains(err.Error(), tt.wantErrSub) {
 					t.Fatalf("error %q does not contain %q", err.Error(), tt.wantErrSub)
+				}
+				if tt.wantErrIs != nil && !errors.Is(err, tt.wantErrIs) {
+					t.Fatalf("error %q is not %v", err.Error(), tt.wantErrIs)
 				}
 				return
 			}

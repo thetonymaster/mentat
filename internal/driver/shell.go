@@ -3,6 +3,7 @@ package driver
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -38,7 +39,14 @@ func (shell) Run(ctx context.Context, spec core.RunSpec) (core.RunResult, error)
 	runErr := cmd.Run()
 
 	exit := 0
-	if ee, ok := runErr.(*exec.ExitError); ok {
+	var ee *exec.ExitError
+	if errors.As(runErr, &ee) {
+		// A cancelled/expired context kills the process, which surfaces as an
+		// ExitError. Don't mistake that for a normal non-zero exit — the run was
+		// interrupted, so report the cancellation cause instead.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return core.RunResult{}, fmt.Errorf("shell: exec %v canceled for run %q: %w", spec.Command, spec.RunID, ctxErr)
+		}
 		exit = ee.ExitCode()
 	} else if runErr != nil {
 		return core.RunResult{}, fmt.Errorf("shell: exec %v: %w (stderr: %s)", spec.Command, runErr, stderr.String())
