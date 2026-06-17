@@ -1,0 +1,11 @@
+# Go
+/bin/
+*.out
+cover.out
+
+# Python (skill scripts)
+__pycache__/
+*.pyc
+
+# Local
+.env
