@@ -132,6 +132,30 @@ makes comparators portable across agents and microservices. Structural comparato
 (sequence/shape/budgets) read `Evidence.Trace`; the result comparator reads
 `Evidence.Output` (and, from Phase 3, span-attribute results in `Evidence.Trace`).
 
+### 4.1 Engine concurrency
+
+Concurrency safety is **structural**: every run carries a unique `test.run.id` as
+baggage, stamped on every span, so concurrent runs are independently resolvable in
+the trace store — no cross-talk. That property is what makes any parallelism safe.
+
+- **Unit of work = the scenario.** Steps run sequentially within a scenario; one
+  `When` = one run (v1). `@runs(N)` repeats are sub-units (Section 9).
+- **Two-level control:** (1) global scheduler width via godog's scenario-level
+  parallelism (`--concurrency`); (2) a **per-target cap**
+  (`targets.<name>.max_concurrency`) enforced by a weighted semaphore around the
+  drive step, protecting individual SUTs regardless of scheduler width.
+- **Smart per-adapter defaults:** the scheduler is parallel by default, but the
+  per-target cap defaults by adapter *kind* — **agents (shell/mcp) default to 1**
+  (serial per target; cost/rate-limit safe), **microservices (http/grpc) default
+  high**. Mixed suites parallelize the cheap parts and throttle the expensive ones
+  with no configuration.
+- **`@runs(N)` repeats run serially by default** (bounds instantaneous cost),
+  opt-in parallel under the per-target cap.
+- **Failure isolation:** run-all-report-all by default; `--fail-fast` opt-in.
+- **Goroutine-safety contract:** the `TraceStore` client, comparators (stateless),
+  and reporter must be concurrency-safe; per-scenario state lives in godog's
+  scenario `context.Context`; step defs share no mutable globals.
+
 ## 5. Correlation: getting *this run's* trace
 
 **Baggage-first.** W3C `traceparent` only correlates if the SUT *adopts* the
@@ -456,6 +480,9 @@ dev/test infrastructure only.
 - **Extensibility via DI registries + a single composition root**, no framework
   (`google/wire` rejected for now). Every seam (store, driver, comparator, matcher,
   judge, correlator, reporter) is an interface resolved by name. (Section 7.1.)
+- **Concurrency: parallel scheduler + smart per-adapter per-target caps** (agents
+  serial, microservices parallel). Safe because each run is uniquely tagged via
+  baggage. (Section 4.1.)
 
 ## 15. Naming & identifiers (decided)
 
@@ -464,12 +491,17 @@ dev/test infrastructure only.
   (shell/mcp adapters) and `mentatctl service …` (http/grpc adapters) — over one
   generic `Driver` interface.
 - **`mentatctl agent` is the first-class v1 surface, optimised for ergonomics.**
-  The common flow is one line:
-  `mentatctl agent run --adapter shell:research-agent --prompt "Summarize Q3"` —
-  it injects baggage, drives the agent, resolves the trace, and prints the captured
-  output + resolved trace ID. Adapter, baggage, and Tempo settings default from
-  `mentat.yaml` and are overridable by flag/env. Conveniences: `--scenario` for
-  harness SUTs, `--json` for machine output, `--wait`/`--timeout` for trace polling,
-  and a bare `mentatctl agent run` using config defaults. `mentatctl service`
-  mirrors the same ergonomics at Phase 2.
+  Commands: **`run`** (drive + correlate + fetch; prints the answer plus a compact
+  trace summary — tools in order, tokens, cost, latency, trace ID), **`trace
+  [id|--last]`** (pretty-print the span tree), **`tools [id|--last]`** (tool-call
+  sequence: name · order · duration · tokens), **`replay <id>`** (re-run comparators
+  against a stored/fetched trace *without* re-driving the agent — free and fast),
+  **`diff <idA> <idB>`** (compare tool sequence / shape between two runs).
+  Conveniences: `--target NAME` (named agents from `mentat.yaml`), `--last` (most
+  recent run, cached in `~/.mentat/last`), prompt via `--prompt`/`--prompt-file`/
+  stdin, `--scenario` (harness SUTs), output `--json`/`--quiet`/`-o file` (human
+  default, TTY-aware colour), polling `--wait`/`--timeout`/`--poll-interval`,
+  `--save NAME` (capture this run as a golden fixture — shares the harness
+  `tracelab capture` mechanism), shell completion, and machine-friendly exit codes.
+  `mentatctl service` mirrors this surface at Phase 2.
 - **Module path:** `github.com/thetonymaster/mentat`.

@@ -141,6 +141,8 @@ A `tracelab capture` mode runs each scenario once and writes the emitted OTLP sp
 to `testdata/traces/<sut>/<scenario>.json`. These goldens feed L1 unit tests. They
 are regenerated deliberately (not on every run) and reviewed on change, so a drift
 in emitted telemetry is a visible diff, not a silent surprise.
+(`mentatctl agent run --save <name>` writes a single fixture via the same
+mechanism, for ad-hoc capture during development.)
 
 ## 9. Phasing
 
