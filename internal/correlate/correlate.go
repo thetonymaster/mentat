@@ -66,7 +66,7 @@ func (c *correlator) Resolve(ctx context.Context, store core.TraceStore, runID s
 
 		refs, err := store.Query(ctx, core.TraceQuery{Tag: "test.run.id", Value: runID})
 		if err != nil {
-			return nil, fmt.Errorf("correlate: query: %w", err)
+			return nil, fmt.Errorf("correlate: query tag=%q value=%q: %w", "test.run.id", runID, err)
 		}
 
 		m := &trace.Trace{RunID: runID}

@@ -126,6 +126,11 @@ func TestResolveQueryError(t *testing.T) {
 	if !errors.Is(err, queryErr) {
 		t.Fatalf("want wrapped queryErr, got: %v", err)
 	}
+	// Error must name the concrete tag and value queried (repo error convention).
+	msg := err.Error()
+	if !strings.Contains(msg, `tag="test.run.id"`) || !strings.Contains(msg, `value="run-1"`) {
+		t.Fatalf("query error missing tag/value context: %q", msg)
+	}
 }
 
 func TestResolveGetByIDError(t *testing.T) {
