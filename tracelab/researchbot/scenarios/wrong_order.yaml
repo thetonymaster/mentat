@@ -1,0 +1,8 @@
+scenario: wrong_order
+output: "Q3 revenue grew 12%."
+tokens: { input: 1100, output: 500 }
+cost_usd: 0.016
+steps:
+  - tool: { name: summarize, args: "nothing", result: "empty summary" }
+  - tool: { name: search,    args: "q3",      result: "doc-1" }
+  - tool: { name: fetch_doc, args: "doc-1",   result: "table" }

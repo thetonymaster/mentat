@@ -1,0 +1,11 @@
+scenario: happy
+output: "Q3 revenue grew 12% to $4.2M, driven by strong enterprise demand."
+tokens: { input: 1200, output: 600 }
+cost_usd: 0.018
+steps:
+  - chat: { model: claude-x, finish: tool_calls }
+  - tool: { name: search,    args: "q3 revenue", result: "doc-1, doc-2" }
+  - tool: { name: fetch_doc, args: "doc-1",      result: "revenue table" }
+  - chat: { model: claude-x, finish: tool_calls }
+  - tool: { name: summarize, args: "revenue table", result: "summary" }
+  - chat: { model: claude-x, finish: stop }
