@@ -65,14 +65,14 @@ func (t *Trace) Envelope() time.Duration {
 	if len(t.Spans) == 0 {
 		return 0
 	}
-	min, max := t.Spans[0].Start, t.Spans[0].End
+	minStart, maxEnd := t.Spans[0].Start, t.Spans[0].End
 	for _, s := range t.Spans {
-		if s.Start.Before(min) {
-			min = s.Start
+		if s.Start.Before(minStart) {
+			minStart = s.Start
 		}
-		if s.End.After(max) {
-			max = s.End
+		if s.End.After(maxEnd) {
+			maxEnd = s.End
 		}
 	}
-	return max.Sub(min)
+	return maxEnd.Sub(minStart)
 }
