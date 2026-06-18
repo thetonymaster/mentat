@@ -43,12 +43,27 @@ func TestPlanForEncodesScenarioCallOrderAndStatus(t *testing.T) {
 }
 
 func TestExpectedResultIsDeterministicJSON(t *testing.T) {
-	status, body := ExpectedResult("happy")
-	if status != 201 {
-		t.Errorf("status = %d, want 201", status)
+	tests := []struct {
+		scenario   string
+		wantStatus int
+		wantBody   string
+	}{
+		{"happy", 201, `{"status":"confirmed"}`},
+		{"payment_decline", 402, `{"status":"declined"}`},
+		{"inventory_out", 409, `{"status":"out_of_stock"}`},
+		{"unknown scenario falls through to 400", 400, `{"status":"unknown_scenario"}`},
 	}
-	if string(body) != `{"status":"confirmed"}` {
-		t.Errorf("body = %s, want confirmed JSON", body)
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.scenario, func(t *testing.T) {
+			status, body := ExpectedResult(tt.scenario)
+			if status != tt.wantStatus {
+				t.Errorf("status = %d, want %d", status, tt.wantStatus)
+			}
+			if string(body) != tt.wantBody {
+				t.Errorf("body = %s, want %s", body, tt.wantBody)
+			}
+		})
 	}
 }
 
@@ -180,88 +195,72 @@ func TestLeafHandler(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGatewayHandler(t *testing.T) {
-	// Happy path: all downstream stubs return 200; expect gateway 201.
-	t.Run("happy path all 200 -> 201", func(t *testing.T) {
-		stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		}))
-		defer stub.Close()
+	stub200 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer stub200.Close()
+	stub402 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+	}))
+	defer stub402.Close()
 
-		topo := Topology{
-			ServiceAuth:      stub.URL,
-			ServiceInventory: stub.URL,
-			ServicePayment:   stub.URL,
-			ServiceNotify:    stub.URL,
-		}
+	tests := []struct {
+		name       string
+		scenario   string
+		topo       Topology
+		wantStatus int
+	}{
+		{
+			name:     "happy path all 200 -> 201",
+			scenario: "happy",
+			topo: Topology{
+				ServiceAuth:      stub200.URL,
+				ServiceInventory: stub200.URL,
+				ServicePayment:   stub200.URL,
+				ServiceNotify:    stub200.URL,
+			},
+			wantStatus: http.StatusCreated,
+		},
+		{
+			// payment returns 402; gateway short-circuits and returns its own
+			// plan status (402). ServiceNotify is intentionally absent to prove
+			// the short-circuit prevents calling it.
+			name:     "payment_decline stub 402 -> gateway 402 short-circuit",
+			scenario: "payment_decline",
+			topo: Topology{
+				ServiceAuth:      stub200.URL,
+				ServiceInventory: stub200.URL,
+				ServicePayment:   stub402.URL,
+			},
+			wantStatus: http.StatusPaymentRequired,
+		},
+		{
+			// auth is the first call and is missing from the topology, so
+			// callDownstream errors and the gateway responds 502.
+			name:     "missing topology entry -> 502",
+			scenario: "happy",
+			topo: Topology{
+				ServiceInventory: stub200.URL,
+				ServicePayment:   stub200.URL,
+				ServiceNotify:    stub200.URL,
+			},
+			wantStatus: http.StatusBadGateway,
+		},
+	}
 
-		h := gatewayHandler(&http.Client{}, topo)
-		req := httptest.NewRequest(http.MethodPost, "/", nil)
-		req.Header.Set(HeaderScenario, "happy")
-		rec := httptest.NewRecorder()
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			h := gatewayHandler(&http.Client{}, tt.topo)
+			req := httptest.NewRequest(http.MethodPost, "/", nil)
+			req.Header.Set(HeaderScenario, tt.scenario)
+			rec := httptest.NewRecorder()
 
-		h.ServeHTTP(rec, req)
+			h.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusCreated {
-			t.Errorf("status = %d, want 201", rec.Code)
-		}
-	})
-
-	// Short-circuit: payment returns 402, gateway still returns 402 (its own plan status).
-	t.Run("payment_decline stub 402 -> gateway 402 short-circuit", func(t *testing.T) {
-		// Stub returns 402 for payment (simulates the downstream result).
-		stub402 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusPaymentRequired)
-		}))
-		defer stub402.Close()
-
-		stub200 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		}))
-		defer stub200.Close()
-
-		topo := Topology{
-			ServiceAuth:      stub200.URL,
-			ServiceInventory: stub200.URL,
-			ServicePayment:   stub402.URL,
-			// ServiceNotify intentionally absent; short-circuit should prevent calling it.
-		}
-
-		h := gatewayHandler(&http.Client{}, topo)
-		req := httptest.NewRequest(http.MethodPost, "/", nil)
-		req.Header.Set(HeaderScenario, "payment_decline")
-		rec := httptest.NewRecorder()
-
-		h.ServeHTTP(rec, req)
-
-		// The gateway's plan status for payment_decline is 402.
-		if rec.Code != http.StatusPaymentRequired {
-			t.Errorf("status = %d, want 402", rec.Code)
-		}
-	})
-
-	// Error path: topology missing a required service -> 502.
-	t.Run("missing topology entry -> 502", func(t *testing.T) {
-		stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		}))
-		defer stub.Close()
-
-		// auth is missing from topology — callDownstream will return an error.
-		topo := Topology{
-			ServiceInventory: stub.URL,
-			ServicePayment:   stub.URL,
-			ServiceNotify:    stub.URL,
-		}
-
-		h := gatewayHandler(&http.Client{}, topo)
-		req := httptest.NewRequest(http.MethodPost, "/", nil)
-		req.Header.Set(HeaderScenario, "happy") // auth is first call
-		rec := httptest.NewRecorder()
-
-		h.ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusBadGateway {
-			t.Errorf("status = %d, want 502", rec.Code)
-		}
-	})
+			if rec.Code != tt.wantStatus {
+				t.Errorf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+		})
+	}
 }
