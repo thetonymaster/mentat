@@ -42,7 +42,7 @@ func main() {
 	}
 	topo, err := parseTopology(os.Getenv("ORDERFLOW_TOPOLOGY"))
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "orderflow:", err)
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
 
@@ -53,7 +53,7 @@ func main() {
 		os.Exit(1)
 	}
 	if err := of.RunService(ctx, *service, *addr, topo, exp); err != nil {
-		fmt.Fprintln(os.Stderr, "orderflow:", err)
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }

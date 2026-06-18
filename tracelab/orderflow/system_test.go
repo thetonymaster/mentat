@@ -21,7 +21,7 @@ func TestScenariosProduceExpectedBehaviour(t *testing.T) {
 		{"payment_decline", 402, []string{ServiceAuth, ServiceInventory, ServicePayment}, ServiceLegacy, 1},
 		{"inventory_out", 409, []string{ServiceAuth, ServiceInventory}, ServicePayment, 0},
 		{"legacy_path", 201, []string{ServiceAuth, ServiceLegacy, ServiceInventory, ServicePayment}, "", 0},
-		{"reorder", 201, []string{ServiceAuth, ServicePayment, ServiceInventory}, ServiceLegacy, 0},
+		{"reorder", 201, []string{ServiceAuth, ServicePayment, ServiceInventory, ServiceNotify}, ServiceLegacy, 0},
 	}
 	for _, tt := range tests {
 		tt := tt
