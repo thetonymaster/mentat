@@ -2,6 +2,7 @@ package orderflow
 
 import (
 	"context"
+	"fmt"
 
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -27,7 +28,7 @@ func NewTracerProvider(ctx context.Context, service string, exp sdktrace.SpanExp
 		resource.WithAttributes(semconv.ServiceName(service)),
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("orderflow: build resource for service %q: %w", service, err)
 	}
 	return sdktrace.NewTracerProvider(
 		sdktrace.WithResource(res),
