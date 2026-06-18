@@ -76,7 +76,14 @@ func (w *world) toolsInOrder(tbl *godog.Table) error {
 		if len(row.Cells) == 0 {
 			return fmt.Errorf("tools-in-order: table row %d has no cells", i)
 		}
-		order = append(order, strings.TrimSpace(row.Cells[0].Value))
+		tool := strings.TrimSpace(row.Cells[0].Value)
+		if tool == "" {
+			return fmt.Errorf("tools-in-order: table row %d has empty tool name", i)
+		}
+		order = append(order, tool)
+	}
+	if len(order) == 0 {
+		return fmt.Errorf("tools-in-order: at least one tool is required")
 	}
 	return w.check("sequence", comparator.SequenceExpectation{Order: order})
 }

@@ -157,13 +157,15 @@ func buildEng(t *testing.T, tr *trace.Trace) *engine.Engine {
 }
 
 // TestToolsInOrderEmptyCell proves that toolsInOrder returns a descriptive error
-// (not a panic) when a table row has no cells.
+// (not a panic) when a table row has no cells, has a blank tool name, or the
+// table itself is empty.
 func TestToolsInOrderEmptyCell(t *testing.T) {
 	tests := []struct {
-		name    string
-		tbl     *godog.Table
-		wantErr bool
-		errSub  string
+		name      string
+		tbl       *godog.Table
+		wantErr   bool
+		errSub    string
+		errSubNot string // if non-empty, fail if err.Error() contains this substring
 	}{
 		{
 			name: "well_formed_row_no_error",
@@ -174,7 +176,8 @@ func TestToolsInOrderEmptyCell(t *testing.T) {
 			},
 			// toolsInOrder succeeds building the order slice; check() will fail
 			// because no drive has been run, but the row-guard itself should not error.
-			wantErr: true, // check("sequence",...) will error — no evidence; guards still exercised
+			wantErr:   true,           // check("sequence",...) will error — no evidence; guards still exercised
+			errSubNot: "has no cells", // a regression that fires the cell-guard on a valid row must be caught
 		},
 		{
 			name: "empty_cells_slice_returns_error",
@@ -196,6 +199,28 @@ func TestToolsInOrderEmptyCell(t *testing.T) {
 			wantErr: true,
 			errSub:  "has no cells",
 		},
+		{
+			name:    "empty_table_nil_rows",
+			tbl:     &godog.Table{Rows: nil},
+			wantErr: true,
+			errSub:  "at least one tool is required",
+		},
+		{
+			name:    "empty_table_no_rows",
+			tbl:     &godog.Table{Rows: []*messages.PickleTableRow{}},
+			wantErr: true,
+			errSub:  "at least one tool is required",
+		},
+		{
+			name: "blank_cell_whitespace",
+			tbl: &godog.Table{
+				Rows: []*messages.PickleTableRow{
+					{Cells: []*messages.PickleTableCell{{Value: "   "}}},
+				},
+			},
+			wantErr: true,
+			errSub:  "empty tool name",
+		},
 	}
 
 	for _, tt := range tests {
@@ -208,6 +233,9 @@ func TestToolsInOrderEmptyCell(t *testing.T) {
 			}
 			if tt.errSub != "" && (err == nil || !strings.Contains(err.Error(), tt.errSub)) {
 				t.Fatalf("expected error containing %q, got: %v", tt.errSub, err)
+			}
+			if tt.errSubNot != "" && err != nil && strings.Contains(err.Error(), tt.errSubNot) {
+				t.Fatalf("error must NOT contain %q (regression: cell-guard fired on valid row), got: %v", tt.errSubNot, err)
 			}
 		})
 	}
