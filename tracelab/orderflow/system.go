@@ -8,13 +8,15 @@ import (
 	"net/http"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/baggage"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
-// allServices is the build/serve order; every service gets its own provider and
-// listener. The gateway is the entrypoint and must be built after the leaf
-// services so it can close over the full topology.
+// allServices is the build/serve order. StartInProcess binds every listener
+// (fully populating the topology) before it builds any handler, so order within
+// this slice does not affect wiring correctness — the gateway closes over the
+// complete topology regardless of its position.
 var allServices = []string{ServiceGateway, ServiceAuth, ServiceInventory, ServicePayment, ServiceNotify, ServiceLegacy}
 
 // System holds the running in-process servers and their tracer providers.
@@ -104,7 +106,19 @@ func (s *System) Drive(ctx context.Context, topo Topology, runID, scenario strin
 		return 0, nil, fmt.Errorf("orderflow: build gateway request: %w", err)
 	}
 	req.Header.Set(HeaderScenario, scenario)
-	req.Header.Set("baggage", fmt.Sprintf("%s=%s,%s=%s", BaggageRunID, runID, BaggageScenario, scenario))
+	runMember, err := baggage.NewMember(BaggageRunID, runID)
+	if err != nil {
+		return 0, nil, fmt.Errorf("orderflow: baggage member %s=%q: %w", BaggageRunID, runID, err)
+	}
+	scenarioMember, err := baggage.NewMember(BaggageScenario, scenario)
+	if err != nil {
+		return 0, nil, fmt.Errorf("orderflow: baggage member %s=%q: %w", BaggageScenario, scenario, err)
+	}
+	bag, err := baggage.New(runMember, scenarioMember)
+	if err != nil {
+		return 0, nil, fmt.Errorf("orderflow: build baggage: %w", err)
+	}
+	req.Header.Set("baggage", bag.String())
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return 0, nil, fmt.Errorf("orderflow: drive gateway: %w", err)
