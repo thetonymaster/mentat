@@ -44,6 +44,20 @@ targets:
 	}
 }
 
+func TestLoadRejectsNegativeMaxConcurrency(t *testing.T) {
+	_, err := Load([]byte(`targets: { mytarget: { adapter: shell, max_concurrency: -1 } }`))
+	if err == nil {
+		t.Fatal("expected error for negative max_concurrency")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "mytarget") {
+		t.Fatalf("error %q does not contain target name %q", msg, "mytarget")
+	}
+	if !strings.Contains(msg, "-1") {
+		t.Fatalf("error %q does not contain value %q", msg, "-1")
+	}
+}
+
 func TestLoadRejectsUnknownAdapter(t *testing.T) {
 	_, err := Load([]byte(`targets: { x: { adapter: telepathy } }`))
 	if err == nil {

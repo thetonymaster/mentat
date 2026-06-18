@@ -41,6 +41,9 @@ func Load(data []byte) (Config, error) {
 		if !ok {
 			return Config{}, fmt.Errorf("target %q: unknown adapter %q", name, t.Adapter)
 		}
+		if t.MaxConcurrency < 0 {
+			return Config{}, fmt.Errorf("target %q: max_concurrency must be >= 0, got %d", name, t.MaxConcurrency)
+		}
 		if t.MaxConcurrency == 0 {
 			t.MaxConcurrency = def
 			c.Targets[name] = t
