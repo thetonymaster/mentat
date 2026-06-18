@@ -46,7 +46,11 @@ func (e *Engine) Drive(ctx context.Context, target string, args []string) (core.
 	runID := e.cor.Inject(ctx, &spec)
 
 	sem := e.sems[target]
-	sem <- struct{}{}
+	select {
+	case sem <- struct{}{}:
+	case <-ctx.Done():
+		return core.Evidence{}, fmt.Errorf("engine: drive %q: %w", target, ctx.Err())
+	}
 	defer func() { <-sem }()
 
 	res, err := drv.Run(ctx, spec)

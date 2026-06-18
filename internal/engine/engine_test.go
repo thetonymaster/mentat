@@ -204,6 +204,60 @@ func TestDriveResolveError(t *testing.T) {
 	}
 }
 
+func TestDriveSemaphoreRespectsContextCancellation(t *testing.T) {
+	tests := []struct {
+		name    string
+		wantErr string
+	}{
+		{
+			name:    "cancelled context returns error instead of blocking on full semaphore",
+			wantErr: "engine: drive",
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.Config{
+				OTLPEndpoint: "http://localhost:4318",
+				Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+				Targets: map[string]config.Target{
+					"sut": {Adapter: "shell", Command: []string{"echo", "hi"}, MaxConcurrency: 1},
+				},
+			}
+			ctrl := gomock.NewController(t)
+			st := mocks.NewMockTraceStore(ctrl)
+			// Driver must NOT be called — context is cancelled before slot is free.
+			cor := mocks.NewMockCorrelator(ctrl)
+			cor.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("run-cancel").AnyTimes()
+
+			eng, err := Build(cfg, st, cor)
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+
+			// Fill the single slot so any Drive call must wait.
+			eng.sems["sut"] <- struct{}{}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel() // pre-cancel
+
+			_, err = eng.Drive(ctx, "sut", nil)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("expected context.Canceled in error chain, got: %v", err)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error %q does not contain %q", err.Error(), tt.wantErr)
+			}
+
+			// Release the slot we filled manually so the engine is clean.
+			<-eng.sems["sut"]
+		})
+	}
+}
+
 func TestDriveRunError(t *testing.T) {
 	tests := []struct {
 		name        string
