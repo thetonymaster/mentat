@@ -12,11 +12,21 @@ import (
 // Engine wires configuration, a trace store, and a correlator into the
 // Drive/Comparator lifecycle. Build is the only way to construct it.
 type Engine struct {
-	cfg  config.Config
-	cor  core.Correlator
-	st   core.TraceStore
-	sems map[string]chan struct{} // per-target concurrency gate
+	cfg    config.Config
+	cor    core.Correlator
+	st     core.TraceStore
+	sems   map[string]chan struct{} // per-target concurrency gate
+	pinned string                   // when set, Drive resolves this run id instead of driving
 }
+
+// PinRun makes subsequent Drive calls resolve runID from the store instead of
+// running the SUT — used by `mentatctl agent replay` to re-evaluate a stored run.
+//
+// Invariant: PinRun MUST be called before any concurrent Drive (i.e. at single-threaded
+// composition/setup time, the same discipline the registry uses — populated before
+// concurrent scenario execution begins). No mutex is needed because this is a setup-time
+// operation, not a concurrent one.
+func (e *Engine) PinRun(runID string) { e.pinned = runID }
 
 // Comparator resolves a named comparator from the global registry.
 func (e *Engine) Comparator(name string) (core.Comparator, bool) {
@@ -25,7 +35,16 @@ func (e *Engine) Comparator(name string) (core.Comparator, bool) {
 
 // Drive injects the run tag, runs the SUT via its adapter, then resolves and
 // merges the run's trace. The per-target semaphore enforces max_concurrency.
+// When PinRun has been called, Drive resolves the pinned run id from the store
+// and returns it directly without injecting or running the SUT.
 func (e *Engine) Drive(ctx context.Context, target string, args []string) (core.Evidence, error) {
+	if e.pinned != "" {
+		tr, err := e.cor.Resolve(ctx, e.st, e.pinned)
+		if err != nil {
+			return core.Evidence{}, fmt.Errorf("engine: resolve pinned run %q: %w", e.pinned, err)
+		}
+		return core.Evidence{RunID: e.pinned, Trace: tr}, nil
+	}
 	t, ok := e.cfg.Targets[target]
 	if !ok {
 		return core.Evidence{}, fmt.Errorf("engine: unknown target %q", target)

@@ -267,6 +267,75 @@ func TestDriveSemaphoreRespectsContextCancellation(t *testing.T) {
 	}
 }
 
+func TestDrivePinned(t *testing.T) {
+	pinnedTrace := &trace.Trace{Spans: []*trace.Span{{Name: "stored"}}, Roots: []*trace.Span{{Name: "stored"}}}
+
+	tests := []struct {
+		name        string
+		runID       string
+		resolveRet  *trace.Trace
+		resolveErr  error
+		wantErrSubs []string
+		wantRunID   string
+	}{
+		{
+			name:       "pinned happy path returns evidence without injecting or driving",
+			runID:      "pinned-abc",
+			resolveRet: pinnedTrace,
+			wantRunID:  "pinned-abc",
+		},
+		{
+			name:        "pinned resolve-error path returns wrapped error with run id",
+			runID:       "pinned-xyz",
+			resolveErr:  errors.New("trace not found"),
+			wantErrSubs: []string{"pinned-xyz", "trace not found"},
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.Config{
+				OTLPEndpoint: "http://localhost:4318",
+				Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+				Targets:      map[string]config.Target{},
+			}
+			ctrl := gomock.NewController(t)
+			st := mocks.NewMockTraceStore(ctrl)
+			cor := mocks.NewMockCorrelator(ctrl)
+			// Inject must NOT be called — the absent EXPECT proves drive/inject is bypassed.
+			cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), tt.runID).Return(tt.resolveRet, tt.resolveErr)
+
+			eng, err := Build(cfg, st, cor)
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			eng.PinRun(tt.runID)
+
+			ev, err := eng.Drive(context.Background(), "unused", nil)
+			if len(tt.wantErrSubs) > 0 {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				for _, sub := range tt.wantErrSubs {
+					if !strings.Contains(err.Error(), sub) {
+						t.Fatalf("error %q does not contain %q", err.Error(), sub)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Drive pinned: %v", err)
+			}
+			if ev.RunID != tt.wantRunID {
+				t.Fatalf("RunID got %q, want %q", ev.RunID, tt.wantRunID)
+			}
+			if ev.Trace != tt.resolveRet {
+				t.Fatalf("Trace got %v, want %v", ev.Trace, tt.resolveRet)
+			}
+		})
+	}
+}
+
 func TestDriveRunError(t *testing.T) {
 	tests := []struct {
 		name        string
