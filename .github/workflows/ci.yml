@@ -18,7 +18,7 @@ jobs:
       - run: golangci-lint run ./...
       - run: go test ./... -race
       - name: coverage gate (80%)
-        run: bash .claude/skills/coverage/coverage.sh ./... 80
+        run: bash .claude/skills/coverage/coverage.sh ./...
 
   mocks:
     runs-on: ubuntu-latest
@@ -27,7 +27,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: go install go.uber.org/mock/mockgen@latest
+      - run: go install go.uber.org/mock/mockgen@v0.6.0
       - run: go generate ./...
       - name: fail on uncommitted mock drift
         run: |

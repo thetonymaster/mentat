@@ -6,7 +6,7 @@ test:
 	go test ./... -race
 
 cover:
-	bash .claude/skills/coverage/coverage.sh ./... 80
+	bash .claude/skills/coverage/coverage.sh ./...
 
 ci: lint test cover
 
