@@ -9,10 +9,8 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/baggage"
-	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
-	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
 func TestCallDownstreamPropagatesBaggageAndScenario(t *testing.T) {
@@ -94,17 +92,6 @@ func spanAttr(spans []sdktrace.ReadOnlySpan, service, key string) string {
 					return kv.Value.AsString()
 				}
 			}
-		}
-	}
-	return ""
-}
-
-// resourceServiceName is a temporary helper (deleted in Task 6 once capture.go
-// exports it) that extracts service.name from a resource.
-func resourceServiceName(res *resource.Resource) string {
-	for _, kv := range res.Attributes() {
-		if kv.Key == semconv.ServiceNameKey {
-			return kv.Value.AsString()
 		}
 	}
 	return ""
