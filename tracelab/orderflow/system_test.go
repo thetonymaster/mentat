@@ -43,6 +43,24 @@ func TestScenariosProduceExpectedBehaviour(t *testing.T) {
 			}
 
 			spans := waitForSpans(t, exp)
+
+			// Assert that test.run.id propagated end-to-end over the production
+			// propagatingClient path: every captured span must carry the tag.
+			wantRunID := "run-" + tt.scenario
+			for _, s := range spans {
+				got := ""
+				for _, kv := range s.Attributes() {
+					if string(kv.Key) == BaggageRunID {
+						got = kv.Value.AsString()
+						break
+					}
+				}
+				if got != wantRunID {
+					t.Errorf("span from service %q: %s = %q, want %q",
+						resourceServiceName(s.Resource()), BaggageRunID, got, wantRunID)
+				}
+			}
+
 			order := serviceOrder(spans)
 			if !isSubsequence(tt.wantSubseq, order) {
 				t.Errorf("service order = %v, want subsequence %v", order, tt.wantSubseq)
