@@ -26,6 +26,9 @@ type fixtureDoc struct {
 // WriteFixture serializes a live trace forest into the Plan-1 fixture schema so it
 // can feed L1 unit tests via store.LoadFixture. Parentage is by index; roots first.
 func WriteFixture(tr *trace.Trace, path string) error {
+	if tr == nil {
+		return fmt.Errorf("ctl: WriteFixture: nil trace")
+	}
 	// Build ordered slice: roots first, then non-roots in Spans order.
 	rootSet := make(map[*trace.Span]bool, len(tr.Roots))
 	for _, r := range tr.Roots {
