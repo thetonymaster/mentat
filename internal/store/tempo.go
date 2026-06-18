@@ -56,15 +56,22 @@ type otlpSpan struct {
 	} `json:"status"`
 }
 
+// otlpResourceSpan is the shared inner shape used by both OTLP "resourceSpans"
+// and the Tempo-specific "batches" top-level keys.
+type otlpResourceSpan struct {
+	Resource struct {
+		Attributes []otlpKV `json:"attributes"`
+	} `json:"resource"`
+	ScopeSpans []struct {
+		Spans []otlpSpan `json:"spans"`
+	} `json:"scopeSpans"`
+}
+
 type otlpTrace struct {
-	ResourceSpans []struct {
-		Resource struct {
-			Attributes []otlpKV `json:"attributes"`
-		} `json:"resource"`
-		ScopeSpans []struct {
-			Spans []otlpSpan `json:"spans"`
-		} `json:"scopeSpans"`
-	} `json:"resourceSpans"`
+	// Standard OTLP JSON envelope.
+	ResourceSpans []otlpResourceSpan `json:"resourceSpans"`
+	// Tempo's /api/traces/{id} returns spans under "batches" instead.
+	Batches []otlpResourceSpan `json:"batches"`
 }
 
 func valStr(v otlpValue) string {
@@ -100,7 +107,8 @@ func (t *Tempo) GetByID(ctx context.Context, id string) (*trace.Trace, error) {
 	}
 	tr := &trace.Trace{}
 	byID := map[string]*trace.Span{}
-	for _, rs := range ot.ResourceSpans {
+	allRS := append(ot.ResourceSpans, ot.Batches...)
+	for _, rs := range allRS {
 		resAttrs := map[string]string{}
 		for _, kv := range rs.Resource.Attributes {
 			resAttrs[kv.Key] = valStr(kv.Value)

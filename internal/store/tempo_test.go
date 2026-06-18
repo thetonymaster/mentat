@@ -242,6 +242,61 @@ func TestTempoGetByIDMultiRootForest(t *testing.T) {
 	}
 }
 
+// otlpTraceBatches is the Tempo-specific envelope: top-level key is "batches"
+// instead of "resourceSpans". Same inner shape — this is the real Tempo response.
+const otlpTraceBatches = `{
+  "batches": [{
+    "resource": { "attributes": [
+      { "key": "test.run.id", "value": { "stringValue": "abc123" } }
+    ]},
+    "scopeSpans": [{ "spans": [
+      {
+        "traceId": "aa", "spanId": "01", "name": "invoke_agent researchbot",
+        "startTimeUnixNano": "1000", "endTimeUnixNano": "4000",
+        "attributes": [
+          { "key": "gen_ai.operation.name", "value": { "stringValue": "invoke_agent" } },
+          { "key": "gen_ai.usage.input_tokens", "value": { "intValue": "1200" } }
+        ]
+      },
+      {
+        "traceId": "aa", "spanId": "02", "parentSpanId": "01", "name": "execute_tool search",
+        "startTimeUnixNano": "2000", "endTimeUnixNano": "2500",
+        "attributes": [
+          { "key": "gen_ai.operation.name", "value": { "stringValue": "execute_tool" } },
+          { "key": "gen_ai.tool.name", "value": { "stringValue": "search" } }
+        ]
+      }
+    ]}]
+  }]
+}`
+
+// TestTempoGetByIDBatchesEnvelope reproduces the live-Tempo bug: Tempo returns
+// spans under "batches" (not "resourceSpans"). GetByID must parse both envelopes.
+func TestTempoGetByIDBatchesEnvelope(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(otlpTraceBatches))
+	}))
+	defer srv.Close()
+
+	tr, err := NewTempo(srv.URL, srv.Client()).GetByID(context.Background(), "aa")
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if len(tr.Spans) != 2 || len(tr.Roots) != 1 {
+		t.Fatalf("forest wrong: spans=%d roots=%d", len(tr.Spans), len(tr.Roots))
+	}
+	if tr.Roots[0].Attr("test.run.id") != "abc123" {
+		t.Fatalf("resource attr not merged onto span: %v", tr.Roots[0].Attrs)
+	}
+	tools := tr.ByOp(genai.OpExecuteTool)
+	if len(tools) != 1 || tools[0].Attr(genai.ToolName) != "search" {
+		t.Fatalf("tool span wrong: %v", tools)
+	}
+	if n, _ := tr.Roots[0].AttrInt(genai.InTokens); n != 1200 {
+		t.Fatalf("input tokens = %d", n)
+	}
+}
+
 // otlpTraceAllValueTypes exercises the double/bool branches of valStr.
 const otlpTraceAllValueTypes = `{
   "resourceSpans": [{
