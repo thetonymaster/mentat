@@ -1,0 +1,7 @@
+tempo: { endpoint: "http://localhost:3200" }
+otlpEndpoint: "http://localhost:4318"
+poll: { interval: "200ms", stableFor: 3, timeout: "30s" }
+targets:
+  research-agent:
+    adapter: shell
+    command: ["go", "run", "./tracelab/researchbot/cmd/researchbot"]
