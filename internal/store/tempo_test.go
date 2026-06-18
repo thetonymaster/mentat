@@ -39,7 +39,7 @@ const otlpTraceJSON = `{
 
 func TestTempoGetByIDParsesForestAndMergesResourceAttrs(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(otlpTraceJSON))
+		_, _ = w.Write([]byte(otlpTraceJSON))
 	}))
 	defer srv.Close()
 
@@ -66,7 +66,7 @@ func TestTempoQueryBuildsTraceQLAndReturnsRefs(t *testing.T) {
 	var gotQuery string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotQuery = r.URL.Query().Get("q")
-		w.Write([]byte(`{"traces":[{"traceID":"aa"},{"traceID":"bb"}]}`))
+		_, _ = w.Write([]byte(`{"traces":[{"traceID":"aa"},{"traceID":"bb"}]}`))
 	}))
 	defer srv.Close()
 
@@ -110,7 +110,7 @@ func TestTempoErrorPaths(t *testing.T) {
 		{
 			name: "GetByID_malformed_JSON_returns_error",
 			handler: func(w http.ResponseWriter, r *http.Request) {
-				w.Write([]byte("not-json"))
+				_, _ = w.Write([]byte("not-json"))
 			},
 			action: func(tp *Tempo) error {
 				_, err := tp.GetByID(context.Background(), "bad")
@@ -132,7 +132,7 @@ func TestTempoErrorPaths(t *testing.T) {
 		{
 			name: "Query_malformed_JSON_returns_error",
 			handler: func(w http.ResponseWriter, r *http.Request) {
-				w.Write([]byte("{{{"))
+				_, _ = w.Write([]byte("{{{"))
 			},
 			action: func(tp *Tempo) error {
 				_, err := tp.Query(context.Background(), core.TraceQuery{Tag: "k", Value: "v"})
@@ -191,7 +191,7 @@ const otlpTraceInvalidNano = `{
 
 func TestTempoGetByIDNonNumericNanoReturnsError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(otlpTraceInvalidNano))
+		_, _ = w.Write([]byte(otlpTraceInvalidNano))
 	}))
 	defer srv.Close()
 
@@ -229,7 +229,7 @@ const otlpTwoRoots = `{
 
 func TestTempoGetByIDMultiRootForest(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(otlpTwoRoots))
+		_, _ = w.Write([]byte(otlpTwoRoots))
 	}))
 	defer srv.Close()
 
@@ -274,7 +274,7 @@ const otlpTraceBatches = `{
 // spans under "batches" (not "resourceSpans"). GetByID must parse both envelopes.
 func TestTempoGetByIDBatchesEnvelope(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(otlpTraceBatches))
+		_, _ = w.Write([]byte(otlpTraceBatches))
 	}))
 	defer srv.Close()
 
@@ -317,7 +317,7 @@ const otlpTraceAllValueTypes = `{
 
 func TestTempoValStrBranches(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(otlpTraceAllValueTypes))
+		_, _ = w.Write([]byte(otlpTraceAllValueTypes))
 	}))
 	defer srv.Close()
 

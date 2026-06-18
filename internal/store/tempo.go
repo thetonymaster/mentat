@@ -22,7 +22,7 @@ type Tempo struct {
 
 func NewTempo(endpoint string, hc *http.Client) *Tempo {
 	if hc == nil {
-		hc = http.DefaultClient
+		hc = &http.Client{Timeout: 30 * time.Second}
 	}
 	return &Tempo{endpoint: strings.TrimRight(endpoint, "/"), hc: hc}
 }
@@ -185,9 +185,13 @@ func (t *Tempo) get(ctx context.Context, u string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tempo: GET %s: %w", u, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("tempo: GET %s: status %d", u, resp.StatusCode)
 	}
-	return io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("tempo: read %s: %w", u, err)
+	}
+	return body, nil
 }
