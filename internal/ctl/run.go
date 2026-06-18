@@ -29,7 +29,7 @@ func Run(ctx context.Context, eng *engine.Engine, opts RunOpts, w io.Writer) (co
 	}
 
 	if err := SaveLast(ev.RunID); err != nil {
-		return ev, err
+		return ev, fmt.Errorf("ctl: save last: %w", err)
 	}
 
 	switch {
