@@ -82,8 +82,7 @@ func dispatch(sub string, rest []string) error {
 		if err != nil {
 			return err
 		}
-		ctl.FormatForest(tr, os.Stdout)
-		return nil
+		return ctl.FormatForest(tr, os.Stdout)
 	case "tools":
 		id, err := idArg()
 		if err != nil {
@@ -93,8 +92,7 @@ func dispatch(sub string, rest []string) error {
 		if err != nil {
 			return err
 		}
-		ctl.FormatTools(tr, os.Stdout)
-		return nil
+		return ctl.FormatTools(tr, os.Stdout)
 	case "replay":
 		id, err := idArg()
 		if err != nil {
@@ -121,11 +119,11 @@ func dispatch(sub string, rest []string) error {
 func deps(cfgPath string) (config.Config, core.TraceStore, core.Correlator, error) {
 	data, err := os.ReadFile(cfgPath)
 	if err != nil {
-		return config.Config{}, nil, nil, err
+		return config.Config{}, nil, nil, fmt.Errorf("mentatctl: read config %q: %w", cfgPath, err)
 	}
 	cfg, err := config.Load(data)
 	if err != nil {
-		return config.Config{}, nil, nil, err
+		return config.Config{}, nil, nil, fmt.Errorf("mentatctl: parse config %q: %w", cfgPath, err)
 	}
 	st := store.NewTempo(cfg.Tempo.Endpoint, (*http.Client)(nil))
 	pc := correlate.PollConfig{

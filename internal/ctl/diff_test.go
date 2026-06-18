@@ -17,6 +17,13 @@ import (
 	"github.com/thetonymaster/mentat/internal/trace"
 )
 
+// diffErrWriter is an io.Writer that always fails.
+type diffErrWriter struct{}
+
+func (diffErrWriter) Write(_ []byte) (int, error) {
+	return 0, errors.New("write: disk full")
+}
+
 func toolForest(run string, tools ...string) *trace.Trace {
 	tr := &trace.Trace{RunID: run}
 	for i, name := range tools {
@@ -182,6 +189,46 @@ func TestDiff(t *testing.T) {
 				if strings.Contains(buf.String(), sub) {
 					t.Fatalf("output must not contain %q but does:\n%s", sub, buf.String())
 				}
+			}
+		})
+	}
+}
+
+func TestDiffWriteError(t *testing.T) {
+	tests := []struct {
+		name       string
+		idA        string
+		idB        string
+		wantErrSub string
+	}{
+		{
+			name:       "header write error is returned",
+			idA:        "A",
+			idB:        "B",
+			wantErrSub: "diff: write header",
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			st := mocks.NewMockTraceStore(ctrl)
+			st.EXPECT().Query(gomock.Any(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, q core.TraceQuery) ([]core.TraceRef, error) {
+					return []core.TraceRef{{TraceID: q.Value}}, nil
+				}).AnyTimes()
+			st.EXPECT().GetByID(gomock.Any(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, id string) (*trace.Trace, error) {
+					return toolForest(id, "search"), nil
+				}).AnyTimes()
+
+			cor := newTestCorrelator()
+			err := Diff(context.Background(), cor, st, tt.idA, tt.idB, diffErrWriter{})
+			if err == nil {
+				t.Fatal("expected error from failing writer, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantErrSub) {
+				t.Fatalf("error %q does not contain %q", err.Error(), tt.wantErrSub)
 			}
 		})
 	}

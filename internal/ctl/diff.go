@@ -29,9 +29,13 @@ func Diff(ctx context.Context, cor core.Correlator, st core.TraceStore, idA, idB
 		return fmt.Errorf("diff: run %s: %w", idB, err)
 	}
 	a, b := toolSeq(ta), toolSeq(tb)
-	fmt.Fprintf(w, "A=%s  B=%s\n", idA, idB)
+	if _, err := fmt.Fprintf(w, "A=%s  B=%s\n", idA, idB); err != nil {
+		return fmt.Errorf("diff: write header: %w", err)
+	}
 	if equalSeq(a, b) {
-		fmt.Fprintln(w, "tool sequences identical")
+		if _, err := fmt.Fprintln(w, "tool sequences identical"); err != nil {
+			return fmt.Errorf("diff: write identical line: %w", err)
+		}
 		return nil
 	}
 	n := max(len(a), len(b))
@@ -41,7 +45,9 @@ func Diff(ctx context.Context, cor core.Correlator, st core.TraceStore, idA, idB
 		if av != bv {
 			mark = "≠"
 		}
-		fmt.Fprintf(w, "%2d %s A:%-15s B:%s\n", i+1, mark, av, bv)
+		if _, err := fmt.Fprintf(w, "%2d %s A:%-15s B:%s\n", i+1, mark, av, bv); err != nil {
+			return fmt.Errorf("diff: write line %d: %w", i+1, err)
+		}
 	}
 	return nil
 }

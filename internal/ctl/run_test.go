@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -19,10 +20,6 @@ import (
 	"github.com/thetonymaster/mentat/internal/engine"
 	"github.com/thetonymaster/mentat/internal/trace"
 )
-
-func chmodReadOnly(dir string) error {
-	return os.Chmod(dir, 0o555)
-}
 
 // errWriter is an io.Writer that always returns an error on Write.
 type errWriter struct{}
@@ -178,29 +175,58 @@ func TestRun(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for unknown target, got nil")
 		}
+		if !strings.Contains(err.Error(), "ctl: drive target") {
+			t.Fatalf("error missing 'ctl: drive target' prefix, got: %v", err)
+		}
 		if !strings.Contains(err.Error(), "unknown target") {
-			t.Fatalf("unexpected error: %v", err)
+			t.Fatalf("error missing underlying 'unknown target' message, got: %v", err)
 		}
 	})
 
 	t.Run("save last error is returned wrapped", func(t *testing.T) {
-		// Make HOME a read-only directory so MkdirAll inside SaveLast fails.
-		roDir := t.TempDir()
-		// chmod read-only after creation
-		if err := chmodReadOnly(roDir); err != nil {
-			t.Skipf("cannot make dir read-only: %v", err)
+		// Point HOME at a regular file so os.MkdirAll(HOME/.mentat, …) fails
+		// with ENOTDIR — this is privilege-independent and works under root.
+		homeFile := filepath.Join(t.TempDir(), "home-file")
+		if err := os.WriteFile(homeFile, []byte("x"), 0o644); err != nil {
+			t.Fatalf("setup HOME file: %v", err)
 		}
-		t.Setenv("HOME", roDir)
+		t.Setenv("HOME", homeFile)
 
 		eng := buildTestEngine(t, runID, tr)
 
 		var b bytes.Buffer
 		_, err := Run(context.Background(), eng, RunOpts{Target: "bot"}, &b)
 		if err == nil {
-			t.Fatal("expected error from read-only SaveLast, got nil")
+			t.Fatal("expected error from SaveLast with file-as-HOME, got nil")
 		}
 		if !strings.Contains(err.Error(), "ctl: save last") {
 			t.Fatalf("error missing 'ctl: save last' prefix, got: %v", err)
+		}
+	})
+
+	t.Run("quiet write error is returned wrapped", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		eng := buildTestEngine(t, runID, tr)
+
+		_, err := Run(context.Background(), eng, RunOpts{Target: "bot", Quiet: true}, errWriter{})
+		if err == nil {
+			t.Fatal("expected error from failing writer in quiet mode, got nil")
+		}
+		if !strings.Contains(err.Error(), "ctl: write answer") {
+			t.Fatalf("error missing 'ctl: write answer' prefix, got: %v", err)
+		}
+	})
+
+	t.Run("default write error is returned wrapped", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		eng := buildTestEngine(t, runID, tr)
+
+		_, err := Run(context.Background(), eng, RunOpts{Target: "bot"}, errWriter{})
+		if err == nil {
+			t.Fatal("expected error from failing writer in default mode, got nil")
+		}
+		if !strings.Contains(err.Error(), "ctl: write") {
+			t.Fatalf("error missing 'ctl: write' prefix, got: %v", err)
 		}
 	})
 }

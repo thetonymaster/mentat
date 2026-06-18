@@ -10,18 +10,22 @@ import (
 )
 
 // FormatForest renders the span forest as an indented tree, highlighting gen_ai attrs.
-func FormatForest(tr *trace.Trace, w io.Writer) {
+func FormatForest(tr *trace.Trace, w io.Writer) error {
 	if tr == nil {
-		fmt.Fprintln(w, "(no trace)")
-		return
+		if _, err := fmt.Fprintln(w, "(no trace)"); err != nil {
+			return fmt.Errorf("ctl: format forest no-trace line: %w", err)
+		}
+		return nil
 	}
-	fmt.Fprintf(w, "Run %s (%d spans, %d root trace(s))\n\n", tr.RunID, len(tr.Spans), len(tr.Roots))
+	if _, err := fmt.Fprintf(w, "Run %s (%d spans, %d root trace(s))\n\n", tr.RunID, len(tr.Spans), len(tr.Roots)); err != nil {
+		return fmt.Errorf("ctl: format forest header run %s: %w", tr.RunID, err)
+	}
 	byParent := map[string][]*trace.Span{}
 	for _, s := range tr.Spans {
 		byParent[s.ParentID] = append(byParent[s.ParentID], s)
 	}
-	var emit func(s *trace.Span, depth int)
-	emit = func(s *trace.Span, depth int) {
+	var emit func(s *trace.Span, depth int) error
+	emit = func(s *trace.Span, depth int) error {
 		indent := strings.Repeat("  ", depth)
 		extra := ""
 		if n, ok := s.AttrInt(genai.InTokens); ok {
@@ -33,25 +37,40 @@ func FormatForest(tr *trace.Trace, w io.Writer) {
 		if tn := s.Attr(genai.ToolName); tn != "" {
 			extra += " tool=" + tn
 		}
-		fmt.Fprintf(w, "%s+- %s%s\n", indent, s.Name, extra)
-		for _, c := range byParent[s.ID] {
-			emit(c, depth+1)
+		if _, err := fmt.Fprintf(w, "%s+- %s%s\n", indent, s.Name, extra); err != nil {
+			return fmt.Errorf("ctl: format forest span %s: %w", s.Name, err)
 		}
+		for _, c := range byParent[s.ID] {
+			if err := emit(c, depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	for _, r := range tr.Roots {
-		emit(r, 0)
+		if err := emit(r, 0); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // FormatTools lists the execute_tool spans in start order.
-func FormatTools(tr *trace.Trace, w io.Writer) {
+func FormatTools(tr *trace.Trace, w io.Writer) error {
 	if tr == nil {
-		fmt.Fprintln(w, "(no trace)")
-		return
+		if _, err := fmt.Fprintln(w, "(no trace)"); err != nil {
+			return fmt.Errorf("ctl: format tools no-trace line: %w", err)
+		}
+		return nil
 	}
 	tools := tr.ByOp(genai.OpExecuteTool)
-	fmt.Fprintf(w, "Run %s: %d tool call(s)\n", tr.RunID, len(tools))
-	for i, s := range tools {
-		fmt.Fprintf(w, "%2d. %s\n", i+1, s.Attr(genai.ToolName))
+	if _, err := fmt.Fprintf(w, "Run %s: %d tool call(s)\n", tr.RunID, len(tools)); err != nil {
+		return fmt.Errorf("ctl: format tools header run %s: %w", tr.RunID, err)
 	}
+	for i, s := range tools {
+		if _, err := fmt.Fprintf(w, "%2d. %s\n", i+1, s.Attr(genai.ToolName)); err != nil {
+			return fmt.Errorf("ctl: format tool line %d run %s: %w", i+1, tr.RunID, err)
+		}
+	}
+	return nil
 }

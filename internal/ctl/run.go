@@ -25,7 +25,7 @@ func Run(ctx context.Context, eng *engine.Engine, opts RunOpts, w io.Writer) (co
 
 	ev, err := eng.Drive(ctx, opts.Target, args)
 	if err != nil {
-		return core.Evidence{}, err
+		return core.Evidence{}, fmt.Errorf("ctl: drive target %q with args %v: %w", opts.Target, args, err)
 	}
 
 	if err := SaveLast(ev.RunID); err != nil {
@@ -34,7 +34,9 @@ func Run(ctx context.Context, eng *engine.Engine, opts RunOpts, w io.Writer) (co
 
 	switch {
 	case opts.Quiet:
-		fmt.Fprintln(w, ev.Output.Answer)
+		if _, err := fmt.Fprintln(w, ev.Output.Answer); err != nil {
+			return ev, fmt.Errorf("ctl: write answer for run %s: %w", ev.RunID, err)
+		}
 	case opts.JSON:
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
@@ -47,10 +49,18 @@ func Run(ctx context.Context, eng *engine.Engine, opts RunOpts, w io.Writer) (co
 			return ev, fmt.Errorf("ctl: encode json: %w", err)
 		}
 	default:
-		fmt.Fprintf(w, "run %s\n", ev.RunID)
-		fmt.Fprintf(w, "tools: %v\n", toolNames(ev))
-		fmt.Fprintf(w, "spans: %d\n", len(ev.Trace.Spans))
-		fmt.Fprintf(w, "answer: %s\n", ev.Output.Answer)
+		if _, err := fmt.Fprintf(w, "run %s\n", ev.RunID); err != nil {
+			return ev, fmt.Errorf("ctl: write run id for run %s: %w", ev.RunID, err)
+		}
+		if _, err := fmt.Fprintf(w, "tools: %v\n", toolNames(ev)); err != nil {
+			return ev, fmt.Errorf("ctl: write tools for run %s: %w", ev.RunID, err)
+		}
+		if _, err := fmt.Fprintf(w, "spans: %d\n", len(ev.Trace.Spans)); err != nil {
+			return ev, fmt.Errorf("ctl: write spans for run %s: %w", ev.RunID, err)
+		}
+		if _, err := fmt.Fprintf(w, "answer: %s\n", ev.Output.Answer); err != nil {
+			return ev, fmt.Errorf("ctl: write answer for run %s: %w", ev.RunID, err)
+		}
 	}
 
 	return ev, nil

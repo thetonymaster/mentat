@@ -2,12 +2,20 @@ package ctl
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/thetonymaster/mentat/internal/genai"
 	"github.com/thetonymaster/mentat/internal/trace"
 )
+
+// formatErrWriter always fails on Write (reuse pattern from run_test.go).
+type formatErrWriter struct{}
+
+func (formatErrWriter) Write(_ []byte) (int, error) {
+	return 0, errors.New("write: disk full")
+}
 
 func sampleForest() *trace.Trace {
 	root := &trace.Span{ID: "1", Name: "invoke_agent researchbot",
@@ -56,7 +64,9 @@ func TestFormatForest(t *testing.T) {
 				}
 			}()
 			var b bytes.Buffer
-			FormatForest(tt.tr, &b)
+			if err := FormatForest(tt.tr, &b); err != nil {
+				t.Fatalf("FormatForest returned unexpected error: %v", err)
+			}
 			out := b.String()
 			for _, want := range tt.wantSubs {
 				if !strings.Contains(out, want) {
@@ -65,6 +75,26 @@ func TestFormatForest(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("write error on nil trace is returned", func(t *testing.T) {
+		err := FormatForest(nil, formatErrWriter{})
+		if err == nil {
+			t.Fatal("expected error from failing writer, got nil")
+		}
+		if !strings.Contains(err.Error(), "ctl:") {
+			t.Fatalf("error missing 'ctl:' prefix, got: %v", err)
+		}
+	})
+
+	t.Run("write error on forest header is returned", func(t *testing.T) {
+		err := FormatForest(sampleForest(), formatErrWriter{})
+		if err == nil {
+			t.Fatal("expected error from failing writer, got nil")
+		}
+		if !strings.Contains(err.Error(), "ctl:") {
+			t.Fatalf("error missing 'ctl:' prefix, got: %v", err)
+		}
+	})
 }
 
 func TestFormatTools(t *testing.T) {
@@ -101,7 +131,9 @@ func TestFormatTools(t *testing.T) {
 				}
 			}()
 			var b bytes.Buffer
-			FormatTools(tt.tr, &b)
+			if err := FormatTools(tt.tr, &b); err != nil {
+				t.Fatalf("FormatTools returned unexpected error: %v", err)
+			}
 			out := b.String()
 			for _, want := range tt.wantSubs {
 				if !strings.Contains(out, want) {
@@ -110,4 +142,24 @@ func TestFormatTools(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("write error on nil trace is returned", func(t *testing.T) {
+		err := FormatTools(nil, formatErrWriter{})
+		if err == nil {
+			t.Fatal("expected error from failing writer, got nil")
+		}
+		if !strings.Contains(err.Error(), "ctl:") {
+			t.Fatalf("error missing 'ctl:' prefix, got: %v", err)
+		}
+	})
+
+	t.Run("write error on tools header is returned", func(t *testing.T) {
+		err := FormatTools(sampleForest(), formatErrWriter{})
+		if err == nil {
+			t.Fatal("expected error from failing writer, got nil")
+		}
+		if !strings.Contains(err.Error(), "ctl:") {
+			t.Fatalf("error missing 'ctl:' prefix, got: %v", err)
+		}
+	})
 }
