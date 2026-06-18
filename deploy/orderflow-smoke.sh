@@ -7,7 +7,18 @@ curl -fsS -X POST http://localhost:8080/ \
   -H "X-Scenario: happy" \
   -H "baggage: test.run.id=${RUN_ID},test.scenario=happy" >/dev/null
 echo "drove happy as ${RUN_ID}; waiting for Tempo..."
-sleep 10
-curl -fsS "http://localhost:3200/api/search?tags=test.run.id%3D${RUN_ID}" | grep -q "${RUN_ID}" \
-  && echo "OK: trace for ${RUN_ID} found in Tempo" \
-  || { echo "FAIL: no trace for ${RUN_ID}"; exit 1; }
+found=0
+for _ in $(seq 1 30); do
+  if curl -fsS "http://localhost:3200/api/search?tags=test.run.id%3D${RUN_ID}" | grep -q "${RUN_ID}"; then
+    found=1
+    break
+  fi
+  sleep 1
+done
+
+if [[ "${found}" -eq 1 ]]; then
+  echo "OK: trace for ${RUN_ID} found in Tempo"
+else
+  echo "FAIL: no trace for ${RUN_ID} after 30s"
+  exit 1
+fi
