@@ -3,6 +3,7 @@ package ctl
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/thetonymaster/mentat/internal/genai"
 	"github.com/thetonymaster/mentat/internal/trace"
@@ -10,6 +11,10 @@ import (
 
 // FormatForest renders the span forest as an indented tree, highlighting gen_ai attrs.
 func FormatForest(tr *trace.Trace, w io.Writer) {
+	if tr == nil {
+		fmt.Fprintln(w, "(no trace)")
+		return
+	}
 	fmt.Fprintf(w, "Run %s (%d spans, %d root trace(s))\n\n", tr.RunID, len(tr.Spans), len(tr.Roots))
 	byParent := map[string][]*trace.Span{}
 	for _, s := range tr.Spans {
@@ -17,10 +22,7 @@ func FormatForest(tr *trace.Trace, w io.Writer) {
 	}
 	var emit func(s *trace.Span, depth int)
 	emit = func(s *trace.Span, depth int) {
-		indent := ""
-		for i := 0; i < depth; i++ {
-			indent += "  "
-		}
+		indent := strings.Repeat("  ", depth)
 		extra := ""
 		if n, ok := s.AttrInt(genai.InTokens); ok {
 			extra += fmt.Sprintf(" in=%d", n)
@@ -43,6 +45,10 @@ func FormatForest(tr *trace.Trace, w io.Writer) {
 
 // FormatTools lists the execute_tool spans in start order.
 func FormatTools(tr *trace.Trace, w io.Writer) {
+	if tr == nil {
+		fmt.Fprintln(w, "(no trace)")
+		return
+	}
 	tools := tr.ByOp(genai.OpExecuteTool)
 	fmt.Fprintf(w, "Run %s: %d tool call(s)\n", tr.RunID, len(tools))
 	for i, s := range tools {
