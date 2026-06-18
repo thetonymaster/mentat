@@ -16,3 +16,36 @@ services:
       - "4318:4318"   # OTLP HTTP (researchbot -> collector)
     depends_on:
       - tempo
+  orderflow-gateway:
+    build: { context: .., dockerfile: deploy/orderflow.Dockerfile }
+    command: ["-service=gateway", "-addr=:8080"]
+    environment: &orderflow_env
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://collector:4318"
+      ORDERFLOW_TOPOLOGY: "gateway=http://orderflow-gateway:8080,auth=http://orderflow-auth:8081,inventory=http://orderflow-inventory:8082,payment=http://orderflow-payment:8083,notify=http://orderflow-notify:8084,legacy-pricing=http://orderflow-legacy:8085"
+    ports: ["8080:8080"]
+    depends_on: [collector]
+  orderflow-auth:
+    build: { context: .., dockerfile: deploy/orderflow.Dockerfile }
+    command: ["-service=auth", "-addr=:8081"]
+    environment: *orderflow_env
+    depends_on: [collector]
+  orderflow-inventory:
+    build: { context: .., dockerfile: deploy/orderflow.Dockerfile }
+    command: ["-service=inventory", "-addr=:8082"]
+    environment: *orderflow_env
+    depends_on: [collector]
+  orderflow-payment:
+    build: { context: .., dockerfile: deploy/orderflow.Dockerfile }
+    command: ["-service=payment", "-addr=:8083"]
+    environment: *orderflow_env
+    depends_on: [collector]
+  orderflow-notify:
+    build: { context: .., dockerfile: deploy/orderflow.Dockerfile }
+    command: ["-service=notify", "-addr=:8084"]
+    environment: *orderflow_env
+    depends_on: [collector]
+  orderflow-legacy:
+    build: { context: .., dockerfile: deploy/orderflow.Dockerfile }
+    command: ["-service=legacy-pricing", "-addr=:8085"]
+    environment: *orderflow_env
+    depends_on: [collector]

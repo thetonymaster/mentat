@@ -1,0 +1,87 @@
+{
+  "runScenario": "payment_decline",
+  "spans": [
+    {
+      "name": "POST",
+      "parentIndex": -1,
+      "attrs": {
+        "http.request.method": "POST",
+        "http.response.body.size": "21",
+        "http.response.status_code": "402",
+        "network.protocol.version": "1.1",
+        "server.address": "127.0.0.1",
+        "service.name": "gateway",
+        "test.run.id": "capture-payment_decline",
+        "test.scenario": "payment_decline",
+        "url.path": "/",
+        "url.scheme": "http",
+        "user_agent.original": "Go-http-client/1.1"
+      },
+      "status": "Unset"
+    },
+    {
+      "name": "POST",
+      "parentIndex": 0,
+      "attrs": {
+        "http.request.method": "POST",
+        "http.response.body.size": "13",
+        "http.response.status_code": "200",
+        "network.protocol.version": "1.1",
+        "server.address": "127.0.0.1",
+        "service.name": "auth",
+        "test.run.id": "capture-payment_decline",
+        "test.scenario": "payment_decline",
+        "url.path": "/",
+        "url.scheme": "http",
+        "user_agent.original": "Go-http-client/1.1"
+      },
+      "status": "Unset"
+    },
+    {
+      "name": "POST",
+      "parentIndex": 0,
+      "attrs": {
+        "http.request.method": "POST",
+        "http.response.body.size": "18",
+        "http.response.status_code": "200",
+        "network.protocol.version": "1.1",
+        "server.address": "127.0.0.1",
+        "service.name": "inventory",
+        "test.run.id": "capture-payment_decline",
+        "test.scenario": "payment_decline",
+        "url.path": "/",
+        "url.scheme": "http",
+        "user_agent.original": "Go-http-client/1.1"
+      },
+      "status": "Unset"
+    },
+    {
+      "name": "POST",
+      "parentIndex": 0,
+      "attrs": {
+        "http.request.method": "POST",
+        "http.response.body.size": "22",
+        "http.response.status_code": "402",
+        "network.protocol.version": "1.1",
+        "server.address": "127.0.0.1",
+        "service.name": "payment",
+        "test.run.id": "capture-payment_decline",
+        "test.scenario": "payment_decline",
+        "url.path": "/",
+        "url.scheme": "http",
+        "user_agent.original": "Go-http-client/1.1"
+      },
+      "status": "Unset"
+    },
+    {
+      "name": "payment.declined",
+      "parentIndex": 3,
+      "attrs": {
+        "service.name": "payment",
+        "test.run.id": "capture-payment_decline",
+        "test.scenario": "payment_decline"
+      },
+      "status": "Error"
+    }
+  ]
+}
