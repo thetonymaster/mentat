@@ -64,6 +64,7 @@ func main() {
 		Output:        os.Stdout,
 		StopOnFailure: *failFast,
 	}
+	var junitFile *os.File
 	if *junit != "" {
 		opts.Format = "junit"
 		f, err := os.Create(*junit)
@@ -71,12 +72,21 @@ func main() {
 			fmt.Fprintf(os.Stderr, "mentat: create junit file %q: %v\n", *junit, err)
 			os.Exit(1)
 		}
-		defer f.Close()
+		junitFile = f
 		opts.Output = f
 	}
 
 	suite := godog.TestSuite{ScenarioInitializer: steps.Initializer(eng), Options: &opts}
-	os.Exit(suite.Run())
+	code := suite.Run()
+	if junitFile != nil {
+		if err := junitFile.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "mentat: close junit file %q: %v\n", *junit, err)
+			if code == 0 {
+				code = 1
+			}
+		}
+	}
+	os.Exit(code)
 }
 
 // parseDur converts a duration string into time.Duration. An empty string
