@@ -27,6 +27,14 @@ type Target struct {
 	Adapter        string   `yaml:"adapter"`
 	Command        []string `yaml:"command"`
 	MaxConcurrency int      `yaml:"max_concurrency"`
+	HTTP           HTTP     `yaml:"http"`
+}
+
+// HTTP is the per-target request config used when adapter is "http".
+type HTTP struct {
+	URL     string            `yaml:"url"`
+	Method  string            `yaml:"method"`
+	Headers map[string]string `yaml:"headers"`
 }
 
 var defaultConcurrency = map[string]int{"shell": 1, "mcp": 1, "http": 8, "grpc": 8}
@@ -47,6 +55,14 @@ func Load(data []byte) (Config, error) {
 		if t.MaxConcurrency == 0 {
 			t.MaxConcurrency = def
 			c.Targets[name] = t
+		}
+		if t.Adapter == "http" {
+			if t.HTTP.URL == "" {
+				return Config{}, fmt.Errorf("target %q: http.url is required when adapter is http", name)
+			}
+			if t.HTTP.Method == "" {
+				return Config{}, fmt.Errorf("target %q: http.method is required when adapter is http", name)
+			}
 		}
 	}
 	return c, nil
