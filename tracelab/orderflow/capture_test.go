@@ -3,10 +3,23 @@ package orderflow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
+
+func TestStableSnapshotsRespectsContextCancellation(t *testing.T) {
+	exp := tracetest.NewInMemoryExporter()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already canceled before the first poll
+
+	if _, err := stableSnapshots(ctx, exp); !errors.Is(err, context.Canceled) {
+		t.Fatalf("stableSnapshots(canceled) error = %v, want context.Canceled", err)
+	}
+}
 
 func TestCaptureIsDeterministicAndCarriesServiceName(t *testing.T) {
 	ctx := context.Background()

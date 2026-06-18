@@ -64,7 +64,11 @@ func Capture(ctx context.Context, scenario string) ([]byte, error) {
 		_ = sys.Shutdown(ctx)
 		return nil, fmt.Errorf("capture %q: drive: %w", scenario, err)
 	}
-	stubs := stableSnapshots(exp)
+	stubs, err := stableSnapshots(ctx, exp)
+	if err != nil {
+		_ = sys.Shutdown(ctx)
+		return nil, fmt.Errorf("capture %q: wait spans: %w", scenario, err)
+	}
 	if err := sys.Shutdown(ctx); err != nil {
 		return nil, fmt.Errorf("capture %q: shutdown: %w", scenario, err)
 	}
@@ -77,13 +81,16 @@ func Capture(ctx context.Context, scenario string) ([]byte, error) {
 		if !ti.Equal(tj) {
 			return ti.Before(tj)
 		}
-		// Tiebreaker: SpanID string keeps order deterministic when two spans
-		// share an identical start time.
-		si, sj := stubs[i].SpanContext.SpanID().String(), stubs[j].SpanContext.SpanID().String()
-		if si != sj {
+		// Tiebreakers must be stable across runs, so they use span content
+		// (service.name, name, status) — never SpanID, which is regenerated
+		// per run and would reorder fixtures on a start-time collision.
+		if si, sj := resourceServiceName(stubs[i].Resource), resourceServiceName(stubs[j].Resource); si != sj {
 			return si < sj
 		}
-		return stubs[i].Name < stubs[j].Name
+		if stubs[i].Name != stubs[j].Name {
+			return stubs[i].Name < stubs[j].Name
+		}
+		return stubs[i].Status.Code.String() < stubs[j].Status.Code.String()
 	})
 
 	idx := make(map[string]int, len(stubs))
@@ -119,8 +126,9 @@ func Capture(ctx context.Context, scenario string) ([]byte, error) {
 }
 
 // stableSnapshots polls until the exported span count is stable, since otelhttp
-// server spans end on their own goroutine after the handler returns.
-func stableSnapshots(exp *tracetest.InMemoryExporter) []tracetest.SpanStub {
+// server spans end on their own goroutine after the handler returns. It honors
+// ctx so a canceled caller stops waiting immediately instead of sleeping ~2s.
+func stableSnapshots(ctx context.Context, exp *tracetest.InMemoryExporter) ([]tracetest.SpanStub, error) {
 	last, stable := -1, 0
 	for i := 0; i < 200; i++ { // up to ~2s
 		n := len(exp.GetSpans())
@@ -132,9 +140,13 @@ func stableSnapshots(exp *tracetest.InMemoryExporter) []tracetest.SpanStub {
 			stable = 0
 		}
 		last = n
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
-	return exp.GetSpans()
+	return exp.GetSpans(), nil
 }
 
 // WriteFixtures captures every scenario into dir/<scenario>.json with a trailing
