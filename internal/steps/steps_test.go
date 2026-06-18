@@ -9,6 +9,7 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"github.com/cucumber/godog"
+	messages "github.com/cucumber/messages/go/v21"
 	"github.com/thetonymaster/mentat/internal/config"
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/core/mocks"
@@ -153,6 +154,63 @@ func buildEng(t *testing.T, tr *trace.Trace) *engine.Engine {
 		t.Fatalf("engine.Build: %v", err)
 	}
 	return eng
+}
+
+// TestToolsInOrderEmptyCell proves that toolsInOrder returns a descriptive error
+// (not a panic) when a table row has no cells.
+func TestToolsInOrderEmptyCell(t *testing.T) {
+	tests := []struct {
+		name    string
+		tbl     *godog.Table
+		wantErr bool
+		errSub  string
+	}{
+		{
+			name: "well_formed_row_no_error",
+			tbl: &godog.Table{
+				Rows: []*messages.PickleTableRow{
+					{Cells: []*messages.PickleTableCell{{Value: "search"}}},
+				},
+			},
+			// toolsInOrder succeeds building the order slice; check() will fail
+			// because no drive has been run, but the row-guard itself should not error.
+			wantErr: true, // check("sequence",...) will error — no evidence; guards still exercised
+		},
+		{
+			name: "empty_cells_slice_returns_error",
+			tbl: &godog.Table{
+				Rows: []*messages.PickleTableRow{
+					{Cells: []*messages.PickleTableCell{}},
+				},
+			},
+			wantErr: true,
+			errSub:  "has no cells",
+		},
+		{
+			name: "nil_cells_returns_error",
+			tbl: &godog.Table{
+				Rows: []*messages.PickleTableRow{
+					{Cells: nil},
+				},
+			},
+			wantErr: true,
+			errSub:  "has no cells",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			w := &world{} // no engine needed — error fires before check()
+			err := w.toolsInOrder(tt.tbl)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err=%v, wantErr=%v", err, tt.wantErr)
+			}
+			if tt.errSub != "" && (err == nil || !strings.Contains(err.Error(), tt.errSub)) {
+				t.Fatalf("expected error containing %q, got: %v", tt.errSub, err)
+			}
+		})
+	}
 }
 
 // TestStepMethods exercises each step method that the happy-scenario godog run

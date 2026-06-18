@@ -72,7 +72,10 @@ func (w *world) check(name string, exp core.Expectation) error {
 
 func (w *world) toolsInOrder(tbl *godog.Table) error {
 	var order []string
-	for _, row := range tbl.Rows {
+	for i, row := range tbl.Rows {
+		if len(row.Cells) == 0 {
+			return fmt.Errorf("tools-in-order: table row %d has no cells", i)
+		}
 		order = append(order, strings.TrimSpace(row.Cells[0].Value))
 	}
 	return w.check("sequence", comparator.SequenceExpectation{Order: order})
