@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -24,8 +25,11 @@ type Service struct {
 
 // newClient returns a client whose transport creates CLIENT spans and injects
 // trace context + baggage into downstream requests (via the global propagator).
+// The timeout bounds any single downstream call so a stalled socket cannot block
+// the request path indefinitely.
 func newClient(tp *sdktrace.TracerProvider) *http.Client {
 	return &http.Client{
+		Timeout:   5 * time.Second,
 		Transport: otelhttp.NewTransport(http.DefaultTransport, otelhttp.WithTracerProvider(tp)),
 	}
 }

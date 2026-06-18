@@ -2,16 +2,22 @@ package orderflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/baggage"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
+
+// outboundHTTPTimeout bounds gateway→leaf and driver→gateway calls so a stalled
+// downstream cannot block an in-process run or its shutdown indefinitely.
+const outboundHTTPTimeout = 5 * time.Second
 
 // allServices is the build/serve order. StartInProcess binds every listener
 // (fully populating the topology) before it builds any handler, so order within
@@ -90,7 +96,10 @@ func (t *propagatingTransport) RoundTrip(r *http.Request) (*http.Response, error
 // propagatingClient returns an http.Client that propagates trace context and
 // baggage into outbound requests without emitting CLIENT spans.
 func propagatingClient() *http.Client {
-	return &http.Client{Transport: &propagatingTransport{base: http.DefaultTransport}}
+	return &http.Client{
+		Timeout:   outboundHTTPTimeout,
+		Transport: &propagatingTransport{base: http.DefaultTransport},
+	}
 }
 
 // Drive sends a plain (un-instrumented) request to the gateway with correlation
@@ -119,7 +128,8 @@ func (s *System) Drive(ctx context.Context, topo Topology, runID, scenario strin
 		return 0, nil, fmt.Errorf("orderflow: build baggage: %w", err)
 	}
 	req.Header.Set("baggage", bag.String())
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{Timeout: outboundHTTPTimeout}
+	resp, err := client.Do(req)
 	if err != nil {
 		return 0, nil, fmt.Errorf("orderflow: drive gateway: %w", err)
 	}
@@ -148,7 +158,9 @@ func (s *System) Shutdown(ctx context.Context) error {
 }
 
 // RunService runs ONE service on a fixed address (container mode). It blocks
-// until the server stops; callers wire signal handling.
+// until ctx is canceled (e.g. by a caller's signal handler), then gracefully
+// drains the server and flushes the tracer provider so buffered spans are not
+// dropped on exit.
 func RunService(ctx context.Context, name, addr string, topo Topology, exp sdktrace.SpanExporter) error {
 	otel.SetTextMapPropagator(Propagator())
 	tp, err := NewTracerProvider(ctx, name, exp)
@@ -156,7 +168,21 @@ func RunService(ctx context.Context, name, addr string, topo Topology, exp sdktr
 		return fmt.Errorf("orderflow: provider %q: %w", name, err)
 	}
 	srv := &http.Server{Addr: addr, Handler: handlerFor(name, tp, topo)}
-	return srv.ListenAndServe()
+
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), outboundHTTPTimeout)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+	}()
+
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("orderflow: serve %q on %q: %w", name, addr, err)
+	}
+	if err := tp.Shutdown(context.Background()); err != nil {
+		return fmt.Errorf("orderflow: provider %q shutdown: %w", name, err)
+	}
+	return nil
 }
 
 func readAll(resp *http.Response) ([]byte, error) {

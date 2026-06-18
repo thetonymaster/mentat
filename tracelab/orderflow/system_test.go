@@ -2,12 +2,61 @@ package orderflow
 
 import (
 	"context"
+	"net"
+	"net/http"
 	"sort"
 	"testing"
+	"time"
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
+
+// TestRunServiceHonorsContextCancellation proves the container-mode entrypoint
+// serves requests and shuts down gracefully (returning nil) when its context is
+// canceled, rather than blocking forever in ListenAndServe.
+func TestRunServiceHonorsContextCancellation(t *testing.T) {
+	// Grab a free port, then release it so RunService can bind the same address.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+
+	exp := tracetest.NewInMemoryExporter()
+	topo := Topology{ServiceAuth: "http://" + addr}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- RunService(ctx, ServiceAuth, addr, topo, exp) }()
+
+	// Poll for readiness instead of a fixed sleep, then drive one request to
+	// confirm the service actually bound and served.
+	ready := false
+	for i := 0; i < 200; i++ {
+		resp, perr := http.Post("http://"+addr+"/", "", http.NoBody)
+		if perr == nil {
+			_ = resp.Body.Close()
+			ready = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !ready {
+		cancel()
+		t.Fatal("service never became ready")
+	}
+
+	cancel()
+	select {
+	case rerr := <-done:
+		if rerr != nil {
+			t.Fatalf("RunService returned %v, want nil after ctx cancel", rerr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunService did not return after ctx cancel")
+	}
+}
 
 func TestScenariosProduceExpectedBehaviour(t *testing.T) {
 	tests := []struct {
