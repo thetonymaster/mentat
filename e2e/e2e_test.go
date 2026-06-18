@@ -9,17 +9,30 @@ import (
 	"time"
 )
 
+// TestHappyScenarioPasses drives good scenarios end-to-end through the full
+// pipeline and asserts mentat exits zero (every comparator passes).
+// Requires: make harness-up (Tempo + Collector running).
 func TestHappyScenarioPasses(t *testing.T) {
-	// Requires: make harness-up (Tempo + Collector running).
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "go", "run", "./cmd/mentat", "run", "features/research_agent.feature")
-	cmd.Dir = ".."
-	out, err := cmd.CombinedOutput()
-	if ctx.Err() == context.DeadlineExceeded {
-		t.Fatalf("mentat run timed out:\n%s", out)
+	tests := []struct {
+		name    string
+		feature string
+	}{
+		{"summarizes Q3 revenue within budget", "features/research_agent.feature"},
 	}
-	if err != nil {
-		t.Fatalf("mentat run failed (want pass):\n%s", out)
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "go", "run", "./cmd/mentat", "run", tc.feature)
+			cmd.Dir = ".."
+			out, err := cmd.CombinedOutput()
+			if ctx.Err() == context.DeadlineExceeded {
+				t.Fatalf("mentat run timed out for %s:\n%s", tc.feature, out)
+			}
+			if err != nil {
+				t.Fatalf("mentat run failed (want pass) for %s:\n%s", tc.feature, out)
+			}
+		})
 	}
 }
