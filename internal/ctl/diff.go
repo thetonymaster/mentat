@@ -34,10 +34,7 @@ func Diff(ctx context.Context, cor core.Correlator, st core.TraceStore, idA, idB
 		fmt.Fprintln(w, "tool sequences identical")
 		return nil
 	}
-	n := len(a)
-	if len(b) > n {
-		n = len(b)
-	}
+	n := max(len(a), len(b))
 	for i := 0; i < n; i++ {
 		av, bv := at(a, i), at(b, i)
 		mark := " "
