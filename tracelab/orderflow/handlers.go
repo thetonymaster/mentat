@@ -2,6 +2,7 @@ package orderflow
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -38,12 +39,22 @@ func planFor(scenario string) gatewayPlan {
 	}
 }
 
+// mustMarshalBody renders a single-key response body to canonical JSON. The
+// body maps are always map[string]string, so marshal cannot fail; a failure is
+// a true unreachable invariant.
+func mustMarshalBody(body map[string]string) []byte {
+	data, err := json.Marshal(body)
+	if err != nil {
+		panic(fmt.Sprintf("orderflow: marshal response body %v: %v", body, err))
+	}
+	return data
+}
+
 // ExpectedResult is the gateway's deterministic response per scenario — the
 // boundary Output the framework's result comparator will assert against.
 func ExpectedResult(scenario string) (int, []byte) {
 	p := planFor(scenario)
-	body, _ := json.Marshal(p.body)
-	return p.status, body
+	return p.status, mustMarshalBody(p.body)
 }
 
 func gatewayHandler(client *http.Client, topo Topology) http.HandlerFunc {
@@ -87,7 +98,8 @@ func leafHandler(service string, tr oteltrace.Tracer) http.HandlerFunc {
 }
 
 func writeJSON(w http.ResponseWriter, status int, body map[string]string) {
+	data := mustMarshalBody(body)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
+	_, _ = w.Write(data)
 }

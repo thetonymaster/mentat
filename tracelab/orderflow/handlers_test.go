@@ -26,6 +26,7 @@ func TestPlanForEncodesScenarioCallOrderAndStatus(t *testing.T) {
 		{"inventory_out", []string{ServiceAuth, ServiceInventory}, 409},
 		{"legacy_path", []string{ServiceAuth, ServiceLegacy, ServiceInventory, ServicePayment, ServiceNotify}, 201},
 		{"reorder", []string{ServiceAuth, ServicePayment, ServiceInventory, ServiceNotify}, 201},
+		{"bogus", nil, http.StatusBadRequest},
 	}
 	for _, tt := range tests {
 		tt := tt
@@ -48,6 +49,56 @@ func TestExpectedResultIsDeterministicJSON(t *testing.T) {
 	}
 	if string(body) != `{"status":"confirmed"}` {
 		t.Errorf("body = %s, want confirmed JSON", body)
+	}
+}
+
+// TestGatewayBodyMatchesExpectedResult asserts that the bytes the gateway writes
+// over the wire are identical to the bytes ExpectedResult returns — the contract
+// the result comparator relies on.
+func TestGatewayBodyMatchesExpectedResult(t *testing.T) {
+	tests := []struct {
+		scenario string
+	}{
+		{"happy"},
+		{"payment_decline"},
+		{"inventory_out"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.scenario, func(t *testing.T) {
+			stub200 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer stub200.Close()
+			stub402 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusPaymentRequired)
+			}))
+			defer stub402.Close()
+			stub409 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusConflict)
+			}))
+			defer stub409.Close()
+
+			topo := Topology{
+				ServiceAuth:      stub200.URL,
+				ServiceInventory: stub409.URL,
+				ServicePayment:   stub402.URL,
+				ServiceNotify:    stub200.URL,
+			}
+
+			h := gatewayHandler(&http.Client{}, topo)
+			req := httptest.NewRequest(http.MethodPost, "/", nil)
+			req.Header.Set(HeaderScenario, tt.scenario)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			_, wantBody := ExpectedResult(tt.scenario)
+			gotBody := rec.Body.Bytes()
+			if string(gotBody) != string(wantBody) {
+				t.Errorf("scenario %q: gateway body = %q, want %q", tt.scenario, gotBody, wantBody)
+			}
+		})
 	}
 }
 
