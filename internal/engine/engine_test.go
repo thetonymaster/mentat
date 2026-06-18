@@ -241,7 +241,16 @@ func TestDriveSemaphoreRespectsContextCancellation(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel() // pre-cancel
 
-			_, err = eng.Drive(ctx, "sut", nil)
+			done := make(chan error, 1)
+			go func() {
+				_, runErr := eng.Drive(ctx, "sut", nil)
+				done <- runErr
+			}()
+			select {
+			case err = <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("Drive blocked waiting on semaphore after context cancellation")
+			}
 			if err == nil {
 				t.Fatal("expected error, got nil")
 			}
