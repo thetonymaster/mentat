@@ -1,9 +1,14 @@
-.PHONY: all test lint clean harness-up harness-down smoke
+.PHONY: all test lint cover ci clean harness-up harness-down smoke
 
 all: test lint
 
 test:
-	go test ./...
+	go test ./... -race
+
+cover:
+	bash .claude/skills/coverage/coverage.sh ./...
+
+ci: lint test cover
 
 lint:
 	golangci-lint run ./...
