@@ -54,6 +54,11 @@ func WriteFixture(tr *trace.Trace, path string) error {
 		if s.ParentID != "" {
 			if pi, ok := idx[s.ParentID]; ok {
 				parent = pi
+			} else if !rootSet[s] {
+				// A non-root span pointing at a parent absent from the forest is a real
+				// dangling reference. A root span may legitimately retain a cross-trace
+				// ParentID (Trace-is-a-forest invariant) and serializes as parentIndex=-1.
+				return fmt.Errorf("ctl: span %q references missing parent id %q", s.ID, s.ParentID)
 			}
 		}
 		out.Spans = append(out.Spans, fixtureSpan{

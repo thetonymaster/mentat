@@ -15,6 +15,9 @@ import (
 //
 // tagExpr is a godog tag expression (e.g. "@wip"); empty runs all scenarios in the feature.
 func ReplayFeature(ctx context.Context, eng *engine.Engine, runID, featurePath, tagExpr string, w io.Writer) error {
+	if runID == "" {
+		return fmt.Errorf("replay: run id is required")
+	}
 	eng.PinRun(runID)
 	opts := godog.Options{
 		Format:         "pretty",

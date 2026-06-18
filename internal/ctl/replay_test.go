@@ -104,6 +104,47 @@ func TestReplayFeatureFailsWhenStoredRunDoesNotSatisfyFeature(t *testing.T) {
 	}
 }
 
+func TestReplayFeatureRejectsEmptyRunID(t *testing.T) {
+	tests := []struct {
+		name          string
+		runID         string
+		wantErrSubstr string
+	}{
+		{
+			name:          "empty run id returns error before any engine interaction",
+			runID:         "",
+			wantErrSubstr: "run id is required",
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			st := mocks.NewMockTraceStore(ctrl)
+			// No expectations on store — any call would fail the controller.
+			cor := mocks.NewMockCorrelator(ctrl)
+			// No expectations on correlator — any call would fail the controller.
+			cfg := config.Config{
+				OTLPEndpoint: "x",
+				Targets:      map[string]config.Target{"bot": {Adapter: "shell", Command: []string{"false"}, MaxConcurrency: 1}},
+			}
+			eng, err := engine.Build(cfg, st, cor)
+			if err != nil {
+				t.Fatalf("engine.Build: %v", err)
+			}
+			feature := writeTempFeature(t, "Feature: noop\n  Scenario: noop\n    Given the agent target \"bot\"\n")
+			var b bytes.Buffer
+			err = ReplayFeature(context.Background(), eng, tt.runID, feature, "", &b)
+			if err == nil {
+				t.Fatalf("expected error for empty run id, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantErrSubstr) {
+				t.Fatalf("error %q does not contain %q", err.Error(), tt.wantErrSubstr)
+			}
+		})
+	}
+}
+
 func writeTempFeature(t *testing.T, body string) string {
 	t.Helper()
 	p := t.TempDir() + "/f.feature"

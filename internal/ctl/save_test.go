@@ -63,15 +63,73 @@ func TestWriteFixture(t *testing.T) {
 			name: "unwritable path returns error with ctl: prefix",
 			tr:   sampleForest,
 			pathFn: func(dir string) string {
-				// Use a path under a read-only directory.
-				ro := filepath.Join(dir, "readonly")
-				if err := os.MkdirAll(ro, 0o555); err != nil {
-					t.Fatalf("setup read-only dir: %v", err)
+				// Point at an existing directory so os.WriteFile returns EISDIR
+				// regardless of privilege level (avoids false-pass under root).
+				outDir := filepath.Join(dir, "outdir")
+				if err := os.MkdirAll(outDir, 0o755); err != nil {
+					t.Fatalf("setup outdir: %v", err)
 				}
-				return filepath.Join(ro, "subdir", "out.json")
+				return outDir
 			},
 			wantErr: true,
 			errSub:  "ctl:",
+		},
+		{
+			// orphan is a non-root span (not in Roots) with a ParentID absent from the
+			// forest — this is a genuine dangling reference and must still error.
+			name: "dangling parent id on non-root span returns error containing references missing parent id",
+			tr: func() *trace.Trace {
+				root := &trace.Span{ID: "root-1", Name: "invoke_agent researchbot",
+					Attrs: map[string]string{genai.Op: genai.OpInvokeAgent}}
+				orphan := &trace.Span{ID: "orphan-2", ParentID: "nonexistent-id", Name: "execute_tool search",
+					Attrs: map[string]string{genai.Op: genai.OpExecuteTool}}
+				return &trace.Trace{
+					RunID: "dangling-run",
+					Roots: []*trace.Span{root},
+					// orphan is in Spans but NOT in Roots — it is a non-root span.
+					Spans: []*trace.Span{root, orphan},
+				}
+			},
+			pathFn: func(dir string) string {
+				return filepath.Join(dir, "dangling.json")
+			},
+			wantErr: true,
+			errSub:  "references missing parent id",
+		},
+		{
+			// A root span (present in tr.Roots) may retain a non-empty ParentID from a
+			// different trace (cross-trace parent, Trace-is-a-forest invariant).  The
+			// Tempo store does exactly this: it marks a span as a root when its parent
+			// lives in a different trace but keeps the original ParentID.
+			// WriteFixture must serialize such a root with parentIndex = -1, not error.
+			name: "root span with cross-trace ParentID serializes as parentIndex -1 without error",
+			tr: func() *trace.Trace {
+				// crossRoot has a non-empty ParentID that points to a span in another
+				// trace (absent from this forest).  The Tempo store would still put it
+				// in tr.Roots because byID[sp.ParentID] == nil.
+				crossRoot := &trace.Span{
+					ID:       "cross-root-span",
+					ParentID: "parent-in-other-trace",
+					Name:     "invoke_agent sub-agent",
+					Attrs:    map[string]string{genai.Op: genai.OpInvokeAgent},
+				}
+				child := &trace.Span{
+					ID:       "child-of-cross-root",
+					ParentID: "cross-root-span",
+					Name:     "execute_tool search",
+					Attrs:    map[string]string{genai.Op: genai.OpExecuteTool},
+				}
+				return &trace.Trace{
+					RunID: "cross-trace-run",
+					// crossRoot IS in Roots — it is a root span.
+					Roots: []*trace.Span{crossRoot},
+					Spans: []*trace.Span{crossRoot, child},
+				}
+			},
+			pathFn: func(dir string) string {
+				return filepath.Join(dir, "cross_root.json")
+			},
+			wantErr: false,
 		},
 	}
 
@@ -141,6 +199,30 @@ func TestWriteFixture(t *testing.T) {
 				}
 				if gc.ParentIndex != 1 {
 					t.Fatalf("grandchild parentIndex: got %d, want 1 (child), not 0 (root)", gc.ParentIndex)
+				}
+
+			case "root span with cross-trace ParentID serializes as parentIndex -1 without error":
+				// Unmarshal raw JSON to verify the cross-trace root has parentIndex = -1.
+				var doc struct {
+					Spans []struct {
+						Name        string `json:"name"`
+						ParentIndex int    `json:"parentIndex"`
+					} `json:"spans"`
+				}
+				if err := json.Unmarshal(data, &doc); err != nil {
+					t.Fatalf("unmarshal cross-root fixture: %v", err)
+				}
+				// WriteFixture emits: [0]=crossRoot (root), [1]=child
+				if len(doc.Spans) != 2 {
+					t.Fatalf("expected 2 spans, got %d", len(doc.Spans))
+				}
+				crossRoot := doc.Spans[0]
+				child := doc.Spans[1]
+				if crossRoot.ParentIndex != -1 {
+					t.Fatalf("cross-trace root parentIndex: got %d, want -1", crossRoot.ParentIndex)
+				}
+				if child.ParentIndex != 0 {
+					t.Fatalf("child of cross-trace root parentIndex: got %d, want 0", child.ParentIndex)
 				}
 			}
 		})
