@@ -23,7 +23,14 @@ func parseTopology(env string) (of.Topology, error) {
 		if !ok {
 			return nil, fmt.Errorf("orderflow: bad topology entry %q (want name=url)", pair)
 		}
-		topo[strings.TrimSpace(k)] = strings.TrimSpace(v)
+		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+		if k == "" || v == "" {
+			return nil, fmt.Errorf("orderflow: bad topology entry %q (name and url must be non-empty)", pair)
+		}
+		if _, dup := topo[k]; dup {
+			return nil, fmt.Errorf("orderflow: duplicate topology key %q", k)
+		}
+		topo[k] = v
 	}
 	if len(topo) == 0 {
 		return nil, fmt.Errorf("orderflow: empty ORDERFLOW_TOPOLOGY")
