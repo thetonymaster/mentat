@@ -4,6 +4,7 @@
 cover.out
 /researchbot
 /capture
+/mentat
 
 # Python (skill scripts)
 __pycache__/
