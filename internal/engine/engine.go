@@ -21,6 +21,11 @@ type Engine struct {
 
 // PinRun makes subsequent Drive calls resolve runID from the store instead of
 // running the SUT — used by `mentatctl agent replay` to re-evaluate a stored run.
+//
+// Invariant: PinRun MUST be called before any concurrent Drive (i.e. at single-threaded
+// composition/setup time, the same discipline the registry uses — populated before
+// concurrent scenario execution begins). No mutex is needed because this is a setup-time
+// operation, not a concurrent one.
 func (e *Engine) PinRun(runID string) { e.pinned = runID }
 
 // Comparator resolves a named comparator from the global registry.

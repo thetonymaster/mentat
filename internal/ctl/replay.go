@@ -12,13 +12,16 @@ import (
 
 // ReplayFeature re-evaluates a feature against a STORED run (no driving). It pins the
 // engine to runID, then runs the feature through the same godog step grammar.
-func ReplayFeature(ctx context.Context, eng *engine.Engine, runID, featurePath, scenario string, w io.Writer) error {
+//
+// tagExpr is a godog tag expression (e.g. "@wip"); empty runs all scenarios in the feature.
+func ReplayFeature(ctx context.Context, eng *engine.Engine, runID, featurePath, tagExpr string, w io.Writer) error {
 	eng.PinRun(runID)
 	opts := godog.Options{
-		Format: "pretty",
-		Paths:  []string{featurePath},
-		Output: w,
-		Tags:   scenario, // empty = all scenarios in the file
+		Format:         "pretty",
+		Paths:          []string{featurePath},
+		Output:         w,
+		Tags:           tagExpr, // empty = all scenarios in the file
+		DefaultContext: ctx,
 	}
 	suite := godog.TestSuite{ScenarioInitializer: steps.Initializer(eng), Options: &opts}
 	if status := suite.Run(); status != 0 {
