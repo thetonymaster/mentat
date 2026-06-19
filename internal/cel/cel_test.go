@@ -53,6 +53,30 @@ func TestEngineReferences(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("References() = %v, want %v", got, want)
 	}
+
+	// A variable used multiple times must appear exactly once (dedup).
+	prgDedup, err := eng.Compile(`status == 200 || status == 201 || status == 204`)
+	if err != nil {
+		t.Fatalf("Compile dedup: %v", err)
+	}
+	if got := prgDedup.References(); !reflect.DeepEqual(got, []string{"status"}) {
+		t.Fatalf("References() dedup = %v, want [status]", got)
+	}
+}
+
+func TestEngineEvalUnboundVariable(t *testing.T) {
+	eng, err := NewEngine()
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	prg, err := eng.Compile(`status == 201`)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	// status is declared (Compile succeeds) but not bound at Eval time.
+	if _, err := prg.Eval(map[string]any{}); err == nil {
+		t.Fatal("want error for unbound variable at Eval, got nil")
+	}
 }
 
 func TestEngineEval(t *testing.T) {
