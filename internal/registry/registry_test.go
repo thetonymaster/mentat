@@ -122,46 +122,62 @@ func (f fakeMatcher) Match(_ context.Context, _ core.Evidence, _, _ string) (cor
 	return core.Verdict{Pass: true}, nil
 }
 
-func TestMatcherRegistryRoundTrip(t *testing.T) {
+func TestMatcherRegistry(t *testing.T) {
 	resetRegistries(t)
-	RegisterMatcher("fake", fakeMatcher{name: "fake"})
-	got, ok := Matcher("fake")
-	if !ok {
-		t.Fatal("Matcher(\"fake\") not found after RegisterMatcher")
+	tests := []struct {
+		name    string
+		regName string
+		lookup  string
+		wantOK  bool
+	}{
+		{name: "round-trip", regName: "fake", lookup: "fake", wantOK: true},
+		{name: "miss", regName: "fake", lookup: "nope-not-registered", wantOK: false},
 	}
-	if got.Name() != "fake" {
-		t.Fatalf("Name() = %q, want %q", got.Name(), "fake")
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			RegisterMatcher(tt.regName, fakeMatcher{name: tt.regName})
+			got, ok := Matcher(tt.lookup)
+			if ok != tt.wantOK {
+				t.Fatalf("Matcher(%q) ok=%v, want %v", tt.lookup, ok, tt.wantOK)
+			}
+			if ok && got.Name() != tt.regName {
+				t.Fatalf("Matcher(%q).Name()=%q, want %q", tt.lookup, got.Name(), tt.regName)
+			}
+		})
 	}
 }
 
-func TestMatcherRegistryMissReturnsFalse(t *testing.T) {
-	resetRegistries(t)
-	if _, ok := Matcher("nope-not-registered"); ok {
-		t.Fatal("Matcher(unregistered) returned ok=true, want false")
-	}
-}
-
-func TestStoreRegistryRoundTrip(t *testing.T) {
+func TestStoreRegistry(t *testing.T) {
 	resetRegistries(t)
 	want := store.NewInMemStore(nil)
-	RegisterStore("inmem-test", func(config.Config) (core.TraceStore, error) { return want, nil })
-
-	f, ok := Store("inmem-test")
-	if !ok {
-		t.Fatal("Store(\"inmem-test\") not found after RegisterStore")
+	tests := []struct {
+		name    string
+		regName string
+		lookup  string
+		wantOK  bool
+	}{
+		{name: "round-trip", regName: "inmem-test", lookup: "inmem-test", wantOK: true},
+		{name: "miss", regName: "inmem-test", lookup: "nope-not-registered", wantOK: false},
 	}
-	got, err := f(config.Config{})
-	if err != nil {
-		t.Fatalf("factory error: %v", err)
-	}
-	if got != want {
-		t.Fatalf("factory returned %p, want %p", got, want)
-	}
-}
-
-func TestStoreRegistryMissReturnsFalse(t *testing.T) {
-	resetRegistries(t)
-	if _, ok := Store("nope-not-registered"); ok {
-		t.Fatal("Store(unregistered) returned ok=true, want false")
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			RegisterStore(tt.regName, func(config.Config) (core.TraceStore, error) { return want, nil })
+			f, ok := Store(tt.lookup)
+			if ok != tt.wantOK {
+				t.Fatalf("Store(%q) ok=%v, want %v", tt.lookup, ok, tt.wantOK)
+			}
+			if !ok {
+				return
+			}
+			got, err := f(config.Config{})
+			if err != nil {
+				t.Fatalf("factory error: %v", err)
+			}
+			if got != want {
+				t.Fatalf("factory returned %p, want %p", got, want)
+			}
+		})
 	}
 }

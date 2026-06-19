@@ -88,23 +88,34 @@ func TestLoadRejectsMalformedYAML(t *testing.T) {
 	}
 }
 
-func TestLoadDefaultsStoreToTempo(t *testing.T) {
-	c, err := Load([]byte("tempo:\n  endpoint: http://localhost:3200\n"))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
+func TestLoadStore(t *testing.T) {
+	tests := []struct {
+		name      string
+		yaml      string
+		wantStore string
+	}{
+		{
+			name:      "defaults to tempo when unset",
+			yaml:      "tempo:\n  endpoint: http://localhost:3200\n",
+			wantStore: "tempo",
+		},
+		{
+			name:      "keeps explicit store",
+			yaml:      "store: jaeger\ntempo:\n  endpoint: http://localhost:3200\n",
+			wantStore: "jaeger",
+		},
 	}
-	if c.Store != "tempo" {
-		t.Fatalf("Store = %q, want %q", c.Store, "tempo")
-	}
-}
-
-func TestLoadKeepsExplicitStore(t *testing.T) {
-	c, err := Load([]byte("store: jaeger\ntempo:\n  endpoint: http://localhost:3200\n"))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if c.Store != "jaeger" {
-		t.Fatalf("Store = %q, want %q", c.Store, "jaeger")
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			c, err := Load([]byte(tt.yaml))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if c.Store != tt.wantStore {
+				t.Fatalf("Store = %q, want %q", c.Store, tt.wantStore)
+			}
+		})
 	}
 }
 
