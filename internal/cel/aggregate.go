@@ -7,6 +7,9 @@ import (
 	"sort"
 
 	celgo "github.com/google/cel-go/cel"
+	"github.com/google/cel-go/common"
+	"github.com/google/cel-go/common/ast"
+	"github.com/google/cel-go/common/operators"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 )
@@ -177,6 +180,50 @@ func percentile(xs []float64, q float64) float64 {
 	return s[rank-1]
 }
 
-// aggMacros is implemented in Task 3 and Task 4; start with an empty set so the
-// engine compiles. Replace this stub when adding the macros.
-func aggMacros() []celgo.EnvOption { return nil }
+// aggMacros registers the aggregate readability macros. Each is a global macro
+// over the implicit `runs` binding; they expand into ordinary comprehensions (the
+// same machinery CEL's own filter/map use) plus the backing __*__ functions.
+func aggMacros() []celgo.EnvOption {
+	return []celgo.EnvOption{
+		celgo.Macros(
+			celgo.GlobalMacro("count", 2, countExpander),
+			celgo.GlobalMacro("rate", 2, rateExpander),
+		),
+	}
+}
+
+// iterVar extracts the iteration-variable name from a macro's first argument.
+func iterVar(eh celgo.MacroExprFactory, arg ast.Expr) (string, *common.Error) {
+	if arg.Kind() != ast.IdentKind {
+		return "", eh.NewError(arg.ID(), "first argument must be an identifier (e.g. r)")
+	}
+	return arg.AsIdent(), nil
+}
+
+// filterList builds `runs.filter(<v>, <pred>)` as a comprehension yielding a list.
+func filterList(eh celgo.MacroExprFactory, v string, pred ast.Expr) ast.Expr {
+	accu := eh.AccuIdentName()
+	init := eh.NewList()
+	cond := eh.NewLiteral(types.True)
+	step := eh.NewCall(operators.Add, eh.NewAccuIdent(), eh.NewList(eh.NewIdent(v)))
+	step = eh.NewCall(operators.Conditional, pred, step, eh.NewAccuIdent())
+	return eh.NewComprehension(eh.NewIdent(VarRuns), v, accu, init, cond, step, eh.NewAccuIdent())
+}
+
+func countExpander(eh celgo.MacroExprFactory, _ ast.Expr, args []ast.Expr) (ast.Expr, *common.Error) {
+	v, err := iterVar(eh, args[0])
+	if err != nil {
+		return nil, err
+	}
+	return eh.NewCall("size", filterList(eh, v, args[1])), nil
+}
+
+func rateExpander(eh celgo.MacroExprFactory, _ ast.Expr, args []ast.Expr) (ast.Expr, *common.Error) {
+	v, err := iterVar(eh, args[0])
+	if err != nil {
+		return nil, err
+	}
+	num := eh.NewCall("double", eh.NewCall("size", filterList(eh, v, args[1])))
+	den := eh.NewCall("double", eh.NewCall("size", eh.NewIdent(VarRuns)))
+	return eh.NewCall(operators.Divide, num, den), nil
+}

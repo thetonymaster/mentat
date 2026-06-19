@@ -87,3 +87,37 @@ func TestAggregateEmptySampleErrors(t *testing.T) {
 		})
 	}
 }
+
+func runsFixture() map[string]any {
+	// 4 runs; "search" present in 3; latencyMs 100,200,300,400.
+	mk := func(tools []any, lat int64, failed bool) map[string]any {
+		return map[string]any{"tools": tools, "latencyMs": lat, "failed": failed}
+	}
+	return map[string]any{"runs": []any{
+		mk([]any{"search", "summarize"}, 100, false),
+		mk([]any{"summarize"}, 200, false),
+		mk([]any{"search"}, 300, false),
+		mk([]any{"search", "summarize"}, 400, false),
+	}}
+}
+
+func TestRateCountMacros(t *testing.T) {
+	tests := []struct {
+		name string
+		expr string
+		want bool
+	}{
+		{"count present", `count(r, "search" in r.tools) == 3`, true},
+		{"count absent predicate", `count(r, r.failed) == 0`, true},
+		{"rate threshold met", `rate(r, "search" in r.tools) >= 0.75`, true},
+		{"rate threshold missed", `rate(r, "search" in r.tools) >= 0.8`, false},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			if got := evalAgg(t, tt.expr, runsFixture()); got != tt.want {
+				t.Fatalf("%q = %v, want %v", tt.expr, got, tt.want)
+			}
+		})
+	}
+}
