@@ -3,6 +3,7 @@ package comparator
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	celengine "github.com/thetonymaster/mentat/internal/cel"
@@ -110,6 +111,11 @@ func (c *aggregateCEL) record(ev core.Evidence, fields map[string]bool) (map[str
 		"answer":      ev.Output.Answer,
 	}
 	if ev.Failed || ev.Trace == nil {
+		// Provide empty lists so membership checks (e.g. "x" in r.tools) return false
+		// rather than erroring on absent keys. Numeric fields (latencyMs, cost, tokens)
+		// are intentionally absent — accessing them on a failed run is a hard error.
+		rec["tools"] = []any{}
+		rec["services"] = []any{}
 		return rec, nil
 	}
 	if fields["tokens"] {
@@ -157,7 +163,14 @@ func toAnyList(ss []string) []any {
 	return out
 }
 
-// aggregateReason is replaced with the per-run table in Task 6.
-func aggregateReason(expr string, _ []core.Evidence) string {
-	return fmt.Sprintf("aggregate false: %q", expr)
+// aggregateReason renders the failing expression plus a compact per-run table so a
+// reader can copy a test.run.id into /traces to inspect the offending run (§8).
+func aggregateReason(expr string, evs []core.Evidence) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "aggregate false: %s  (%d runs)\n", expr, len(evs))
+	fmt.Fprintf(&b, "  run  test.run.id            failed  kind\n")
+	for i, ev := range evs {
+		fmt.Fprintf(&b, "  %-3d  %-22s %-7t %s\n", i, ev.RunID, ev.Failed, ev.FailureKind)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
