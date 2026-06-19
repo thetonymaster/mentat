@@ -35,6 +35,9 @@ func Initializer(eng *engine.Engine) func(*godog.ScenarioContext) {
 		sc.Step(`^the result contains "([^"]*)"$`, w.resultContains)
 		sc.Step(`^the result equals "([^"]*)"$`, w.resultEquals)
 		sc.Step(`^the response status is (\d+)$`, w.responseStatus)
+		sc.Step(`^the services are called in order:$`, w.servicesInOrder)
+		sc.Step(`^the service "([^"]+)" is never called$`, w.serviceNeverCalled)
+		sc.Step(`^the response body json-contains:$`, w.responseBodyJSONContains)
 	}
 }
 
@@ -120,4 +123,30 @@ func (w *world) resultEquals(s string) error {
 
 func (w *world) responseStatus(code int) error {
 	return w.check("result", comparator.ResultExpectation{Matcher: "status", Want: fmt.Sprintf("%d", code)})
+}
+
+func (w *world) servicesInOrder(tbl *godog.Table) error {
+	var order []string
+	for i, row := range tbl.Rows {
+		if len(row.Cells) == 0 {
+			return fmt.Errorf("services-in-order: table row %d has no cells", i)
+		}
+		svc := strings.TrimSpace(row.Cells[0].Value)
+		if svc == "" {
+			return fmt.Errorf("services-in-order: table row %d has empty service name", i)
+		}
+		order = append(order, svc)
+	}
+	if len(order) == 0 {
+		return fmt.Errorf("services-in-order: at least one service is required")
+	}
+	return w.check("sequence", comparator.SequenceExpectation{Kind: "service", Order: order})
+}
+
+func (w *world) serviceNeverCalled(name string) error {
+	return w.check("sequence", comparator.SequenceExpectation{Kind: "service", Forbidden: []string{name}})
+}
+
+func (w *world) responseBodyJSONContains(doc *godog.DocString) error {
+	return w.check("result", comparator.ResultExpectation{Matcher: "json-subset", Want: doc.Content})
 }
