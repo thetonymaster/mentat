@@ -98,6 +98,9 @@ func (w *world) drive(args []string) error {
 }
 
 func (w *world) check(name string, exp core.Expectation) error {
+	if w.n > 1 {
+		return fmt.Errorf("single-run step in a @runs(%d) scenario evaluates only the first run; use \"the runs satisfy\" for assertions across all runs", w.n)
+	}
 	c, ok := w.eng.Comparator(name)
 	if !ok {
 		return fmt.Errorf("no comparator %q", name)

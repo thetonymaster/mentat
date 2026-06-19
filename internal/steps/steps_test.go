@@ -737,6 +737,42 @@ func TestMultirunGoesGreenOnGoodDistribution(t *testing.T) {
 	}
 }
 
+// TestSingleRunStepRejectedInMultirunScenario is the L3 meta-test that proves a
+// single-run comparator step used inside a @runs(N>1) scenario is a hard,
+// descriptive error (no silent first-run-only evaluation). The feature uses
+// "total tokens are under 5000" which would PASS against happyTrace's 1800 tokens
+// if the guard were absent — a GREEN result here means the guard is missing.
+func TestSingleRunStepRejectedInMultirunScenario(t *testing.T) {
+	feature := `Feature: mixed-grammar
+  @runs(2)
+  Scenario: single-run step under @runs is rejected
+    Given the agent target "bot"
+    When I run scenario "x"
+    Then total tokens are under 5000
+`
+	var out bytes.Buffer
+	suite := godog.TestSuite{
+		ScenarioInitializer: Initializer(runsEngine(t, happyTrace())),
+		Options: &godog.Options{
+			Format:          "pretty",
+			Output:          &out,
+			Strict:          true,
+			FeatureContents: []godog.Feature{{Name: "mixed-grammar", Contents: []byte(feature)}},
+		},
+	}
+	status := suite.Run()
+	if status == 0 {
+		t.Fatalf("expected RED: single-run step inside @runs(2) must be rejected, but suite passed\n%s", out.String())
+	}
+	outStr := out.String()
+	if !strings.Contains(outStr, "@runs(2)") {
+		t.Fatalf("expected error to mention @runs(2), got:\n%s", outStr)
+	}
+	if !strings.Contains(outStr, "the runs satisfy") {
+		t.Fatalf("expected error to mention \"the runs satisfy\", got:\n%s", outStr)
+	}
+}
+
 // TestStepMethods exercises each step method that the happy-scenario godog run
 // does not reach, using a crafted Evidence so comparators have the data they need.
 func TestStepMethods(t *testing.T) {
