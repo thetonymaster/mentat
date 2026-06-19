@@ -148,3 +148,37 @@ func TestCELNilTraceReferencedError(t *testing.T) {
 		t.Fatal("want error when a trace var is referenced but Trace is nil, got nil")
 	}
 }
+
+func TestCELBodyHandling(t *testing.T) {
+	tests := []struct {
+		name     string
+		expr     string
+		body     []byte
+		wantPass bool
+		wantErr  bool
+		errSub   string
+	}{
+		{name: "valid json field match", expr: `body.status == "confirmed"`, body: []byte(`{"status":"confirmed"}`), wantPass: true},
+		{name: "valid json field mismatch", expr: `body.status == "confirmed"`, body: []byte(`{"status":"declined"}`), wantPass: false},
+		{name: "empty body binds null", expr: `body == null`, body: []byte(``), wantPass: true},
+		{name: "invalid json referenced is hard error", expr: `body.x == 1`, body: []byte(`not json`), wantErr: true, errSub: "not valid JSON"},
+		{name: "invalid json unreferenced is no error", expr: `status == 201`, body: []byte(`not json`), wantPass: true},
+		{name: "numeric body field as double", expr: `body.count == 3.0`, body: []byte(`{"count":3}`), wantPass: true},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			ev := core.Evidence{Output: core.Output{Status: 201, Body: tt.body}}
+			v, err := NewCEL().Compare(context.Background(), ev, CELExpectation{Expr: tt.expr})
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if tt.errSub != "" && (err == nil || !strings.Contains(err.Error(), tt.errSub)) {
+				t.Fatalf("want error containing %q, got %v", tt.errSub, err)
+			}
+			if !tt.wantErr && v.Pass != tt.wantPass {
+				t.Fatalf("Pass=%v want %v; reasons=%v", v.Pass, tt.wantPass, v.Reasons)
+			}
+		})
+	}
+}

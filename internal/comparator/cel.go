@@ -2,6 +2,7 @@ package comparator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -156,11 +157,36 @@ func bindVars(refs []string, ev core.Evidence) (map[string]any, error) {
 				return nil, fmt.Errorf("cel: binding services: %w", err)
 			}
 			vars[name] = seq
+		case celengine.VarBody:
+			v, err := parseBody(ev.Output.Body)
+			if err != nil {
+				return nil, err
+			}
+			vars[name] = v
 		default:
 			return nil, fmt.Errorf("cel: unknown variable %q in references", name)
 		}
 	}
 	return vars, nil
+}
+
+// parseBody implements §6: body is parsed as JSON only when referenced.
+//
+//	empty   → null (binds to nil)
+//	valid   → parsed value (dyn)
+//	invalid → hard, descriptive error (never a guessed empty object)
+//
+// JSON numbers decode to float64 (CEL double); compare with a double literal
+// (body.count == 3.0) or int(body.count) == 3.
+func parseBody(body []byte) (any, error) {
+	if len(strings.TrimSpace(string(body))) == 0 {
+		return nil, nil
+	}
+	var v any
+	if err := json.Unmarshal(body, &v); err != nil {
+		return nil, fmt.Errorf("cel: response body is not valid JSON: %w", err)
+	}
+	return v, nil
 }
 
 // reason renders the §9 failure message: the expression plus a snapshot of the
