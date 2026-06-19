@@ -241,65 +241,71 @@ func TestToolsInOrderEmptyCell(t *testing.T) {
 	}
 }
 
-// TestCELStepPasses exercises the inline + docstring "the run satisfies" grammar
-// against the fake engine. happyTrace has tools search/summarize and 1800 tokens;
-// the shell target echoes "hi" so answer == 'hi'. Inline CEL uses single-quoted
-// strings (the step regex forbids embedded double quotes); the docstring form
-// may use double quotes freely.
-func TestCELStepPasses(t *testing.T) {
-	eng := buildEng(t, happyTrace())
-	feature := `Feature: cel
+// TestCELStep exercises the inline + docstring "the run satisfies" grammar
+// end-to-end through a godog suite: a true expression passes the suite; a false
+// one fails it and surfaces the §9 value snapshot. happyTrace has tools
+// search/summarize and 1800 tokens; buildEng's shell target prints "done", so
+// answer == 'done'. Inline CEL uses single-quoted strings (the step regex
+// forbids embedded double quotes); the docstring form may use double quotes.
+func TestCELStep(t *testing.T) {
+	tests := []struct {
+		name     string
+		feature  string
+		wantPass bool
+		contains []string // substrings required in the suite output (failure cases)
+	}{
+		{
+			name: "inline and docstring both satisfied",
+			feature: `Feature: cel
   Scenario: satisfies inline and docstring
     Given the agent target "svc"
     When I run scenario "happy"
-    Then the run satisfies "answer == 'hi' && tokens < 5000"
+    Then the run satisfies "answer == 'done' && tokens < 5000"
     And the run satisfies:
       """
       "search" in tools && "summarize" in tools
       """
-`
-	// buildEng's target runs `sh -c echo done`; override answer expectation:
-	// the buildEng shell prints "done", so assert on that instead of "hi".
-	feature = strings.Replace(feature, "answer == 'hi'", "answer == 'done'", 1)
-
-	var out bytes.Buffer
-	suite := godog.TestSuite{
-		ScenarioInitializer: Initializer(eng),
-		Options: &godog.Options{
-			Format:          "pretty",
-			Output:          &out,
-			FeatureContents: []godog.Feature{{Name: "cel", Contents: []byte(feature)}},
+`,
+			wantPass: true,
 		},
-	}
-	if status := suite.Run(); status != 0 {
-		t.Fatalf("expected passing suite, status=%d\n%s", status, out.String())
-	}
-}
-
-// TestCELStepGoesRedOnFalse proves the godog layer reports non-zero when a cel
-// expression is false, and surfaces the §9 value snapshot.
-func TestCELStepGoesRedOnFalse(t *testing.T) {
-	eng := buildEng(t, happyTrace())
-	feature := `Feature: cel-red
+		{
+			name: "false expression fails with value snapshot",
+			feature: `Feature: cel-red
   Scenario: false expression fails
     Given the agent target "svc"
     When I run scenario "happy"
     Then the run satisfies "tokens < 1"
-`
-	var out bytes.Buffer
-	suite := godog.TestSuite{
-		ScenarioInitializer: Initializer(eng),
-		Options: &godog.Options{
-			Format:          "pretty",
-			Output:          &out,
-			FeatureContents: []godog.Feature{{Name: "cel-red", Contents: []byte(feature)}},
+`,
+			wantPass: false,
+			contains: []string{"cel false", "tokens=1800"},
 		},
 	}
-	if status := suite.Run(); status == 0 {
-		t.Fatalf("expected failing suite, got 0\n%s", out.String())
-	}
-	if s := out.String(); !strings.Contains(s, "cel false") || !strings.Contains(s, "tokens=1800") {
-		t.Fatalf("expected 'cel false' + 'tokens=1800' in output, got:\n%s", s)
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			eng := buildEng(t, happyTrace())
+			var out bytes.Buffer
+			suite := godog.TestSuite{
+				ScenarioInitializer: Initializer(eng),
+				Options: &godog.Options{
+					Format:          "pretty",
+					Output:          &out,
+					FeatureContents: []godog.Feature{{Name: tt.name, Contents: []byte(tt.feature)}},
+				},
+			}
+			status := suite.Run()
+			if tt.wantPass && status != 0 {
+				t.Fatalf("expected passing suite, status=%d\n%s", status, out.String())
+			}
+			if !tt.wantPass && status == 0 {
+				t.Fatalf("expected failing suite, got 0\n%s", out.String())
+			}
+			for _, sub := range tt.contains {
+				if !strings.Contains(out.String(), sub) {
+					t.Fatalf("expected %q in suite output, got:\n%s", sub, out.String())
+				}
+			}
+		})
 	}
 }
 
