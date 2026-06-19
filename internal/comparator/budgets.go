@@ -114,9 +114,25 @@ func tokenSum(t *trace.Trace) (int, error) {
 // via the shared function — §5). A malformed/out-of-range value is a hard error.
 // When the pricing table is empty, derivation is skipped and the legacy
 // emitted-cost-only behaviour applies verbatim.
+//
+// Model resolution order for a token-bearing span that carries no emitted cost:
+//  1. If the span has its own non-empty gen_ai.request.model → use it (per-span wins).
+//  2. Else fall back to the trace's single distinct gen_ai.request.model across all spans
+//     (trace-level fallback for the OTel-GenAI split-span layout where the aggregated
+//     invoke_agent span carries tokens but no model).
+//  3. If the trace has two or more distinct models → hard error (ambiguous; invariant 4).
+//  4. If no model is found anywhere → the existing "not in pricing table" error fires.
 func costSum(t *trace.Trace, pricing core.Pricing) (float64, error) {
 	cost := 0.0
 	seen := false
+
+	// Pre-compute the trace-level model fallback once, only when derivation is possible.
+	var fallbackModel string
+	var ambiguous bool
+	if len(pricing) > 0 {
+		fallbackModel, ambiguous = traceModel(t)
+	}
+
 	for i, s := range t.Spans {
 		raw := s.Attr(genai.CostUSD)
 		if raw != "" {
@@ -147,7 +163,14 @@ func costSum(t *trace.Trace, pricing core.Pricing) (float64, error) {
 		if !inOK && !outOK {
 			continue // not an LLM call (e.g. a tool/service span) — contributes 0
 		}
+		// Resolve model: per-span wins; fall back to trace-level when absent.
 		model := s.Attr(genai.RequestModel)
+		if model == "" {
+			if ambiguous {
+				return 0, fmt.Errorf("budgets: span[%d] (%q): cannot derive cost: span carries no %s and the trace has multiple distinct models", i, s.Name, genai.RequestModel)
+			}
+			model = fallbackModel
+		}
 		rate, ok := pricing[model]
 		if model == "" || !ok {
 			return 0, fmt.Errorf("budgets: span[%d] (%q): cannot derive cost: model %q not in pricing table", i, s.Name, model)
@@ -159,6 +182,29 @@ func costSum(t *trace.Trace, pricing core.Pricing) (float64, error) {
 		return 0, fmt.Errorf("budgets: cost not available (no %s attribute); add a pricing table or drop the cost assertion", genai.CostUSD)
 	}
 	return cost, nil
+}
+
+// traceModel resolves the trace-level fallback model for token-bearing spans
+// that carry no gen_ai.request.model of their own (e.g. the aggregated invoke_agent
+// span in the OTel-GenAI split-span layout). It returns the single distinct
+// gen_ai.request.model across all spans; ambiguous is true when two or more
+// distinct models appear, in which case aggregate tokens cannot be attributed
+// to one rate and the caller must hard-error (invariant 4 — no guessed rate).
+func traceModel(t *trace.Trace) (model string, ambiguous bool) {
+	for _, s := range t.Spans {
+		m := s.Attr(genai.RequestModel)
+		if m == "" {
+			continue
+		}
+		if model == "" {
+			model = m
+			continue
+		}
+		if m != model {
+			return "", true
+		}
+	}
+	return model, false
 }
 
 // tokenAttr parses a non-negative integer token attribute. ok is false when the
