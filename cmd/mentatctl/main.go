@@ -42,10 +42,14 @@ func splitDomainVerb(args []string) (domain, sub string, rest []string, err erro
 
 // checkDomainVerb rejects a domain-specific verb used under the wrong domain:
 // `tools` is agent-only, `services` is service-only. Shared verbs (run, trace,
-// replay, diff) are valid under both domains and pass through. Checked before any
-// config/store is built so an invalid combination fails fast.
+// replay, diff) are valid under both domains and pass through. An unknown verb is
+// rejected here too. Checked before any config/store is built so an invalid verb
+// or combination fails fast with the right CLI error instead of a config-load
+// error from deps().
 func checkDomainVerb(domain, sub string) error {
 	switch sub {
+	case "run", "trace", "replay", "diff":
+		return nil
 	case "tools":
 		if domain != "agent" {
 			return fmt.Errorf("verb %q is only valid for the agent domain", sub)
@@ -54,6 +58,8 @@ func checkDomainVerb(domain, sub string) error {
 		if domain != "service" {
 			return fmt.Errorf("verb %q is only valid for the service domain", sub)
 		}
+	default:
+		return fmt.Errorf("unknown subcommand %q", sub)
 	}
 	return nil
 }

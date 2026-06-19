@@ -12,6 +12,7 @@ func TestCheckDomainVerb(t *testing.T) {
 		sub     string
 		wantErr string // empty means nil error expected
 	}{
+		{name: "unknown verb errors before deps", domain: "agent", sub: "bogus", wantErr: "unknown subcommand"},
 		{name: "service+tools errors", domain: "service", sub: "tools", wantErr: "only valid for the agent domain"},
 		{name: "agent+services errors", domain: "agent", sub: "services", wantErr: "only valid for the service domain"},
 		{name: "agent+tools ok", domain: "agent", sub: "tools", wantErr: ""},
