@@ -98,10 +98,25 @@ func (c *celComparator) Compare(_ context.Context, ev core.Evidence, e core.Expe
 	return core.Verdict{Pass: false, Reasons: []string{reason(exp.Expr, refs, vars)}}, nil
 }
 
+// traceVars are the schema variables that require ev.Trace.
+var traceVars = map[string]bool{
+	celengine.VarTokens:    true,
+	celengine.VarCost:      true,
+	celengine.VarErrors:    true,
+	celengine.VarLatencyMs: true,
+	celengine.VarTools:     true,
+	celengine.VarServices:  true,
+}
+
 // bindVars binds ONLY the referenced variables, so a variable an expression does
 // not mention is never computed. Trace aggregates and body JSON are added in
 // later tasks.
 func bindVars(refs []string, ev core.Evidence) (map[string]any, error) {
+	for _, name := range refs {
+		if traceVars[name] && ev.Trace == nil {
+			return nil, fmt.Errorf("cel: binding %q: evidence has no trace", name)
+		}
+	}
 	vars := make(map[string]any, len(refs))
 	for _, name := range refs {
 		switch name {
@@ -113,6 +128,34 @@ func bindVars(refs []string, ev core.Evidence) (map[string]any, error) {
 			vars[name] = string(ev.Output.Body)
 		case celengine.VarAnswer:
 			vars[name] = ev.Output.Answer
+		case celengine.VarTokens:
+			n, err := tokenSum(ev.Trace)
+			if err != nil {
+				return nil, fmt.Errorf("cel: binding tokens: %w", err)
+			}
+			vars[name] = int64(n)
+		case celengine.VarCost:
+			v, err := costSum(ev.Trace)
+			if err != nil {
+				return nil, fmt.Errorf("cel: binding cost: %w", err)
+			}
+			vars[name] = v
+		case celengine.VarErrors:
+			vars[name] = int64(errorCount(ev.Trace))
+		case celengine.VarLatencyMs:
+			vars[name] = ev.Trace.Envelope().Milliseconds() // already int64
+		case celengine.VarTools:
+			seq, err := toolSequence(ev.Trace)
+			if err != nil {
+				return nil, fmt.Errorf("cel: binding tools: %w", err)
+			}
+			vars[name] = seq
+		case celengine.VarServices:
+			seq, err := serviceSequence(ev.Trace)
+			if err != nil {
+				return nil, fmt.Errorf("cel: binding services: %w", err)
+			}
+			vars[name] = seq
 		default:
 			return nil, fmt.Errorf("cel: unknown variable %q in references", name)
 		}

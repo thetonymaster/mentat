@@ -2,10 +2,15 @@ package comparator
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/genai"
+	"github.com/thetonymaster/mentat/internal/store"
+	"github.com/thetonymaster/mentat/internal/trace"
 )
 
 func TestCELName(t *testing.T) {
@@ -53,5 +58,93 @@ func TestCELOutputVars(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCELTraceVars(t *testing.T) {
+	tests := []struct {
+		name      string
+		dir       string
+		fixture   string
+		expr      string
+		wantPass  bool
+		reasonSub string
+	}{
+		{name: "tokens under cap (researchbot happy 1800)", dir: "researchbot", fixture: "happy.json", expr: `tokens < 5000`, wantPass: true},
+		{name: "tokens over cap (over_budget) shows value", dir: "researchbot", fixture: "over_budget.json", expr: `tokens < 5000`, wantPass: false, reasonSub: "tokens="},
+		{name: "cost under cap (researchbot happy 0.018)", dir: "researchbot", fixture: "happy.json", expr: `cost < 1.0`, wantPass: true},
+		{name: "tools present via macro", dir: "researchbot", fixture: "happy.json", expr: `"search" in tools && "summarize" in tools`, wantPass: true},
+		{name: "errors zero (researchbot happy)", dir: "researchbot", fixture: "happy.json", expr: `errors == 0`, wantPass: true},
+		{name: "services exclude legacy (orderflow happy)", dir: "orderflow", fixture: "happy.json", expr: `!("legacy-pricing" in services)`, wantPass: true},
+		{name: "services include legacy (orderflow legacy_path) red", dir: "orderflow", fixture: "legacy_path.json", expr: `!("legacy-pricing" in services)`, wantPass: false, reasonSub: "services="},
+		{name: "errors present (orderflow payment_decline)", dir: "orderflow", fixture: "payment_decline.json", expr: `errors > 0`, wantPass: true},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := os.ReadFile("../../testdata/traces/" + tt.dir + "/" + tt.fixture)
+			if err != nil {
+				t.Fatalf("read fixture: %v", err)
+			}
+			tr, err := store.LoadFixture(data)
+			if err != nil {
+				t.Fatalf("parse fixture: %v", err)
+			}
+			ev := core.Evidence{Trace: tr}
+			v, err := NewCEL().Compare(context.Background(), ev, CELExpectation{Expr: tt.expr})
+			if err != nil {
+				t.Fatalf("Compare(%q): %v", tt.expr, err)
+			}
+			if v.Pass != tt.wantPass {
+				t.Fatalf("Pass=%v want %v; reasons=%v", v.Pass, tt.wantPass, v.Reasons)
+			}
+			if tt.reasonSub != "" && (len(v.Reasons) == 0 || !strings.Contains(v.Reasons[0], tt.reasonSub)) {
+				t.Fatalf("want reason containing %q, got %v", tt.reasonSub, v.Reasons)
+			}
+		})
+	}
+}
+
+// TestCELCostAbsentHardError pins decision 1: referencing cost on a trace with
+// no cost_usd is a hard error (reuses budgets' costSum), never a 0.0 fallback.
+func TestCELCostAbsentHardError(t *testing.T) {
+	tr := &trace.Trace{Spans: []*trace.Span{{
+		Name:  "invoke_agent",
+		Attrs: map[string]string{genai.Op: genai.OpInvokeAgent, genai.InTokens: "100"},
+	}}}
+	_, err := NewCEL().Compare(context.Background(), core.Evidence{Trace: tr}, CELExpectation{Expr: `cost < 1.0`})
+	if err == nil {
+		t.Fatal("want hard error for cost-absent trace, got nil")
+	}
+	if !strings.Contains(err.Error(), "cost not available") {
+		t.Fatalf("want 'cost not available' error, got %v", err)
+	}
+}
+
+// TestCELLatencyCraftedTrace: goldens carry no timestamps (latencyMs==0), so
+// latency is exercised with a hand-built trace that has real Start/End.
+func TestCELLatencyCraftedTrace(t *testing.T) {
+	now := time.Now()
+	tr := &trace.Trace{Spans: []*trace.Span{{
+		Name:  "invoke_agent",
+		Start: now,
+		End:   now.Add(50 * time.Millisecond),
+		Attrs: map[string]string{genai.Op: genai.OpInvokeAgent},
+	}}}
+	v, err := NewCEL().Compare(context.Background(), core.Evidence{Trace: tr}, CELExpectation{Expr: `latencyMs >= 50`})
+	if err != nil {
+		t.Fatalf("Compare: %v", err)
+	}
+	if !v.Pass {
+		t.Fatalf("want pass for latencyMs>=50; reasons=%v", v.Reasons)
+	}
+}
+
+// TestCELNilTraceReferencedError: a referenced trace var with a nil Trace is a
+// descriptive error, not a panic (no silent fallback).
+func TestCELNilTraceReferencedError(t *testing.T) {
+	_, err := NewCEL().Compare(context.Background(), core.Evidence{}, CELExpectation{Expr: `tokens < 5000`})
+	if err == nil {
+		t.Fatal("want error when a trace var is referenced but Trace is nil, got nil")
 	}
 }
