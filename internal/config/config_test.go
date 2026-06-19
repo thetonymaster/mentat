@@ -119,6 +119,29 @@ func TestLoadStore(t *testing.T) {
 	}
 }
 
+func TestLoadPricing(t *testing.T) {
+	data := []byte(`
+store: tempo
+pricing:
+  claude-opus-4-8:   { inputPerMTok: 15.0, outputPerMTok: 75.0 }
+  claude-sonnet-4-6: { inputPerMTok: 3.0,  outputPerMTok: 15.0 }
+`)
+	cfg, err := Load(data)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	opus, ok := cfg.Pricing["claude-opus-4-8"]
+	if !ok {
+		t.Fatalf("pricing missing claude-opus-4-8; got %+v", cfg.Pricing)
+	}
+	if opus.InputPerMTok != 15.0 || opus.OutputPerMTok != 75.0 {
+		t.Fatalf("opus rate = %+v, want {15 75}", opus)
+	}
+	if cfg.Pricing["claude-sonnet-4-6"].OutputPerMTok != 15.0 {
+		t.Fatalf("sonnet outputPerMTok = %v, want 15", cfg.Pricing["claude-sonnet-4-6"].OutputPerMTok)
+	}
+}
+
 func TestLoadHTTPTarget(t *testing.T) {
 	tests := []struct {
 		name        string

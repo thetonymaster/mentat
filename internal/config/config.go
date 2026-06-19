@@ -13,6 +13,7 @@ type Config struct {
 	OTLPEndpoint string            `yaml:"otlpEndpoint"`
 	Poll         PollSpec          `yaml:"poll"`
 	Targets      map[string]Target `yaml:"targets"`
+	Pricing      Pricing           `yaml:"pricing"`
 }
 
 type Endpoint struct {
@@ -38,6 +39,17 @@ type HTTP struct {
 	Method  string            `yaml:"method"`
 	Headers map[string]string `yaml:"headers"`
 }
+
+// ModelRate is the YAML form of a per-model price (USD per million tokens). The
+// engine converts config.Pricing to the transport-free core.Pricing so the
+// comparator layer keeps importing only core/genai/trace, never config.
+type ModelRate struct {
+	InputPerMTok  float64 `yaml:"inputPerMTok"`
+	OutputPerMTok float64 `yaml:"outputPerMTok"`
+}
+
+// Pricing maps a model name to its rate.
+type Pricing map[string]ModelRate
 
 var defaultConcurrency = map[string]int{"shell": 1, "mcp": 1, "http": 8, "grpc": 8}
 

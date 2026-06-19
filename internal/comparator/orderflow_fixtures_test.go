@@ -95,7 +95,7 @@ func TestOrderflowBudgetsError(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ev := loadOrderflowGolden(t, tt.scenario)
 			zero := 0
-			v, err := NewBudgets().Compare(context.Background(), *ev, BudgetExpectation{MaxErrors: &zero})
+			v, err := NewBudgets(nil).Compare(context.Background(), *ev, BudgetExpectation{MaxErrors: &zero})
 			if err != nil {
 				t.Fatalf("Compare: %v", err)
 			}

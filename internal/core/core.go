@@ -59,6 +59,17 @@ type HTTPSpec struct {
 	Headers map[string]string
 }
 
+// ModelRate is a per-model price in USD per million tokens (spec §4.1). Mirrors
+// config.ModelRate, kept in core so the comparator layer never imports config.
+type ModelRate struct {
+	InputPerMTok  float64
+	OutputPerMTok float64
+}
+
+// Pricing maps a gen_ai.request.model value to its rate. Used to derive cost
+// from token counts when a span carries no emitted gen_ai.usage.cost_usd (§4.3).
+type Pricing map[string]ModelRate
+
 type RunResult struct {
 	RunID string
 	// PrimaryTraceID is reserved for a future traceparent complement (spec §5):

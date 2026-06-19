@@ -7,7 +7,8 @@ const (
 	ToolName  = "gen_ai.tool.name"
 	InTokens  = "gen_ai.usage.input_tokens"
 	OutTokens = "gen_ai.usage.output_tokens"
-	CostUSD   = "gen_ai.usage.cost_usd"
+	CostUSD      = "gen_ai.usage.cost_usd"
+	RequestModel = "gen_ai.request.model"
 
 	OpInvokeAgent = "invoke_agent"
 	OpChat        = "chat"

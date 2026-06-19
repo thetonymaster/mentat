@@ -103,7 +103,7 @@ func TestFixtureBudgets(t *testing.T) {
 			}
 
 			ev := core.Evidence{Trace: tr}
-			v, err := NewBudgets().Compare(context.Background(), ev, BudgetExpectation{MaxTokens: IntPtr(tt.maxTokens)})
+			v, err := NewBudgets(nil).Compare(context.Background(), ev, BudgetExpectation{MaxTokens: IntPtr(tt.maxTokens)})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}

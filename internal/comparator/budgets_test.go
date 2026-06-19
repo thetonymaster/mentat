@@ -104,7 +104,7 @@ func durPtr(d time.Duration) *time.Duration { return &d }
 
 func TestBudgetsPassesUnderTokenCap(t *testing.T) {
 	ev := core.Evidence{Trace: tokenTrace(1200, 600)}
-	v, err := NewBudgets().Compare(context.Background(), ev, BudgetExpectation{MaxTokens: IntPtr(5000)})
+	v, err := NewBudgets(nil).Compare(context.Background(), ev, BudgetExpectation{MaxTokens: IntPtr(5000)})
 	if err != nil || !v.Pass {
 		t.Fatalf("want pass, got %+v err=%v", v, err)
 	}
@@ -112,7 +112,7 @@ func TestBudgetsPassesUnderTokenCap(t *testing.T) {
 
 func TestBudgetsFailsOverTokenCap(t *testing.T) {
 	ev := core.Evidence{Trace: tokenTrace(9000, 4000)}
-	v, err := NewBudgets().Compare(context.Background(), ev, BudgetExpectation{MaxTokens: IntPtr(5000)})
+	v, err := NewBudgets(nil).Compare(context.Background(), ev, BudgetExpectation{MaxTokens: IntPtr(5000)})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestBudgetsFailsOverTokenCap(t *testing.T) {
 }
 
 func TestBudgetsName(t *testing.T) {
-	if got := NewBudgets().Name(); got != "budgets" {
+	if got := NewBudgets(nil).Name(); got != "budgets" {
 		t.Fatalf("Name() = %q, want %q", got, "budgets")
 	}
 }
@@ -133,7 +133,7 @@ func TestBudgetsName(t *testing.T) {
 // Pins the precise error the malformed value produces.
 func TestBudgetsMalformedOnlyCostIsInvalidNotUnavailable(t *testing.T) {
 	ev := core.Evidence{Trace: rawAttrTrace(genai.CostUSD, "free")}
-	_, err := NewBudgets().Compare(context.Background(), ev, BudgetExpectation{MaxCostUSD: floatPtr(0.10)})
+	_, err := NewBudgets(nil).Compare(context.Background(), ev, BudgetExpectation{MaxCostUSD: floatPtr(0.10)})
 	if err == nil {
 		t.Fatal("want error for malformed-only cost_usd, got nil")
 	}
@@ -300,7 +300,7 @@ func TestBudgetsCompare(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := NewBudgets().Compare(context.Background(), tt.ev, tt.exp)
+			got, err := NewBudgets(nil).Compare(context.Background(), tt.ev, tt.exp)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err = %v, wantErr = %v", err, tt.wantErr)
 			}

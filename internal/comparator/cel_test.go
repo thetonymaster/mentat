@@ -14,13 +14,13 @@ import (
 )
 
 func TestCELName(t *testing.T) {
-	if got := NewCEL().Name(); got != "cel" {
+	if got := NewCEL(nil).Name(); got != "cel" {
 		t.Fatalf("Name() = %q, want %q", got, "cel")
 	}
 }
 
 func TestCELWrongExpectationType(t *testing.T) {
-	_, err := NewCEL().Compare(context.Background(), core.Evidence{}, "not a CELExpectation")
+	_, err := NewCEL(nil).Compare(context.Background(), core.Evidence{}, "not a CELExpectation")
 	if err == nil {
 		t.Fatal("want error for wrong expectation type, got nil")
 	}
@@ -45,7 +45,7 @@ func TestCELOutputVars(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			ev := core.Evidence{Output: tt.out}
-			v, err := NewCEL().Compare(context.Background(), ev, CELExpectation{Expr: tt.expr})
+			v, err := NewCEL(nil).Compare(context.Background(), ev, CELExpectation{Expr: tt.expr})
 			if err != nil {
 				t.Fatalf("Compare(%q): %v", tt.expr, err)
 			}
@@ -91,7 +91,7 @@ func TestCELTraceVars(t *testing.T) {
 				t.Fatalf("parse fixture: %v", err)
 			}
 			ev := core.Evidence{Trace: tr}
-			v, err := NewCEL().Compare(context.Background(), ev, CELExpectation{Expr: tt.expr})
+			v, err := NewCEL(nil).Compare(context.Background(), ev, CELExpectation{Expr: tt.expr})
 			if err != nil {
 				t.Fatalf("Compare(%q): %v", tt.expr, err)
 			}
@@ -112,7 +112,7 @@ func TestCELCostAbsentHardError(t *testing.T) {
 		Name:  "invoke_agent",
 		Attrs: map[string]string{genai.Op: genai.OpInvokeAgent, genai.InTokens: "100"},
 	}}}
-	_, err := NewCEL().Compare(context.Background(), core.Evidence{Trace: tr}, CELExpectation{Expr: `cost < 1.0`})
+	_, err := NewCEL(nil).Compare(context.Background(), core.Evidence{Trace: tr}, CELExpectation{Expr: `cost < 1.0`})
 	if err == nil {
 		t.Fatal("want hard error for cost-absent trace, got nil")
 	}
@@ -131,7 +131,7 @@ func TestCELLatencyCraftedTrace(t *testing.T) {
 		End:   now.Add(50 * time.Millisecond),
 		Attrs: map[string]string{genai.Op: genai.OpInvokeAgent},
 	}}}
-	v, err := NewCEL().Compare(context.Background(), core.Evidence{Trace: tr}, CELExpectation{Expr: `latencyMs >= 50`})
+	v, err := NewCEL(nil).Compare(context.Background(), core.Evidence{Trace: tr}, CELExpectation{Expr: `latencyMs >= 50`})
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestCELLatencyCraftedTrace(t *testing.T) {
 // TestCELNilTraceReferencedError: a referenced trace var with a nil Trace is a
 // descriptive error, not a panic (no silent fallback).
 func TestCELNilTraceReferencedError(t *testing.T) {
-	_, err := NewCEL().Compare(context.Background(), core.Evidence{}, CELExpectation{Expr: `tokens < 5000`})
+	_, err := NewCEL(nil).Compare(context.Background(), core.Evidence{}, CELExpectation{Expr: `tokens < 5000`})
 	if err == nil {
 		t.Fatal("want error when a trace var is referenced but Trace is nil, got nil")
 	}
@@ -172,7 +172,7 @@ func TestCELBodyHandling(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			ev := core.Evidence{Output: core.Output{Status: 201, Body: tt.body}}
-			v, err := NewCEL().Compare(context.Background(), ev, CELExpectation{Expr: tt.expr})
+			v, err := NewCEL(nil).Compare(context.Background(), ev, CELExpectation{Expr: tt.expr})
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
 			}

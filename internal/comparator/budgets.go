@@ -24,13 +24,15 @@ type BudgetExpectation struct {
 // IntPtr is a convenience helper: returns a pointer to i.
 func IntPtr(i int) *int { return &i }
 
-type budgets struct{}
+type budgets struct{ pricing core.Pricing }
 
 // NewBudgets returns a Comparator that enforces BudgetExpectation thresholds.
-func NewBudgets() core.Comparator { return budgets{} }
-func (budgets) Name() string      { return "budgets" }
+// pricing derives cost from tokens when a span carries no emitted cost (§4.3);
+// a nil/empty table preserves the emitted-cost-only behaviour.
+func NewBudgets(pricing core.Pricing) core.Comparator { return budgets{pricing: pricing} }
+func (budgets) Name() string                          { return "budgets" }
 
-func (budgets) Compare(_ context.Context, ev core.Evidence, e core.Expectation) (core.Verdict, error) {
+func (b budgets) Compare(_ context.Context, ev core.Evidence, e core.Expectation) (core.Verdict, error) {
 	exp, ok := e.(BudgetExpectation)
 	if !ok {
 		return core.Verdict{}, fmt.Errorf("budgets: expectation must be BudgetExpectation, got %T", e)
@@ -53,7 +55,7 @@ func (budgets) Compare(_ context.Context, ev core.Evidence, e core.Expectation) 
 	}
 
 	if exp.MaxCostUSD != nil {
-		cost, err := costSum(ev.Trace)
+		cost, err := costSum(ev.Trace, b.pricing)
 		if err != nil {
 			return core.Verdict{}, err
 		}
@@ -107,8 +109,10 @@ func tokenSum(t *trace.Trace) (int, error) {
 // costSum returns the total gen_ai cost in USD across all spans. Absent cost (no
 // span carries the attribute) is a hard error — the behavior the cel comparator
 // inherits (§5, cost-absent decision). A malformed or out-of-range value is also
-// a hard error.
-func costSum(t *trace.Trace) (float64, error) {
+// a hard error. When the pricing table is empty, derivation is skipped and the
+// legacy emitted-cost-only behaviour applies verbatim.
+func costSum(t *trace.Trace, pricing core.Pricing) (float64, error) {
+	_ = pricing // derivation added in Step 13
 	cost := 0.0
 	seen := false
 	for i, s := range t.Spans {
