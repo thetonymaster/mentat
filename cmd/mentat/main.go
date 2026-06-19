@@ -12,7 +12,6 @@ import (
 	"github.com/thetonymaster/mentat/internal/correlate"
 	"github.com/thetonymaster/mentat/internal/engine"
 	"github.com/thetonymaster/mentat/internal/steps"
-	"github.com/thetonymaster/mentat/internal/store"
 )
 
 func main() {
@@ -49,7 +48,11 @@ func main() {
 		StableFor: orDefault(cfg.Poll.StableFor, 3),
 	}
 	cor := correlate.New(func() string { return uuid.NewString() }, pc)
-	st := store.NewTempo(cfg.Tempo.Endpoint, nil)
+	st, err := engine.BuildStore(cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "mentat:", err)
+		os.Exit(1)
+	}
 	eng, err := engine.Build(cfg, st, cor)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "mentat:", err)

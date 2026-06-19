@@ -230,3 +230,56 @@ func (mr *MockCorrelatorMockRecorder) Resolve(ctx, store, runID any) *gomock.Cal
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Resolve", reflect.TypeOf((*MockCorrelator)(nil).Resolve), ctx, store, runID)
 }
+
+// MockMatcher is a mock of Matcher interface.
+type MockMatcher struct {
+	ctrl     *gomock.Controller
+	recorder *MockMatcherMockRecorder
+	isgomock struct{}
+}
+
+// MockMatcherMockRecorder is the mock recorder for MockMatcher.
+type MockMatcherMockRecorder struct {
+	mock *MockMatcher
+}
+
+// NewMockMatcher creates a new mock instance.
+func NewMockMatcher(ctrl *gomock.Controller) *MockMatcher {
+	mock := &MockMatcher{ctrl: ctrl}
+	mock.recorder = &MockMatcherMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockMatcher) EXPECT() *MockMatcherMockRecorder {
+	return m.recorder
+}
+
+// Match mocks base method.
+func (m *MockMatcher) Match(ctx context.Context, ev core.Evidence, want, target string) (core.Verdict, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Match", ctx, ev, want, target)
+	ret0, _ := ret[0].(core.Verdict)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Match indicates an expected call of Match.
+func (mr *MockMatcherMockRecorder) Match(ctx, ev, want, target any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Match", reflect.TypeOf((*MockMatcher)(nil).Match), ctx, ev, want, target)
+}
+
+// Name mocks base method.
+func (m *MockMatcher) Name() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Name")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// Name indicates an expected call of Name.
+func (mr *MockMatcherMockRecorder) Name() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Name", reflect.TypeOf((*MockMatcher)(nil).Name))
+}

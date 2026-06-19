@@ -8,6 +8,7 @@ import (
 )
 
 type Config struct {
+	Store        string            `yaml:"store"`
 	Tempo        Endpoint          `yaml:"tempo"`
 	OTLPEndpoint string            `yaml:"otlpEndpoint"`
 	Poll         PollSpec          `yaml:"poll"`
@@ -44,6 +45,9 @@ func Load(data []byte) (Config, error) {
 	var c Config
 	if err := yaml.Unmarshal(data, &c); err != nil {
 		return Config{}, fmt.Errorf("parse config: %w", err)
+	}
+	if c.Store == "" {
+		c.Store = "tempo"
 	}
 	for name, t := range c.Targets {
 		def, ok := defaultConcurrency[t.Adapter]

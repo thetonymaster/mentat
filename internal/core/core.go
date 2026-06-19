@@ -89,5 +89,14 @@ type Correlator interface {
 	Resolve(ctx context.Context, store TraceStore, runID string) (*trace.Trace, error)
 }
 
+// Matcher is one strategy inside the result comparator. It reads the run's
+// Output (selected by target for value matchers; Body/Status for structural
+// matchers) and returns a Verdict. Matchers are stateless and registered as
+// shared instances at the composition root.
+type Matcher interface {
+	Name() string
+	Match(ctx context.Context, ev Evidence, want, target string) (Verdict, error)
+}
+
 // ExtractAnswer applies the project-wide convention: stdout is the result.
 func ExtractAnswer(stdout string) string { return strings.TrimSpace(stdout) }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"time"
 
@@ -14,7 +13,6 @@ import (
 	"github.com/thetonymaster/mentat/internal/correlate"
 	"github.com/thetonymaster/mentat/internal/ctl"
 	"github.com/thetonymaster/mentat/internal/engine"
-	"github.com/thetonymaster/mentat/internal/store"
 )
 
 func main() {
@@ -125,7 +123,10 @@ func deps(cfgPath string) (config.Config, core.TraceStore, core.Correlator, erro
 	if err != nil {
 		return config.Config{}, nil, nil, fmt.Errorf("mentatctl: parse config %q: %w", cfgPath, err)
 	}
-	st := store.NewTempo(cfg.Tempo.Endpoint, (*http.Client)(nil))
+	st, err := engine.BuildStore(cfg)
+	if err != nil {
+		return config.Config{}, nil, nil, fmt.Errorf("mentatctl: build store: %w", err)
+	}
 	pc := correlate.PollConfig{
 		Interval:  parseDur(cfg.Poll.Interval, 200*time.Millisecond),
 		Timeout:   parseDur(cfg.Poll.Timeout, 30*time.Second),
