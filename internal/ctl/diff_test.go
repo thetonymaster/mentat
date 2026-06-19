@@ -194,6 +194,46 @@ func TestDiff(t *testing.T) {
 	}
 }
 
+func svcForest(run string, services ...string) *trace.Trace {
+	tr := &trace.Trace{RunID: run}
+	base := time.Unix(0, 0)
+	for i, name := range services {
+		tr.Spans = append(tr.Spans, &trace.Span{
+			ID:    run + string(rune('a'+i)),
+			Start: base.Add(time.Duration(i) * time.Millisecond),
+			Attrs: map[string]string{"service.name": name},
+		})
+	}
+	return tr
+}
+
+func TestDiffServices(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	st.EXPECT().Query(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, q core.TraceQuery) ([]core.TraceRef, error) {
+			return []core.TraceRef{{TraceID: q.Value}}, nil
+		}).AnyTimes()
+	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, id string) (*trace.Trace, error) {
+			if id == "A" {
+				return svcForest("A", "auth", "inventory", "payment"), nil
+			}
+			return svcForest("B", "auth", "payment", "inventory"), nil
+		}).AnyTimes()
+
+	var buf bytes.Buffer
+	if err := DiffServices(context.Background(), newTestCorrelator(), st, "A", "B", &buf); err != nil {
+		t.Fatalf("DiffServices: %v", err)
+	}
+	// Position 2 differs: A has inventory, B has payment.
+	for _, want := range []string{"inventory", "payment", "≠"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("output missing %q in:\n%s", want, buf.String())
+		}
+	}
+}
+
 func TestDiffWriteError(t *testing.T) {
 	tests := []struct {
 		name       string

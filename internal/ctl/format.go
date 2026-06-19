@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/thetonymaster/mentat/internal/comparator"
 	"github.com/thetonymaster/mentat/internal/genai"
 	"github.com/thetonymaster/mentat/internal/trace"
 )
@@ -50,6 +51,31 @@ func FormatForest(tr *trace.Trace, w io.Writer) error {
 	for _, r := range tr.Roots {
 		if err := emit(r, 0); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// FormatServices lists the distinct services in first-seen call order, mirroring
+// FormatTools for the service domain. It reuses the sequence comparator's service
+// selection (single source of truth with the `services` CEL variable).
+func FormatServices(tr *trace.Trace, w io.Writer) error {
+	if tr == nil {
+		if _, err := fmt.Fprintln(w, "(no trace)"); err != nil {
+			return fmt.Errorf("ctl: format services no-trace line: %w", err)
+		}
+		return nil
+	}
+	svcs, err := comparator.ServiceSequence(tr)
+	if err != nil {
+		return fmt.Errorf("ctl: format services run %s: %w", tr.RunID, err)
+	}
+	if _, err := fmt.Fprintf(w, "Run %s: %d service call(s)\n", tr.RunID, len(svcs)); err != nil {
+		return fmt.Errorf("ctl: format services header run %s: %w", tr.RunID, err)
+	}
+	for i, s := range svcs {
+		if _, err := fmt.Fprintf(w, "%2d. %s\n", i+1, s); err != nil {
+			return fmt.Errorf("ctl: format service line %d run %s: %w", i+1, tr.RunID, err)
 		}
 	}
 	return nil

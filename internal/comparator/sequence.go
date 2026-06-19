@@ -103,6 +103,12 @@ func toolSequence(t *trace.Trace) ([]string, error) {
 	return out, nil
 }
 
+// ServiceSequence returns the distinct services in first-seen call order. It is
+// the exported entry point for the ctl service-format/diff paths, so they share
+// the sequence comparator's selection — single source of truth with the
+// `services` CEL variable.
+func ServiceSequence(t *trace.Trace) ([]string, error) { return serviceSequence(t) }
+
 // serviceSequence returns the distinct services in first-seen order. Spans are
 // stable-sorted by Start: live traces order by real start time; fixtures carry no
 // timestamps, so the stable sort preserves the spans' array order, which the
