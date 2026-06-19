@@ -417,8 +417,14 @@ func TestDriveNCollectsSamples(t *testing.T) {
 	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "t"}}, nil).AnyTimes()
 	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(tr, nil).AnyTimes()
 
+	var mu sync.Mutex
 	var n int
-	cor := correlate.New(func() string { n++; return "run-" + itoa(n) }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+	cor := correlate.New(func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		n++
+		return "run-" + itoa(n)
+	}, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
 	eng, err := Build(cfg, st, cor)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -596,6 +602,24 @@ func TestDriveNParallelStructuralError(t *testing.T) {
 	_, err = eng.DriveN(context.Background(), "nosuch", nil, 2, true)
 	if err == nil {
 		t.Fatalf("structural error in parallel mode must abort")
+	}
+}
+
+func TestDriveNSerialStructuralError(t *testing.T) {
+	cfg := config.Config{
+		OTLPEndpoint: "http://localhost:4318",
+		Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+		Targets:      map[string]config.Target{},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	cor := correlate.New(func() string { return "run-1" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+	eng, err := Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if _, err := eng.DriveN(context.Background(), "nosuch", nil, 3, false); err == nil || !strings.Contains(err.Error(), `unknown target "nosuch"`) {
+		t.Fatalf("expected serial structural error to abort with unknown-target message, got: %v", err)
 	}
 }
 

@@ -132,6 +132,9 @@ func (e *Engine) DriveN(ctx context.Context, target string, args []string, n int
 		}
 		return evs, nil
 	}
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("engine: DriveN %q cancelled: %w", target, ctx.Err())
+	}
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var structErr error
