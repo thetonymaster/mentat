@@ -42,6 +42,7 @@ func Initializer(eng *engine.Engine) func(*godog.ScenarioContext) {
 		sc.Step(`^the result contains "([^"]*)"$`, w.resultContains)
 		sc.Step(`^the result equals "([^"]*)"$`, w.resultEquals)
 		sc.Step(`^the response status is (\d+)$`, w.responseStatus)
+		sc.Step(`^the result matches regex "([^"]*)"$`, w.resultMatchesRegex)
 		sc.Step(`^the services are called in order:$`, w.servicesInOrder)
 		sc.Step(`^the service "([^"]+)" is never called$`, w.serviceNeverCalled)
 		sc.Step(`^the response body json-contains:$`, w.responseBodyJSONContains)
@@ -137,6 +138,10 @@ func (w *world) resultContains(s string) error {
 
 func (w *world) resultEquals(s string) error {
 	return w.check("result", comparator.ResultExpectation{Matcher: "exact", Want: s})
+}
+
+func (w *world) resultMatchesRegex(re string) error {
+	return w.check("result", comparator.ResultExpectation{Matcher: "regex", Want: re})
 }
 
 func (w *world) responseStatus(code int) error {
