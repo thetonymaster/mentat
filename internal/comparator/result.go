@@ -9,17 +9,17 @@ import (
 )
 
 // ResultExpectation configures the result comparator.
-// Matcher selects the matching strategy: exact | contains | regex | json-subset | status.
-// Want is the expected value (a string; for status, parsed as int).
+// Matcher selects the matching strategy: exact | contains | regex | json-subset | status | schema.
+// Want is the expected value (a string; for status, parsed as int; for schema, a JSON Schema).
 // Target selects which Output field value matchers (exact/contains/regex) read:
 //   - "" or "answer" → ev.Output.Answer (default)
 //   - "status"       → strconv.Itoa(ev.Output.Status)
 //   - any other      → error (no silent fallback)
 //
-// json-subset always reads ev.Output.Body; status always reads ev.Output.Status.
-// Target is not consulted for those matchers.
+// json-subset and schema always read ev.Output.Body; status always reads
+// ev.Output.Status. Target is not consulted for those matchers.
 type ResultExpectation struct {
-	Matcher string // exact | contains | regex | json-subset | status
+	Matcher string // exact | contains | regex | json-subset | status | schema
 	Want    string
 	Target  string // "answer" (default) or "status"
 }
