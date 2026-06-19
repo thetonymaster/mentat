@@ -241,6 +241,145 @@ func TestToolsInOrderEmptyCell(t *testing.T) {
 	}
 }
 
+// TestCELStep exercises the inline + docstring "the run satisfies" grammar
+// end-to-end through a godog suite: a true expression passes the suite; a false
+// one fails it and surfaces the §9 value snapshot. happyTrace has tools
+// search/summarize and 1800 tokens; buildEng's shell target prints "done", so
+// answer == 'done'. Inline CEL uses single-quoted strings (the step regex
+// forbids embedded double quotes); the docstring form may use double quotes.
+func TestCELStep(t *testing.T) {
+	tests := []struct {
+		name     string
+		feature  string
+		wantPass bool
+		contains []string // substrings required in the suite output (failure cases)
+	}{
+		{
+			name: "inline and docstring both satisfied",
+			feature: `Feature: cel
+  Scenario: satisfies inline and docstring
+    Given the agent target "svc"
+    When I run scenario "happy"
+    Then the run satisfies "answer == 'done' && tokens < 5000"
+    And the run satisfies:
+      """
+      "search" in tools && "summarize" in tools
+      """
+`,
+			wantPass: true,
+		},
+		{
+			name: "false expression fails with value snapshot",
+			feature: `Feature: cel-red
+  Scenario: false expression fails
+    Given the agent target "svc"
+    When I run scenario "happy"
+    Then the run satisfies "tokens < 1"
+`,
+			wantPass: false,
+			contains: []string{"cel false", "tokens=1800"},
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			eng := buildEng(t, happyTrace())
+			var out bytes.Buffer
+			suite := godog.TestSuite{
+				ScenarioInitializer: Initializer(eng),
+				Options: &godog.Options{
+					Format:          "pretty",
+					Output:          &out,
+					FeatureContents: []godog.Feature{{Name: tt.name, Contents: []byte(tt.feature)}},
+				},
+			}
+			status := suite.Run()
+			if tt.wantPass && status != 0 {
+				t.Fatalf("expected passing suite, status=%d\n%s", status, out.String())
+			}
+			if !tt.wantPass && status == 0 {
+				t.Fatalf("expected failing suite, got 0\n%s", out.String())
+			}
+			for _, sub := range tt.contains {
+				if !strings.Contains(out.String(), sub) {
+					t.Fatalf("expected %q in suite output, got:\n%s", sub, out.String())
+				}
+			}
+		})
+	}
+}
+
+// TestPrecompileScenario unit-tests §7: a malformed expression fails at
+// scenario-init; good inline and docstring forms compile cleanly.
+func TestPrecompileScenario(t *testing.T) {
+	eng := buildEng(t, happyTrace())
+	w := &world{eng: eng}
+
+	good := []*messages.PickleStep{{Text: `the run satisfies "tokens < 5000"`}}
+	if err := w.precompileScenario(good); err != nil {
+		t.Fatalf("good inline precompile: %v", err)
+	}
+	doc := []*messages.PickleStep{{
+		Text:     `the run satisfies:`,
+		Argument: &messages.PickleStepArgument{DocString: &messages.PickleDocString{Content: `"search" in tools`}},
+	}}
+	if err := w.precompileScenario(doc); err != nil {
+		t.Fatalf("good docstring precompile: %v", err)
+	}
+	bad := []*messages.PickleStep{{Text: `the run satisfies "tokens <"`}}
+	if err := w.precompileScenario(bad); err == nil {
+		t.Fatal("want error for malformed expr at scenario-init, got nil")
+	}
+}
+
+// TestCELScenarioInitFailsBeforeDrive proves §7: a malformed expression fails the
+// scenario before any SUT is driven — the store is never queried (Times(0)).
+func TestCELScenarioInitFailsBeforeDrive(t *testing.T) {
+	cfg := config.Config{
+		OTLPEndpoint: "x",
+		Targets:      map[string]config.Target{"svc": {Adapter: "shell", Command: []string{"sh", "-c", "echo done"}, MaxConcurrency: 1}},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	st.EXPECT().Query(gomock.Any(), gomock.Any()).Times(0)
+	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Times(0)
+	cor := correlate.New(func() string { return "r" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+	eng, err := engine.Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("engine.Build: %v", err)
+	}
+
+	feature := `Feature: cel-bad
+  Scenario: malformed expression fails at scenario-init
+    Given the agent target "svc"
+    When I run scenario "happy"
+    Then the run satisfies "nope == "
+`
+	var out bytes.Buffer
+	suite := godog.TestSuite{
+		ScenarioInitializer: Initializer(eng),
+		Options: &godog.Options{
+			Format:          "pretty",
+			Output:          &out,
+			FeatureContents: []godog.Feature{{Name: "cel-bad", Contents: []byte(feature)}},
+		},
+	}
+	if status := suite.Run(); status == 0 {
+		t.Fatalf("expected failing suite for malformed expr, got 0\n%s", out.String())
+	}
+	if s := out.String(); !strings.Contains(s, "scenario-init") {
+		t.Fatalf("expected 'scenario-init' in output, got:\n%s", s)
+	}
+	// ctrl's t.Cleanup asserts Query/GetByID were never called → no SUT resolved.
+}
+
+func TestRunSatisfiesDocNil(t *testing.T) {
+	w := &world{}
+	if err := w.runSatisfiesDoc(nil); err == nil {
+		t.Fatal("want error for nil docstring, got nil")
+	}
+}
+
 // TestStepMethods exercises each step method that the happy-scenario godog run
 // does not reach, using a crafted Evidence so comparators have the data they need.
 func TestStepMethods(t *testing.T) {
