@@ -481,7 +481,7 @@ func TestDriveNResolveFailureBecomesSample(t *testing.T) {
 	if evs[0].Failed {
 		t.Fatalf("first run should have succeeded")
 	}
-	if !evs[1].Failed || evs[1].FailureKind != "resolve" {
+	if !evs[1].Failed || evs[1].FailureKind != core.FailureKindResolve {
 		t.Fatalf("second run want failed/resolve, got %+v", evs[1])
 	}
 }

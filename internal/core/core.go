@@ -19,6 +19,13 @@ type Output struct {
 	Answer   string // extracted result (see ExtractAnswer)
 }
 
+// FailureKind classifies a harness-level run failure by which engine call failed
+// (§6). It is the value of Evidence.FailureKind for a failed run.
+const (
+	FailureKindDriver  = "driver"  // driver invocation failed
+	FailureKindResolve = "resolve" // trace resolution failed
+)
+
 // Evidence is everything a comparator may inspect about a single run.
 type Evidence struct {
 	RunID  string

@@ -87,7 +87,7 @@ func TestAggregateFailedSamples(t *testing.T) {
 	c := NewAggregateCEL(nil)
 	evs := []core.Evidence{
 		evidence("search"),
-		failedEvidence("r-bad", "resolve"),
+		failedEvidence("r-bad", core.FailureKindResolve),
 		evidence("search"),
 	}
 
@@ -117,7 +117,7 @@ func TestAggregateFailedSamples(t *testing.T) {
 
 func TestAggregateReasonHasPerRunTable(t *testing.T) {
 	c := NewAggregateCEL(nil)
-	evs := []core.Evidence{evidence("summarize"), failedEvidence("r-2", "driver")}
+	evs := []core.Evidence{evidence("summarize"), failedEvidence("r-2", core.FailureKindDriver)}
 	v, err := c.Aggregate(context.Background(), evs, AggregateCELExpectation{Expr: `rate(r, !r.failed && "search" in r.tools) >= 0.9`})
 	if err != nil {
 		t.Fatalf("Aggregate: %v", err)

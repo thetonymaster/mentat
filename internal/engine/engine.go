@@ -86,17 +86,17 @@ func (e *Engine) driveOnce(ctx context.Context, target string, args []string) (c
 	select {
 	case sem <- struct{}{}:
 	case <-ctx.Done():
-		return core.Evidence{RunID: runID, Failed: true, FailureKind: "driver"}, fmt.Errorf("engine: drive %q: %w", target, ctx.Err())
+		return core.Evidence{RunID: runID, Failed: true, FailureKind: core.FailureKindDriver}, fmt.Errorf("engine: drive %q: %w", target, ctx.Err())
 	}
 	defer func() { <-sem }()
 
 	res, err := drv.Run(ctx, spec)
 	if err != nil {
-		return core.Evidence{RunID: runID, Failed: true, FailureKind: "driver"}, fmt.Errorf("engine: drive %q: %w", target, err)
+		return core.Evidence{RunID: runID, Failed: true, FailureKind: core.FailureKindDriver}, fmt.Errorf("engine: drive %q: %w", target, err)
 	}
 	tr, err := e.cor.Resolve(ctx, e.st, runID)
 	if err != nil {
-		return core.Evidence{RunID: runID, Failed: true, FailureKind: "resolve"}, fmt.Errorf("engine: resolve run %q: %w", runID, err)
+		return core.Evidence{RunID: runID, Failed: true, FailureKind: core.FailureKindResolve}, fmt.Errorf("engine: resolve run %q: %w", runID, err)
 	}
 	return core.Evidence{RunID: runID, Trace: tr, Output: res.Output}, nil
 }
