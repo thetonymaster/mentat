@@ -188,7 +188,48 @@ func aggMacros() []celgo.EnvOption {
 		celgo.Macros(
 			celgo.GlobalMacro("count", 2, countExpander),
 			celgo.GlobalMacro("rate", 2, rateExpander),
+			celgo.GlobalMacro("sum", 2, metricExpander("__sum__")),
+			celgo.GlobalMacro("mean", 2, metricExpander("__mean__")),
+			celgo.GlobalMacro("min", 2, metricExpander("__min__")),
+			celgo.GlobalMacro("max", 2, metricExpander("__max__")),
+			celgo.GlobalMacro("stddev", 2, metricExpander("__stddev__")),
+			celgo.GlobalMacro("p50", 2, percentileExpander(0.50)),
+			celgo.GlobalMacro("p95", 2, percentileExpander(0.95)),
+			celgo.GlobalMacro("p99", 2, percentileExpander(0.99)),
 		),
+	}
+}
+
+// mapDoubles builds `runs.map(<v>, double(<proj>))` as a comprehension yielding a
+// list<double>, coercing the projection so int fields (latencyMs, tokens) work.
+func mapDoubles(eh celgo.MacroExprFactory, v string, proj ast.Expr) ast.Expr {
+	accu := eh.AccuIdentName()
+	init := eh.NewList()
+	cond := eh.NewLiteral(types.True)
+	elem := eh.NewCall("double", proj)
+	step := eh.NewCall(operators.Add, eh.NewAccuIdent(), eh.NewList(elem))
+	return eh.NewComprehension(eh.NewIdent(VarRuns), v, accu, init, cond, step, eh.NewAccuIdent())
+}
+
+// metricExpander expands fn(r, X) -> __fn__(runs.map(r, double(X))).
+func metricExpander(fn string) celgo.MacroFactory {
+	return func(eh celgo.MacroExprFactory, _ ast.Expr, args []ast.Expr) (ast.Expr, *common.Error) {
+		v, err := iterVar(eh, args[0])
+		if err != nil {
+			return nil, err
+		}
+		return eh.NewCall(fn, mapDoubles(eh, v, args[1])), nil
+	}
+}
+
+// percentileExpander expands pNN(r, X) -> __percentile__(runs.map(r, double(X)), q).
+func percentileExpander(q float64) celgo.MacroFactory {
+	return func(eh celgo.MacroExprFactory, _ ast.Expr, args []ast.Expr) (ast.Expr, *common.Error) {
+		v, err := iterVar(eh, args[0])
+		if err != nil {
+			return nil, err
+		}
+		return eh.NewCall("__percentile__", mapDoubles(eh, v, args[1]), eh.NewLiteral(types.Double(q))), nil
 	}
 }
 

@@ -144,3 +144,27 @@ func TestRateCountMacros(t *testing.T) {
 		})
 	}
 }
+
+func TestMetricMacros(t *testing.T) {
+	tests := []struct {
+		name string
+		expr string
+		want bool
+	}{
+		{"mean latency", "mean(r, r.latencyMs) == 250.0", true}, // (100+200+300+400)/4
+		{"max latency", "max(r, r.latencyMs) == 400.0", true},
+		{"min latency", "min(r, r.latencyMs) == 100.0", true},
+		{"sum latency", "sum(r, r.latencyMs) == 1000.0", true},
+		{"p95 latency nearest-rank", "p95(r, r.latencyMs) == 400.0", true},
+		{"p50 latency", "p50(r, r.latencyMs) == 200.0", true}, // ceil(0.5*4)=2 -> 2nd of [100,200,300,400]
+		{"int field coerced to double", "mean(r, r.latencyMs) < 300.0", true},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			if got := evalAgg(t, tt.expr, runsFixture()); got != tt.want {
+				t.Fatalf("%q = %v, want %v", tt.expr, got, tt.want)
+			}
+		})
+	}
+}
