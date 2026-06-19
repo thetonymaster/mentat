@@ -140,16 +140,22 @@ alongside the existing single-run expression compilation.
   | `r.failed` | bool | harness-level failure on this iteration (§6) |
   | `r.failureKind` | string | `""` (ok) / `"driver"` / `"resolve"` — classified by which engine call failed (§6) |
 
-  Each record is built **eagerly** for a successful run (every field above populated;
-  the trace aggregates reuse the existing `tokenSum`/`costSum`/`errorCount`/
-  `toolSequence`/`serviceSequence` helpers). A **failed** iteration has no trace, so
-  its record carries only `runId`, `failed`, `failureKind`, and the boundary `Output`
-  fields (`status`/`exitCode`/`bodyText`/`answer`) — the six trace-derived keys are
-  omitted. Referencing an omitted key (e.g. `r.latencyMs`) on a failed record is
-  therefore a hard CEL "no such key" error, never a silent zero. An author asserting
-  on metrics scopes past failures, which CEL's short-circuit `&&` makes clean:
-  `rate(r, !r.failed && r.latencyMs < 2000) >= 0.9` — when `r.failed` is true the
-  missing-key side is never evaluated.
+  For a successful run, the boundary fields (`runId`/`failed`/`failureKind`/`status`/
+  `exitCode`/`bodyText`/`answer`) are always present, and each **trace-derived** field
+  (`tokens`/`cost`/`errors`/`latencyMs`/`tools`/`services`) is computed and bound
+  **only when the expression references it** — exactly as the single-run `bindVars`
+  does (§6 of the CEL spec; the referenced fields are extracted by walking the
+  compiled expression's AST for field selections). This is not merely an optimization:
+  `costSum` (with no pricing and no emitted `gen_ai.usage.cost_usd`) and
+  `serviceSequence` (on an agent trace whose spans carry no `service.name`) are *hard
+  errors* when computed, so binding them unconditionally would fail an aggregate that
+  never mentions `cost`/`services` — which is the common agent case. A **failed**
+  iteration has no trace, so none of the six trace-derived keys are bound regardless
+  of references. Referencing a key that was not bound — a trace metric on a failed
+  run, or `cost` when there is no cost data — is a hard CEL/binding error, never a
+  silent zero. An author asserting on metrics scopes past failures, which CEL's
+  short-circuit `&&` makes clean: `rate(r, !r.failed && r.latencyMs < 2000) >= 0.9` —
+  when `r.failed` is true the missing-key side is never evaluated.
 
 ### 4.2 Helper functions
 
