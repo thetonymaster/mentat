@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -87,5 +88,35 @@ func Load(data []byte) (Config, error) {
 			c.Targets[name] = t
 		}
 	}
+	if err := validatePricing(c.Pricing); err != nil {
+		return Config{}, err
+	}
 	return c, nil
+}
+
+// validatePricing rejects pricing entries that would silently skew the cost a
+// budgets/CEL run derives: an empty model name, or a rate that is negative or
+// non-finite (NaN/±Inf). Zero is allowed (a free model). This is the config-load
+// boundary mirror of the finite/non-negative check budgets already applies to an
+// emitted cost_usd, so a bad rate fails fast here and never reaches costSum.
+func validatePricing(p Pricing) error {
+	for model, r := range p {
+		if strings.TrimSpace(model) == "" {
+			return fmt.Errorf("pricing: model name must be non-empty")
+		}
+		if err := validateRate(model, "inputPerMTok", r.InputPerMTok); err != nil {
+			return err
+		}
+		if err := validateRate(model, "outputPerMTok", r.OutputPerMTok); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateRate(model, field string, v float64) error {
+	if v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+		return fmt.Errorf("pricing %q: %s must be finite and >= 0, got %v", model, field, v)
+	}
+	return nil
 }
