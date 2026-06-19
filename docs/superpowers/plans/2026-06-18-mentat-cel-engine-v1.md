@@ -361,7 +361,7 @@ Expected: clean `gofmt`/`vet`; commit created.
 
 ### Task 2: Lift fact-extraction helpers in `budgets.go`
 
-Behavior-preserving refactor: extract the inline token/cost/error aggregation from `budgets.Compare` into package-private helpers so the `cel` comparator (same package) can reuse the exact same logic (spec §5, single source of truth). `toolSequence`/`serviceSequence` already exist as functions in `sequence.go` and need no change.
+Behavior-preserving refactor: extract the inline token/cost/error aggregation from `budgets.Compare` into package-private helpers so the `cel` comparator (same package) can reuse the same logic (spec §5, single source of truth). `toolSequence`/`serviceSequence` already exist as functions in `sequence.go` and need no change.
 
 **Files:**
 - Modify: `internal/comparator/budgets.go`
@@ -1337,7 +1337,7 @@ No spec requirement is left without a task.
 
 **2. Placeholder scan:** No `TBD`/`TODO`/"add error handling"/"similar to Task N". Every code step shows complete code; every run step states the exact command and expected result.
 
-**3. Type consistency:** `NewCEL() core.Comparator`, `CELExpectation{Expr string}`, `Compile(string) error`, `bindVars(refs []string, ev core.Evidence) (map[string]any, error)`, `reason(string, []string, map[string]any) string`, `parseBody([]byte) (any, error)` — names/signatures identical across Tasks 3–6. Engine: `NewEngine() (*Engine, error)`, `Compile(string) (*Program, error)`, `References() []string`, `Eval(map[string]any) (bool, error)`, `Var*` constants — identical across Tasks 1, 3–5. Lifted helpers `tokenSum`/`costSum`/`errorCount` (Task 2) match their call sites (Task 4). The `the run satisfies` regexes are defined once (Task 6) and used by both registration and `satisfiesExpr`.
+**3. Type consistency:** `NewCEL() core.Comparator`, `CELExpectation{Expr string}`, `Compile(string) error`, `bindVars(refs []string, ev core.Evidence) (map[string]any, error)`, `reason(string, []string, map[string]any) string`, `parseBody([]byte) (any, error)` — names/signatures identical across Tasks 3–6. Engine: `NewEngine() (*Engine, error)`, `Compile(string) (*Program, error)`, `References() []string`, `Eval(map[string]any) (bool, error)`, `Var*` constants — identical across Tasks 1, 3–5. Lifted helpers `tokenSum`/`costSum`/`errorCount` (Task 2) match their call sites (Task 4). The `the run satisfies` regex patterns are defined once (Task 6) and used by both registration and `satisfiesExpr`.
 
 **Known soft spots flagged for the implementer:**
 - Task 1, Step 5/9: if the pinned cel-go version renames `IsExactType`/`AstToCheckedExpr`/`GetReferenceMap`, STOP and report (the fallback for the bool check is given inline; a reference-map rename needs Q).
