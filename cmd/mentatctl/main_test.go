@@ -1,6 +1,43 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestCheckDomainVerb(t *testing.T) {
+	tests := []struct {
+		name    string
+		domain  string
+		sub     string
+		wantErr string // empty means nil error expected
+	}{
+		{name: "service+tools errors", domain: "service", sub: "tools", wantErr: "only valid for the agent domain"},
+		{name: "agent+services errors", domain: "agent", sub: "services", wantErr: "only valid for the service domain"},
+		{name: "agent+tools ok", domain: "agent", sub: "tools", wantErr: ""},
+		{name: "service+services ok", domain: "service", sub: "services", wantErr: ""},
+		{name: "agent+run ok", domain: "agent", sub: "run", wantErr: ""},
+		{name: "service+diff ok", domain: "service", sub: "diff", wantErr: ""},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkDomainVerb(tt.domain, tt.sub)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected nil, got %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error %q missing substring %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
 
 func TestSplitDomainVerb(t *testing.T) {
 	tests := []struct {

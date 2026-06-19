@@ -40,7 +40,28 @@ func splitDomainVerb(args []string) (domain, sub string, rest []string, err erro
 	return domain, args[1], args[2:], nil
 }
 
+// checkDomainVerb rejects a domain-specific verb used under the wrong domain:
+// `tools` is agent-only, `services` is service-only. Shared verbs (run, trace,
+// replay, diff) are valid under both domains and pass through. Checked before any
+// config/store is built so an invalid combination fails fast.
+func checkDomainVerb(domain, sub string) error {
+	switch sub {
+	case "tools":
+		if domain != "agent" {
+			return fmt.Errorf("verb %q is only valid for the agent domain", sub)
+		}
+	case "services":
+		if domain != "service" {
+			return fmt.Errorf("verb %q is only valid for the service domain", sub)
+		}
+	}
+	return nil
+}
+
 func dispatch(domain, sub string, rest []string) error {
+	if err := checkDomainVerb(domain, sub); err != nil {
+		return err
+	}
 	ctx := context.Background()
 	fs := flag.NewFlagSet(sub, flag.ExitOnError)
 	cfgPath := fs.String("config", "mentat.yaml", "config file")
@@ -95,9 +116,6 @@ func dispatch(domain, sub string, rest []string) error {
 		}
 		return ctl.FormatForest(tr, os.Stdout)
 	case "tools":
-		if domain != "agent" {
-			return fmt.Errorf("verb %q is only valid for the agent domain", sub)
-		}
 		id, err := idArg()
 		if err != nil {
 			return err
@@ -108,9 +126,6 @@ func dispatch(domain, sub string, rest []string) error {
 		}
 		return ctl.FormatTools(tr, os.Stdout)
 	case "services":
-		if domain != "service" {
-			return fmt.Errorf("verb %q is only valid for the service domain", sub)
-		}
 		id, err := idArg()
 		if err != nil {
 			return err

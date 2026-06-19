@@ -223,4 +223,24 @@ func TestFormatServices(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("write error on nil trace is returned", func(t *testing.T) {
+		err := FormatServices(nil, formatErrWriter{})
+		if err == nil {
+			t.Fatal("expected error from failing writer, got nil")
+		}
+		if !strings.Contains(err.Error(), "ctl:") {
+			t.Fatalf("error missing 'ctl:' prefix, got: %v", err)
+		}
+	})
+
+	t.Run("write error on services header is returned", func(t *testing.T) {
+		err := FormatServices(serviceForest("r1", "auth", "inventory"), formatErrWriter{})
+		if err == nil {
+			t.Fatal("expected error from failing writer, got nil")
+		}
+		if !strings.Contains(err.Error(), "ctl:") {
+			t.Fatalf("error missing 'ctl:' prefix, got: %v", err)
+		}
+	})
 }
