@@ -12,12 +12,13 @@ import (
 )
 
 func TestHTTPDriverHappyPath(t *testing.T) {
-	var gotMethod, gotScenario, gotBaggage, gotBody, gotContentType string
+	var gotMethod, gotScenario, gotBaggage, gotBody, gotContentType, gotTraceparent string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod = r.Method
 		gotScenario = r.Header.Get("X-Scenario")
 		gotBaggage = r.Header.Get("baggage")
 		gotContentType = r.Header.Get("Content-Type")
+		gotTraceparent = r.Header.Get("traceparent")
 		b, _ := io.ReadAll(r.Body)
 		gotBody = string(b)
 		w.WriteHeader(http.StatusCreated)
@@ -73,6 +74,9 @@ func TestHTTPDriverHappyPath(t *testing.T) {
 	if res.RunID != "run-abc" {
 		t.Errorf("RunID = %q, want run-abc", res.RunID)
 	}
+	if gotTraceparent != "" {
+		t.Errorf("driver must not inject traceparent, got %q", gotTraceparent)
+	}
 }
 
 func TestHTTPDriverNon2xxIsData(t *testing.T) {
@@ -97,6 +101,12 @@ func TestHTTPDriverNon2xxIsData(t *testing.T) {
 	}
 	if res.Output.Status != http.StatusPaymentRequired {
 		t.Errorf("Status = %d, want 402", res.Output.Status)
+	}
+	if string(res.Output.Body) != `{"status":"declined"}` {
+		t.Errorf("Body = %q, want {\"status\":\"declined\"}", res.Output.Body)
+	}
+	if res.Output.Answer != `{"status":"declined"}` {
+		t.Errorf("Answer = %q, want {\"status\":\"declined\"}", res.Output.Answer)
 	}
 }
 
@@ -123,7 +133,7 @@ func TestHTTPDriverErrors(t *testing.T) {
 		{
 			name:    "transport failure is a wrapped error",
 			spec:    core.RunSpec{Target: "checkout", RunID: "run-x", HTTP: core.HTTPSpec{URL: closedURL, Method: "POST"}},
-			wantSub: "http:",
+			wantSub: "run-x",
 		},
 	}
 	for _, tt := range tests {

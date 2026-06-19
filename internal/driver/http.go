@@ -51,6 +51,8 @@ func (d httpDriver) Run(ctx context.Context, spec core.RunSpec) (core.RunResult,
 	if scenario != "" {
 		req.Header.Set(headerScenario, scenario)
 	}
+	// The engine's correlator sets both spec.Tags["test.run.id"] and spec.RunID to the
+	// same run id; baggage uses Tags (string key), error messages use RunID, kept in sync upstream.
 	bag, err := buildBaggage(spec.Tags[tagRunID], scenario)
 	if err != nil {
 		return core.RunResult{}, fmt.Errorf("http: build baggage for run %q: %w", spec.RunID, err)
