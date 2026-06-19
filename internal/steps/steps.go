@@ -46,6 +46,7 @@ func Initializer(eng *engine.Engine) func(*godog.ScenarioContext) {
 		sc.Step(`^the services are called in order:$`, w.servicesInOrder)
 		sc.Step(`^the service "([^"]+)" is never called$`, w.serviceNeverCalled)
 		sc.Step(`^the response body json-contains:$`, w.responseBodyJSONContains)
+		sc.Step(`^the response body matches schema:$`, w.responseBodyMatchesSchema)
 		sc.Step(`^the run satisfies "([^"]*)"$`, w.runSatisfies)
 		sc.Step(`^the run satisfies:$`, w.runSatisfiesDoc)
 
@@ -172,6 +173,13 @@ func (w *world) serviceNeverCalled(name string) error {
 
 func (w *world) responseBodyJSONContains(doc *godog.DocString) error {
 	return w.check("result", comparator.ResultExpectation{Matcher: "json-subset", Want: doc.Content})
+}
+
+func (w *world) responseBodyMatchesSchema(doc *godog.DocString) error {
+	if doc == nil {
+		return fmt.Errorf("the response body matches schema: expected a docstring schema, got none")
+	}
+	return w.check("result", comparator.ResultExpectation{Matcher: "schema", Want: doc.Content})
 }
 
 func (w *world) runSatisfies(expr string) error {

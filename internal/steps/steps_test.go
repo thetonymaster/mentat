@@ -373,6 +373,43 @@ func TestCELScenarioInitFailsBeforeDrive(t *testing.T) {
 	// ctrl's t.Cleanup asserts Query/GetByID were never called → no SUT resolved.
 }
 
+// TestSchemaStep exercises the `the response body matches schema` step. The
+// schema matcher reads ev.Output.Body, which the shell driver does not populate,
+// so the body is set directly on the world's Evidence (the engine.Build inside
+// buildEng registers the schema matcher + result comparator).
+func TestSchemaStep(t *testing.T) {
+	eng := buildEng(t, happyTrace())
+	const schema = `{"type":"object","required":["status"],` +
+		`"properties":{"status":{"type":"string"}}}`
+
+	tests := []struct {
+		name    string
+		body    string
+		wantErr bool
+	}{
+		{name: "valid body passes", body: `{"status":"confirmed"}`, wantErr: false},
+		{name: "missing field fails", body: `{}`, wantErr: true},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			w := &world{eng: eng}
+			w.ev = core.Evidence{Output: core.Output{Body: []byte(tt.body)}}
+			err := w.responseBodyMatchesSchema(&godog.DocString{Content: schema})
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
+			}
+		})
+	}
+
+	t.Run("nil docstring is an error", func(t *testing.T) {
+		w := &world{eng: eng}
+		if err := w.responseBodyMatchesSchema(nil); err == nil {
+			t.Fatal("want error for nil docstring, got nil")
+		}
+	})
+}
+
 // TestRegexStep exercises the `the result matches regex` grammar end-to-end
 // through a godog suite: a matching pattern passes the suite; a non-matching one
 // fails it and surfaces the result-comparator's regex reason. buildEng's `svc`
