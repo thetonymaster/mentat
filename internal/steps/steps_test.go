@@ -330,6 +330,15 @@ func TestPrecompileScenario(t *testing.T) {
 	if err := w.precompileScenario(bad); err == nil {
 		t.Fatal("want error for malformed expr at scenario-init, got nil")
 	}
+
+	// Fix 3: docstring form of "the runs satisfy:" is precompiled via the aggregate-cel path.
+	runsDoc := []*messages.PickleStep{{
+		Text:     `the runs satisfy:`,
+		Argument: &messages.PickleStepArgument{DocString: &messages.PickleDocString{Content: `rate(r, 'search' in r.tools) >= 0.5`}},
+	}}
+	if err := w.precompileScenario(runsDoc); err != nil {
+		t.Fatalf("runs-satisfy docstring precompile: %v", err)
+	}
 }
 
 // TestCELScenarioInitFailsBeforeDrive proves §7: a malformed expression fails the
@@ -487,7 +496,7 @@ func TestRunsSatisfiesDocNil(t *testing.T) {
 	}
 }
 
-// TestCheckRunsErrors exercises checkRuns error paths (no evs, unknown comparator).
+// TestCheckRunsErrors exercises checkRuns error paths (no evs driven).
 func TestCheckRunsErrors(t *testing.T) {
 	eng := buildEng(t, happyTrace())
 	tests := []struct {
@@ -614,7 +623,7 @@ func TestRunsSatisfiesStep(t *testing.T) {
   Scenario: search always present
     Given the agent target "bot"
     When I run scenario "x"
-    Then the runs satisfy "rate(r, \"search\" in r.tools) >= 0.9"
+    Then the runs satisfy "rate(r, 'search' in r.tools) >= 0.9"
 `
 	var out bytes.Buffer
 	suite := godog.TestSuite{

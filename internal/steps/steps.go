@@ -18,7 +18,7 @@ import (
 var (
 	reSatisfiesInline     = regexp.MustCompile(`^the run satisfies "([^"]*)"$`)
 	reSatisfiesDoc        = regexp.MustCompile(`^the run satisfies:$`)
-	reRunsSatisfiesInline = regexp.MustCompile(`^the runs satisfy "((?:[^"\\]|\\.)*)"$`)
+	reRunsSatisfiesInline = regexp.MustCompile(`^the runs satisfy "([^"]*)"$`)
 	reRunsSatisfiesDoc    = regexp.MustCompile(`^the runs satisfy:$`)
 	reRunsTag             = regexp.MustCompile(`^@runs\((\d+)(?:,(parallel))?\)$`)
 )
@@ -56,7 +56,7 @@ func Initializer(eng *engine.Engine) func(*godog.ScenarioContext) {
 		sc.Step(`^the response body matches schema:$`, w.responseBodyMatchesSchema)
 		sc.Step(`^the run satisfies "([^"]*)"$`, w.runSatisfies)
 		sc.Step(`^the run satisfies:$`, w.runSatisfiesDoc)
-		sc.Step(`^the runs satisfy "((?:[^"\\]|\\.)*)"$`, w.runsSatisfies)
+		sc.Step(`^the runs satisfy "([^"]*)"$`, w.runsSatisfies)
 		sc.Step(`^the runs satisfy:$`, w.runsSatisfiesDoc)
 
 		// §7: compile every CEL expression in the scenario before any step runs,
@@ -213,7 +213,7 @@ func (w *world) runSatisfiesDoc(doc *godog.DocString) error {
 }
 
 func (w *world) runsSatisfies(expr string) error {
-	return w.checkRuns(unescapeExpr(expr))
+	return w.checkRuns(expr)
 }
 
 func (w *world) runsSatisfiesDoc(doc *godog.DocString) error {
@@ -292,19 +292,12 @@ func satisfiesExpr(st *messages.PickleStep) (string, bool) {
 // runsSatisfiesExpr extracts a CEL expression from a "the runs satisfy" step.
 func runsSatisfiesExpr(st *messages.PickleStep) (string, bool) {
 	if m := reRunsSatisfiesInline.FindStringSubmatch(st.Text); m != nil {
-		return unescapeExpr(m[1]), true
+		return m[1], true
 	}
 	if reRunsSatisfiesDoc.MatchString(st.Text) && st.Argument != nil && st.Argument.DocString != nil {
 		return st.Argument.DocString.Content, true
 	}
 	return "", false
-}
-
-// unescapeExpr replaces \" with " in an expression captured from an inline step
-// argument. Gherkin preserves the raw backslash-quote sequence when the feature
-// text contains escaped double-quotes inside a double-quoted step argument.
-func unescapeExpr(expr string) string {
-	return strings.ReplaceAll(expr, `\"`, `"`)
 }
 
 // parseRunsTag reads @runs(N) / @runs(N,parallel). Absent -> (1, false, nil). A tag
