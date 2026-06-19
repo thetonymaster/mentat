@@ -4,7 +4,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/thetonymaster/mentat/internal/config"
 	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/store"
 )
 
 type fakeCmp struct{}
@@ -28,10 +30,12 @@ func resetRegistries(t *testing.T) {
 	comparators = map[string]core.Comparator{}
 	drivers = map[string]core.Driver{}
 	matchers = map[string]core.Matcher{}
+	stores = map[string]StoreFactory{}
 	t.Cleanup(func() {
 		comparators = map[string]core.Comparator{}
 		drivers = map[string]core.Driver{}
 		matchers = map[string]core.Matcher{}
+		stores = map[string]StoreFactory{}
 	})
 }
 
@@ -134,5 +138,28 @@ func TestMatcherRegistryMissReturnsFalse(t *testing.T) {
 	resetRegistries(t)
 	if _, ok := Matcher("nope-not-registered"); ok {
 		t.Fatal("Matcher(unregistered) returned ok=true, want false")
+	}
+}
+
+func TestStoreRegistryRoundTrip(t *testing.T) {
+	want := store.NewInMemStore(nil)
+	RegisterStore("inmem-test", func(config.Config) (core.TraceStore, error) { return want, nil })
+
+	f, ok := Store("inmem-test")
+	if !ok {
+		t.Fatal("Store(\"inmem-test\") not found after RegisterStore")
+	}
+	got, err := f(config.Config{})
+	if err != nil {
+		t.Fatalf("factory error: %v", err)
+	}
+	if got != want {
+		t.Fatalf("factory returned %p, want %p", got, want)
+	}
+}
+
+func TestStoreRegistryMissReturnsFalse(t *testing.T) {
+	if _, ok := Store("nope-not-registered"); ok {
+		t.Fatal("Store(unregistered) returned ok=true, want false")
 	}
 }

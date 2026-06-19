@@ -88,6 +88,26 @@ func TestLoadRejectsMalformedYAML(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultsStoreToTempo(t *testing.T) {
+	c, err := Load([]byte("tempo:\n  endpoint: http://localhost:3200\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Store != "tempo" {
+		t.Fatalf("Store = %q, want %q", c.Store, "tempo")
+	}
+}
+
+func TestLoadKeepsExplicitStore(t *testing.T) {
+	c, err := Load([]byte("store: jaeger\ntempo:\n  endpoint: http://localhost:3200\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Store != "jaeger" {
+		t.Fatalf("Store = %q, want %q", c.Store, "jaeger")
+	}
+}
+
 func TestLoadHTTPTarget(t *testing.T) {
 	tests := []struct {
 		name        string

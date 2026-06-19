@@ -1,0 +1,25 @@
+package engine
+
+import (
+	"fmt"
+
+	"github.com/thetonymaster/mentat/internal/config"
+	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/registry"
+	"github.com/thetonymaster/mentat/internal/store"
+)
+
+// BuildStore is the store composition root: it registers the built-in store
+// factories, then resolves the store named by cfg.Store. Unknown names are a
+// hard error (no silent fallback). Engine.Build keeps taking a built TraceStore
+// so hermetic tests can inject store.NewInMemStore directly.
+func BuildStore(cfg config.Config) (core.TraceStore, error) {
+	registry.RegisterStore("tempo", func(c config.Config) (core.TraceStore, error) {
+		return store.NewTempo(c.Tempo.Endpoint, nil), nil
+	})
+	f, ok := registry.Store(cfg.Store)
+	if !ok {
+		return nil, fmt.Errorf("unknown store %q", cfg.Store)
+	}
+	return f(cfg)
+}
