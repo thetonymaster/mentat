@@ -102,6 +102,12 @@ world{ n, parallel, evs []core.Evidence }     # world gains run-config + a slice
   `evs []core.Evidence`. Un-tagged scenarios keep `n == 1` and continue down the
   existing single-`Evidence` path with the existing comparators — the aggregate path
   only engages for the `the runs satisfy` step.
+- **Single-run steps under `@runs(N>1)` are rejected.** A single-run comparator step
+  (`the run satisfies`, budgets, sequence, result) only inspects one `Evidence`, so
+  using one inside a multi-run scenario is ambiguous. Rather than silently evaluating
+  the first run, `world.check` hard-errors when `n > 1`, directing the author to
+  `the runs satisfy` (no-silent-fallback; §9.7). Mixed single+aggregate assertions in
+  one scenario are a possible future extension.
 
 ## 4. Grammar
 
@@ -319,6 +325,13 @@ rather than a guess:
    possible failures gates first: `count(r, r.failed) == 0` as a separate assertion,
    or asserts only rate-style properties. In-macro scoping for metric helpers is a
    future extension.
+7. **Single-run step inside `@runs(N>1)`.** A single-run comparator step (`the run
+   satisfies`, budgets, sequence, result) inspects one `Evidence` only, so its meaning
+   in a multi-run scenario is ambiguous. `world.check` hard-errors when `n > 1`
+   (`"single-run step in a @runs(N) scenario evaluates only the first run; use \"the
+   runs satisfy\" …"`) rather than silently evaluating the first run. Pure-aggregate
+   scenarios (only `the runs satisfy`) and ordinary single-run scenarios (`n == 1`) are
+   unaffected.
 
 ## 10. Testing strategy
 
