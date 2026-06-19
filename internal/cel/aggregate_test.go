@@ -101,6 +101,29 @@ func runsFixture() map[string]any {
 	}}
 }
 
+func TestRateCountMacroErrors(t *testing.T) {
+	eng, err := NewAggregateEngine()
+	if err != nil {
+		t.Fatalf("NewAggregateEngine: %v", err)
+	}
+	tests := []struct {
+		name string
+		expr string
+	}{
+		{"count non-ident first arg", "count(1, true) == 0"},
+		{"rate non-ident first arg", `rate("x", true) >= 0.0`},
+		{"count shadows accumulator", "count(__result__, true) == 0"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			if _, cErr := eng.Compile(tt.expr); cErr == nil {
+				t.Fatalf("%q: expected a compile error, got nil", tt.expr)
+			}
+		})
+	}
+}
+
 func TestRateCountMacros(t *testing.T) {
 	tests := []struct {
 		name string

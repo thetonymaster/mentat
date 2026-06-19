@@ -197,7 +197,11 @@ func iterVar(eh celgo.MacroExprFactory, arg ast.Expr) (string, *common.Error) {
 	if arg.Kind() != ast.IdentKind {
 		return "", eh.NewError(arg.ID(), "first argument must be an identifier (e.g. r)")
 	}
-	return arg.AsIdent(), nil
+	name := arg.AsIdent()
+	if name == eh.AccuIdentName() || name == "__result__" {
+		return "", eh.NewError(arg.ID(), "iteration variable cannot shadow the accumulator")
+	}
+	return name, nil
 }
 
 // filterList builds `runs.filter(<v>, <pred>)` as a comprehension yielding a list.
