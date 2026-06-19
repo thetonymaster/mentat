@@ -154,6 +154,46 @@ targets:
 			wantErr:    true,
 			wantErrSub: `target "checkout": http.method is required`,
 		},
+		{
+			name: "http target whitespace-only url is a descriptive error",
+			yaml: `
+targets:
+  checkout:
+    adapter: http
+    http:
+      url: "   "
+      method: POST
+`,
+			wantErr:    true,
+			wantErrSub: `target "checkout": http.url is required`,
+		},
+		{
+			name: "http target whitespace-only method is a descriptive error",
+			yaml: `
+targets:
+  checkout:
+    adapter: http
+    http:
+      url: "http://localhost:8080/orders"
+      method: "   "
+`,
+			wantErr:    true,
+			wantErrSub: `target "checkout": http.method is required`,
+		},
+		{
+			name: "http target trims surrounding whitespace on url and method",
+			yaml: `
+targets:
+  checkout:
+    adapter: http
+    http:
+      url: "  http://localhost:8080/orders  "
+      method: "  POST  "
+`,
+			wantURL:    "http://localhost:8080/orders",
+			wantMethod: "POST",
+			wantConc:   8,
+		},
 	}
 	for _, tt := range tests {
 		tt := tt

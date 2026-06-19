@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -57,12 +58,17 @@ func Load(data []byte) (Config, error) {
 			c.Targets[name] = t
 		}
 		if t.Adapter == "http" {
-			if t.HTTP.URL == "" {
+			url := strings.TrimSpace(t.HTTP.URL)
+			method := strings.TrimSpace(t.HTTP.Method)
+			if url == "" {
 				return Config{}, fmt.Errorf("target %q: http.url is required when adapter is http", name)
 			}
-			if t.HTTP.Method == "" {
+			if method == "" {
 				return Config{}, fmt.Errorf("target %q: http.method is required when adapter is http", name)
 			}
+			t.HTTP.URL = url
+			t.HTTP.Method = method
+			c.Targets[name] = t
 		}
 	}
 	return c, nil
