@@ -59,8 +59,28 @@ type HTTPSpec struct {
 	Headers map[string]string
 }
 
+// ModelRate is a per-model price in USD per million tokens (spec §4.1). Mirrors
+// config.ModelRate, kept in core so the comparator layer never imports config.
+type ModelRate struct {
+	InputPerMTok  float64
+	OutputPerMTok float64
+}
+
+// Pricing maps a gen_ai.request.model value to its rate. Used to derive cost
+// from token counts when a span carries no emitted gen_ai.usage.cost_usd (§4.3).
+type Pricing map[string]ModelRate
+
 type RunResult struct {
-	RunID          string
+	RunID string
+	// PrimaryTraceID is reserved for a future traceparent complement (spec §5):
+	// a clean primary trace id for when a SUT adopts an injected traceparent. It
+	// is intentionally left unset under the baggage-only correlation path that
+	// ships today — baggage tag-first correlation is the invariant (it survives
+	// the SUT rooting its own trace, which traceparent alone cannot), and nothing
+	// in correlate.Resolve consumes this field. A second correlator (the
+	// traceparent complement) will populate it and add a fast-path in Resolve;
+	// until that consumer exists, injecting it would be a feature with no reader
+	// (YAGNI).
 	PrimaryTraceID string
 	Output         Output
 }

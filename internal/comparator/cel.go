@@ -18,20 +18,20 @@ type CELExpectation struct {
 
 type celComparator struct {
 	engine   *celengine.Engine
+	pricing  core.Pricing
 	mu       sync.RWMutex
 	programs map[string]*celengine.Program
 }
 
 // NewCEL returns the standalone, trace-aware CEL comparator (Name() == "cel").
-// It consumes full Evidence — unlike result, which is contractually output-only.
-func NewCEL() core.Comparator {
+// pricing is reused by the `cost` variable so it derives identically to budgets
+// (§5, single source of truth).
+func NewCEL(pricing core.Pricing) core.Comparator {
 	engine, err := celengine.NewEngine()
 	if err != nil {
-		// The schema is a compile-time constant; a build failure is a true,
-		// caller-unreachable invariant violation, not a runtime condition.
 		panic(fmt.Sprintf("cel: static schema failed to build: %v", err))
 	}
-	return &celComparator{engine: engine, programs: map[string]*celengine.Program{}}
+	return &celComparator{engine: engine, pricing: pricing, programs: map[string]*celengine.Program{}}
 }
 
 func (c *celComparator) Name() string { return "cel" }
@@ -85,7 +85,7 @@ func (c *celComparator) Compare(_ context.Context, ev core.Evidence, e core.Expe
 		return core.Verdict{}, err
 	}
 	refs := prg.References()
-	vars, err := bindVars(refs, ev)
+	vars, err := bindVars(refs, ev, c.pricing)
 	if err != nil {
 		return core.Verdict{}, err
 	}
@@ -112,7 +112,7 @@ var traceVars = map[string]bool{
 // bindVars binds ONLY the referenced variables, so a variable an expression does
 // not mention is never computed. Trace aggregates and body JSON are added in
 // later tasks.
-func bindVars(refs []string, ev core.Evidence) (map[string]any, error) {
+func bindVars(refs []string, ev core.Evidence, pricing core.Pricing) (map[string]any, error) {
 	for _, name := range refs {
 		if traceVars[name] && ev.Trace == nil {
 			return nil, fmt.Errorf("cel: binding %q: evidence has no trace", name)
@@ -136,7 +136,7 @@ func bindVars(refs []string, ev core.Evidence) (map[string]any, error) {
 			}
 			vars[name] = int64(n)
 		case celengine.VarCost:
-			v, err := costSum(ev.Trace)
+			v, err := costSum(ev.Trace, pricing)
 			if err != nil {
 				return nil, fmt.Errorf("cel: binding cost: %w", err)
 			}

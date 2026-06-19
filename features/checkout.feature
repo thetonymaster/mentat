@@ -14,3 +14,8 @@ Feature: Checkout service behaviour
       """
       {"status": "confirmed"}
       """
+    And the response body matches schema:
+      """
+      { "type": "object", "required": ["status"],
+        "properties": { "status": { "type": "string" } } }
+      """

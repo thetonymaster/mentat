@@ -104,7 +104,7 @@ func durPtr(d time.Duration) *time.Duration { return &d }
 
 func TestBudgetsPassesUnderTokenCap(t *testing.T) {
 	ev := core.Evidence{Trace: tokenTrace(1200, 600)}
-	v, err := NewBudgets().Compare(context.Background(), ev, BudgetExpectation{MaxTokens: IntPtr(5000)})
+	v, err := NewBudgets(nil).Compare(context.Background(), ev, BudgetExpectation{MaxTokens: IntPtr(5000)})
 	if err != nil || !v.Pass {
 		t.Fatalf("want pass, got %+v err=%v", v, err)
 	}
@@ -112,7 +112,7 @@ func TestBudgetsPassesUnderTokenCap(t *testing.T) {
 
 func TestBudgetsFailsOverTokenCap(t *testing.T) {
 	ev := core.Evidence{Trace: tokenTrace(9000, 4000)}
-	v, err := NewBudgets().Compare(context.Background(), ev, BudgetExpectation{MaxTokens: IntPtr(5000)})
+	v, err := NewBudgets(nil).Compare(context.Background(), ev, BudgetExpectation{MaxTokens: IntPtr(5000)})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestBudgetsFailsOverTokenCap(t *testing.T) {
 }
 
 func TestBudgetsName(t *testing.T) {
-	if got := NewBudgets().Name(); got != "budgets" {
+	if got := NewBudgets(nil).Name(); got != "budgets" {
 		t.Fatalf("Name() = %q, want %q", got, "budgets")
 	}
 }
@@ -133,7 +133,7 @@ func TestBudgetsName(t *testing.T) {
 // Pins the precise error the malformed value produces.
 func TestBudgetsMalformedOnlyCostIsInvalidNotUnavailable(t *testing.T) {
 	ev := core.Evidence{Trace: rawAttrTrace(genai.CostUSD, "free")}
-	_, err := NewBudgets().Compare(context.Background(), ev, BudgetExpectation{MaxCostUSD: floatPtr(0.10)})
+	_, err := NewBudgets(nil).Compare(context.Background(), ev, BudgetExpectation{MaxCostUSD: floatPtr(0.10)})
 	if err == nil {
 		t.Fatal("want error for malformed-only cost_usd, got nil")
 	}
@@ -300,7 +300,7 @@ func TestBudgetsCompare(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := NewBudgets().Compare(context.Background(), tt.ev, tt.exp)
+			got, err := NewBudgets(nil).Compare(context.Background(), tt.ev, tt.exp)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err = %v, wantErr = %v", err, tt.wantErr)
 			}
@@ -311,5 +311,208 @@ func TestBudgetsCompare(t *testing.T) {
 				t.Fatalf("wantErr=true but got Pass=true; err=%v", err)
 			}
 		})
+	}
+}
+
+// derivableTrace builds a trace whose single LLM span carries input/output tokens
+// and a request model but NO emitted cost_usd, so cost must be derived.
+func derivableTrace(in, out int, model string) *trace.Trace {
+	return &trace.Trace{Spans: []*trace.Span{{
+		Name: "chat",
+		Attrs: map[string]string{
+			genai.Op:           genai.OpChat,
+			genai.InTokens:     strconv.Itoa(in),
+			genai.OutTokens:    strconv.Itoa(out),
+			genai.RequestModel: model,
+		},
+	}}}
+}
+
+// splitSpanTrace builds a trace in the OTel-GenAI split-span layout:
+// one span carries input/output tokens but NO gen_ai.request.model (the
+// aggregated invoke_agent), and one sibling span carries gen_ai.request.model
+// but no tokens and no cost (a child chat span). Neither span carries cost_usd.
+func splitSpanTrace(in, out int, model string) *trace.Trace {
+	return &trace.Trace{Spans: []*trace.Span{
+		{
+			Name: "invoke_agent",
+			Attrs: map[string]string{
+				genai.Op:        genai.OpInvokeAgent,
+				genai.InTokens:  strconv.Itoa(in),
+				genai.OutTokens: strconv.Itoa(out),
+				// intentionally NO gen_ai.request.model
+			},
+		},
+		{
+			Name: "chat",
+			Attrs: map[string]string{
+				genai.Op:           genai.OpChat,
+				genai.RequestModel: model,
+				// intentionally NO tokens, NO cost_usd
+			},
+		},
+	}}
+}
+
+// costAndTokenTrace builds a trace with a single span carrying BOTH a
+// gen_ai.usage.cost_usd AND input/output tokens with a named model, to
+// verify that emitted cost wins (cost is not added to derived).
+func costAndTokenTrace(cost float64, in, out int, model string) *trace.Trace {
+	return &trace.Trace{Spans: []*trace.Span{{
+		Name: "chat",
+		Attrs: map[string]string{
+			genai.Op:           genai.OpChat,
+			genai.CostUSD:      strconv.FormatFloat(cost, 'f', 6, 64),
+			genai.InTokens:     strconv.Itoa(in),
+			genai.OutTokens:    strconv.Itoa(out),
+			genai.RequestModel: model,
+		},
+	}}}
+}
+
+func TestCostSumDerivesFromTokens(t *testing.T) {
+	// 1,000,000 in @ $10/MTok + 1,000,000 out @ $20/MTok = $30.00
+	pricing := core.Pricing{"m": {InputPerMTok: 10, OutputPerMTok: 20}}
+
+	tests := []struct {
+		name     string
+		tr       *trace.Trace
+		pricing  core.Pricing
+		wantCost float64
+		wantErr  bool
+		errSub   string
+	}{
+		{
+			name:     "derives from tokens when model is priced",
+			tr:       derivableTrace(1_000_000, 1_000_000, "m"),
+			pricing:  pricing,
+			wantCost: 30.0,
+		},
+		{
+			name:    "model absent from configured table is a hard error",
+			tr:      derivableTrace(1_000_000, 0, "unpriced"),
+			pricing: pricing,
+			wantErr: true,
+			errSub:  "not in pricing table",
+		},
+		{
+			name:    "token span with no cost and empty table is unavailable",
+			tr:      derivableTrace(1_000_000, 0, "m"),
+			pricing: nil,
+			wantErr: true,
+			errSub:  "cost not available",
+		},
+		{
+			name:     "emitted cost wins over derivation",
+			tr:       costTrace(0.05), // existing helper: carries cost_usd, no tokens
+			pricing:  pricing,
+			wantCost: 0.05,
+		},
+		// --- split-span layout (OTel-GenAI aggregated invoke_agent) ---
+		{
+			// Token span has no model; the trace has one distinct model on the
+			// sibling span → fallback resolves it; cost is derived.
+			name:     "split-span single model derives via trace fallback",
+			tr:       splitSpanTrace(1_000_000, 1_000_000, "m"),
+			pricing:  pricing,
+			wantCost: 30.0,
+		},
+		{
+			// Per-span model wins: token span has its own model m1; the trace
+			// also contains model m2 on another span; cost derives from m1.
+			name: "per-span model wins over trace fallback",
+			tr: func() *trace.Trace {
+				return &trace.Trace{Spans: []*trace.Span{
+					{
+						Name: "chat",
+						Attrs: map[string]string{
+							genai.Op:           genai.OpChat,
+							genai.InTokens:     "1000000",
+							genai.OutTokens:    "1000000",
+							genai.RequestModel: "m", // per-span model → must be used
+						},
+					},
+					{
+						Name: "other",
+						Attrs: map[string]string{
+							genai.Op:           genai.OpChat,
+							genai.RequestModel: "other-model", // trace also has a different model
+						},
+					},
+				}}
+			}(),
+			pricing:  pricing, // only "m" is priced; "other-model" is not
+			wantCost: 30.0,
+		},
+		{
+			// emitted cost wins over derivation even when BOTH cost_usd AND
+			// tokens+model are present on the same span (cost-wins; §4.3).
+			name:     "emitted cost wins when span carries both cost and tokens",
+			tr:       costAndTokenTrace(0.07, 1_000_000, 1_000_000, "m"),
+			pricing:  pricing,
+			wantCost: 0.07, // must be 0.07, NOT 0.07+30.0
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := costSum(tt.tr, tt.pricing)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				if tt.errSub != "" && !strings.Contains(err.Error(), tt.errSub) {
+					t.Fatalf("error %q missing %q", err.Error(), tt.errSub)
+				}
+				return
+			}
+			if got != tt.wantCost {
+				t.Fatalf("costSum = %v, want %v", got, tt.wantCost)
+			}
+		})
+	}
+}
+
+// TestCostSumSplitSpanAmbiguous verifies that when a token-bearing span has
+// no per-span model but the trace contains two or more distinct models,
+// costSum returns a hard error naming "multiple distinct models".
+func TestCostSumSplitSpanAmbiguous(t *testing.T) {
+	pricing := core.Pricing{
+		"a": {InputPerMTok: 10, OutputPerMTok: 20},
+		"b": {InputPerMTok: 5, OutputPerMTok: 10},
+	}
+	// Token span (no model) + two sibling spans with distinct models → ambiguous.
+	tr := &trace.Trace{Spans: []*trace.Span{
+		{
+			Name: "invoke_agent",
+			Attrs: map[string]string{
+				genai.Op:        genai.OpInvokeAgent,
+				genai.InTokens:  "1000000",
+				genai.OutTokens: "1000000",
+				// intentionally NO gen_ai.request.model
+			},
+		},
+		{
+			Name: "chat-a",
+			Attrs: map[string]string{
+				genai.Op:           genai.OpChat,
+				genai.RequestModel: "a",
+			},
+		},
+		{
+			Name: "chat-b",
+			Attrs: map[string]string{
+				genai.Op:           genai.OpChat,
+				genai.RequestModel: "b",
+			},
+		},
+	}}
+
+	_, err := costSum(tr, pricing)
+	if err == nil {
+		t.Fatal("want error for ambiguous trace models, got nil")
+	}
+	if !strings.Contains(err.Error(), "multiple distinct models") {
+		t.Fatalf("want 'multiple distinct models' in error, got %q", err.Error())
 	}
 }

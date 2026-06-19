@@ -139,6 +139,46 @@ func svcTrace(names ...string) *trace.Trace {
 	return tr
 }
 
+func TestServiceSequenceExported(t *testing.T) {
+	tests := []struct {
+		name    string
+		tr      *trace.Trace
+		want    []string
+		wantErr bool
+	}{
+		{
+			name: "delegates to serviceSequence correctly",
+			tr:   svcTrace("auth", "inventory", "payment"),
+			want: []string{"auth", "inventory", "payment"},
+		},
+		{
+			name:    "missing service.name is a hard error",
+			tr:      &trace.Trace{Spans: []*trace.Span{{Name: "POST", Attrs: map[string]string{}}}},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ServiceSequence(tt.tr)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("got=%v want=%v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("got[%d]=%q want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestSequenceServiceKind(t *testing.T) {
 	tests := []struct {
 		name     string

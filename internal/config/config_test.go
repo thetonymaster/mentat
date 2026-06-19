@@ -119,6 +119,92 @@ func TestLoadStore(t *testing.T) {
 	}
 }
 
+func TestLoadPricing(t *testing.T) {
+	data := []byte(`
+store: tempo
+pricing:
+  claude-opus-4-8:   { inputPerMTok: 15.0, outputPerMTok: 75.0 }
+  claude-sonnet-4-6: { inputPerMTok: 3.0,  outputPerMTok: 15.0 }
+`)
+	cfg, err := Load(data)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	opus, ok := cfg.Pricing["claude-opus-4-8"]
+	if !ok {
+		t.Fatalf("pricing missing claude-opus-4-8; got %+v", cfg.Pricing)
+	}
+	if opus.InputPerMTok != 15.0 || opus.OutputPerMTok != 75.0 {
+		t.Fatalf("opus rate = %+v, want {15 75}", opus)
+	}
+	if cfg.Pricing["claude-sonnet-4-6"].OutputPerMTok != 15.0 {
+		t.Fatalf("sonnet outputPerMTok = %v, want 15", cfg.Pricing["claude-sonnet-4-6"].OutputPerMTok)
+	}
+}
+
+func TestLoadRejectsInvalidPricing(t *testing.T) {
+	tests := []struct {
+		name    string
+		yaml    string
+		wantErr bool
+		errSub  string
+	}{
+		{
+			name:    "negative inputPerMTok rejected",
+			yaml:    "pricing:\n  claude-opus-4-8: { inputPerMTok: -1.0, outputPerMTok: 75.0 }\n",
+			wantErr: true,
+			errSub:  `claude-opus-4-8": inputPerMTok`,
+		},
+		{
+			name:    "negative outputPerMTok rejected",
+			yaml:    "pricing:\n  claude-sonnet-4-6: { inputPerMTok: 3.0, outputPerMTok: -15.0 }\n",
+			wantErr: true,
+			errSub:  `claude-sonnet-4-6": outputPerMTok`,
+		},
+		{
+			name:    "NaN inputPerMTok rejected",
+			yaml:    "pricing:\n  m: { inputPerMTok: .nan, outputPerMTok: 1.0 }\n",
+			wantErr: true,
+			errSub:  `m": inputPerMTok`,
+		},
+		{
+			name:    "infinite outputPerMTok rejected",
+			yaml:    "pricing:\n  m: { inputPerMTok: 1.0, outputPerMTok: .inf }\n",
+			wantErr: true,
+			errSub:  `m": outputPerMTok`,
+		},
+		{
+			name:    "empty model name rejected",
+			yaml:    "pricing:\n  \"\": { inputPerMTok: 1.0, outputPerMTok: 1.0 }\n",
+			wantErr: true,
+			errSub:  "model name must be non-empty",
+		},
+		{
+			name:    "zero rate is allowed (free model)",
+			yaml:    "pricing:\n  free-model: { inputPerMTok: 0.0, outputPerMTok: 0.0 }\n",
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Load([]byte(tt.yaml))
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), tt.errSub) {
+					t.Fatalf("error %q does not contain %q", err.Error(), tt.errSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+		})
+	}
+}
+
 func TestLoadHTTPTarget(t *testing.T) {
 	tests := []struct {
 		name        string

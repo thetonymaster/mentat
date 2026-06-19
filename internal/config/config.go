@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -13,6 +14,7 @@ type Config struct {
 	OTLPEndpoint string            `yaml:"otlpEndpoint"`
 	Poll         PollSpec          `yaml:"poll"`
 	Targets      map[string]Target `yaml:"targets"`
+	Pricing      Pricing           `yaml:"pricing"`
 }
 
 type Endpoint struct {
@@ -38,6 +40,17 @@ type HTTP struct {
 	Method  string            `yaml:"method"`
 	Headers map[string]string `yaml:"headers"`
 }
+
+// ModelRate is the YAML form of a per-model price (USD per million tokens). The
+// engine converts config.Pricing to the transport-free core.Pricing so the
+// comparator layer keeps importing only core/genai/trace, never config.
+type ModelRate struct {
+	InputPerMTok  float64 `yaml:"inputPerMTok"`
+	OutputPerMTok float64 `yaml:"outputPerMTok"`
+}
+
+// Pricing maps a model name to its rate.
+type Pricing map[string]ModelRate
 
 var defaultConcurrency = map[string]int{"shell": 1, "mcp": 1, "http": 8, "grpc": 8}
 
@@ -75,5 +88,35 @@ func Load(data []byte) (Config, error) {
 			c.Targets[name] = t
 		}
 	}
+	if err := validatePricing(c.Pricing); err != nil {
+		return Config{}, err
+	}
 	return c, nil
+}
+
+// validatePricing rejects pricing entries that would silently skew the cost a
+// budgets/CEL run derives: an empty model name, or a rate that is negative or
+// non-finite (NaN/±Inf). Zero is allowed (a free model). This is the config-load
+// boundary mirror of the finite/non-negative check budgets already applies to an
+// emitted cost_usd, so a bad rate fails fast here and never reaches costSum.
+func validatePricing(p Pricing) error {
+	for model, r := range p {
+		if strings.TrimSpace(model) == "" {
+			return fmt.Errorf("pricing: model name must be non-empty")
+		}
+		if err := validateRate(model, "inputPerMTok", r.InputPerMTok); err != nil {
+			return err
+		}
+		if err := validateRate(model, "outputPerMTok", r.OutputPerMTok); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateRate(model, field string, v float64) error {
+	if v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+		return fmt.Errorf("pricing %q: %s must be finite and >= 0, got %v", model, field, v)
+	}
+	return nil
 }

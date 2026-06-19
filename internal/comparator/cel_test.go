@@ -14,13 +14,13 @@ import (
 )
 
 func TestCELName(t *testing.T) {
-	if got := NewCEL().Name(); got != "cel" {
+	if got := NewCEL(nil).Name(); got != "cel" {
 		t.Fatalf("Name() = %q, want %q", got, "cel")
 	}
 }
 
 func TestCELWrongExpectationType(t *testing.T) {
-	_, err := NewCEL().Compare(context.Background(), core.Evidence{}, "not a CELExpectation")
+	_, err := NewCEL(nil).Compare(context.Background(), core.Evidence{}, "not a CELExpectation")
 	if err == nil {
 		t.Fatal("want error for wrong expectation type, got nil")
 	}
@@ -45,7 +45,7 @@ func TestCELOutputVars(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			ev := core.Evidence{Output: tt.out}
-			v, err := NewCEL().Compare(context.Background(), ev, CELExpectation{Expr: tt.expr})
+			v, err := NewCEL(nil).Compare(context.Background(), ev, CELExpectation{Expr: tt.expr})
 			if err != nil {
 				t.Fatalf("Compare(%q): %v", tt.expr, err)
 			}
@@ -91,7 +91,7 @@ func TestCELTraceVars(t *testing.T) {
 				t.Fatalf("parse fixture: %v", err)
 			}
 			ev := core.Evidence{Trace: tr}
-			v, err := NewCEL().Compare(context.Background(), ev, CELExpectation{Expr: tt.expr})
+			v, err := NewCEL(nil).Compare(context.Background(), ev, CELExpectation{Expr: tt.expr})
 			if err != nil {
 				t.Fatalf("Compare(%q): %v", tt.expr, err)
 			}
@@ -112,7 +112,7 @@ func TestCELCostAbsentHardError(t *testing.T) {
 		Name:  "invoke_agent",
 		Attrs: map[string]string{genai.Op: genai.OpInvokeAgent, genai.InTokens: "100"},
 	}}}
-	_, err := NewCEL().Compare(context.Background(), core.Evidence{Trace: tr}, CELExpectation{Expr: `cost < 1.0`})
+	_, err := NewCEL(nil).Compare(context.Background(), core.Evidence{Trace: tr}, CELExpectation{Expr: `cost < 1.0`})
 	if err == nil {
 		t.Fatal("want hard error for cost-absent trace, got nil")
 	}
@@ -131,7 +131,7 @@ func TestCELLatencyCraftedTrace(t *testing.T) {
 		End:   now.Add(50 * time.Millisecond),
 		Attrs: map[string]string{genai.Op: genai.OpInvokeAgent},
 	}}}
-	v, err := NewCEL().Compare(context.Background(), core.Evidence{Trace: tr}, CELExpectation{Expr: `latencyMs >= 50`})
+	v, err := NewCEL(nil).Compare(context.Background(), core.Evidence{Trace: tr}, CELExpectation{Expr: `latencyMs >= 50`})
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestCELLatencyCraftedTrace(t *testing.T) {
 // TestCELNilTraceReferencedError: a referenced trace var with a nil Trace is a
 // descriptive error, not a panic (no silent fallback).
 func TestCELNilTraceReferencedError(t *testing.T) {
-	_, err := NewCEL().Compare(context.Background(), core.Evidence{}, CELExpectation{Expr: `tokens < 5000`})
+	_, err := NewCEL(nil).Compare(context.Background(), core.Evidence{}, CELExpectation{Expr: `tokens < 5000`})
 	if err == nil {
 		t.Fatal("want error when a trace var is referenced but Trace is nil, got nil")
 	}
@@ -172,7 +172,7 @@ func TestCELBodyHandling(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			ev := core.Evidence{Output: core.Output{Status: 201, Body: tt.body}}
-			v, err := NewCEL().Compare(context.Background(), ev, CELExpectation{Expr: tt.expr})
+			v, err := NewCEL(nil).Compare(context.Background(), ev, CELExpectation{Expr: tt.expr})
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
 			}
@@ -183,5 +183,29 @@ func TestCELBodyHandling(t *testing.T) {
 				t.Fatalf("Pass=%v want %v; reasons=%v", v.Pass, tt.wantPass, v.Reasons)
 			}
 		})
+	}
+}
+
+// TestCostParityBudgetsAndCEL pins spec §5: the cel `cost` variable and budgets
+// derive the same value from the same trace + pricing table. The trace carries
+// tokens + model but no emitted cost, so both must derive 30.0.
+func TestCostParityBudgetsAndCEL(t *testing.T) {
+	pricing := core.Pricing{"m": {InputPerMTok: 10, OutputPerMTok: 20}}
+	tr := derivableTrace(1_000_000, 1_000_000, "m") // derives to $30.00
+	ev := core.Evidence{Trace: tr}
+
+	// budgets: $30.00 is within a $30.00 budget but over a $29.99 budget.
+	within := floatPtr(30.0)
+	over := floatPtr(29.99)
+	if v, err := NewBudgets(pricing).Compare(context.Background(), ev, BudgetExpectation{MaxCostUSD: within}); err != nil || !v.Pass {
+		t.Fatalf("budgets within: pass=%v err=%v", v.Pass, err)
+	}
+	if v, err := NewBudgets(pricing).Compare(context.Background(), ev, BudgetExpectation{MaxCostUSD: over}); err != nil || v.Pass {
+		t.Fatalf("budgets over: pass=%v err=%v", v.Pass, err)
+	}
+
+	// cel: the same derived value satisfies `cost == 30.0`.
+	if v, err := NewCEL(pricing).Compare(context.Background(), ev, CELExpectation{Expr: `cost == 30.0`}); err != nil || !v.Pass {
+		t.Fatalf("cel cost==30.0: pass=%v err=%v reasons=%v", v.Pass, err, v.Reasons)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/thetonymaster/mentat/internal/genai"
 	"github.com/thetonymaster/mentat/internal/trace"
@@ -155,6 +156,86 @@ func TestFormatTools(t *testing.T) {
 
 	t.Run("write error on tools header is returned", func(t *testing.T) {
 		err := FormatTools(sampleForest(), formatErrWriter{})
+		if err == nil {
+			t.Fatal("expected error from failing writer, got nil")
+		}
+		if !strings.Contains(err.Error(), "ctl:") {
+			t.Fatalf("error missing 'ctl:' prefix, got: %v", err)
+		}
+	})
+}
+
+// serviceForest builds a trace where each span carries a service.name resource
+// attr and a real Start, so ServiceSequence orders them first-seen.
+func serviceForest(run string, services ...string) *trace.Trace {
+	tr := &trace.Trace{RunID: run}
+	base := time.Unix(0, 0)
+	for i, name := range services {
+		s := &trace.Span{
+			ID:    run + string(rune('a'+i)),
+			Name:  "POST",
+			Start: base.Add(time.Duration(i) * time.Millisecond),
+			Attrs: map[string]string{"service.name": name},
+		}
+		tr.Spans = append(tr.Spans, s)
+	}
+	return tr
+}
+
+func TestFormatServices(t *testing.T) {
+	tests := []struct {
+		name     string
+		tr       *trace.Trace
+		wantSubs []string
+		wantErr  bool
+	}{
+		{
+			name:     "nil trace prints marker",
+			tr:       nil,
+			wantSubs: []string{"(no trace)"},
+		},
+		{
+			name:     "lists distinct services in first-seen order",
+			tr:       serviceForest("r1", "auth", "inventory", "payment", "notify"),
+			wantSubs: []string{"4 service call", "1. auth", "2. inventory", "3. payment", "4. notify"},
+		},
+		{
+			name:    "span missing service.name is a hard error",
+			tr:      &trace.Trace{RunID: "r2", Spans: []*trace.Span{{Name: "POST", Attrs: map[string]string{}}}},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			var b bytes.Buffer
+			err := FormatServices(tt.tr, &b)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("FormatServices err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			for _, want := range tt.wantSubs {
+				if !strings.Contains(b.String(), want) {
+					t.Fatalf("output missing %q in:\n%s", want, b.String())
+				}
+			}
+		})
+	}
+
+	t.Run("write error on nil trace is returned", func(t *testing.T) {
+		err := FormatServices(nil, formatErrWriter{})
+		if err == nil {
+			t.Fatal("expected error from failing writer, got nil")
+		}
+		if !strings.Contains(err.Error(), "ctl:") {
+			t.Fatalf("error missing 'ctl:' prefix, got: %v", err)
+		}
+	})
+
+	t.Run("write error on services header is returned", func(t *testing.T) {
+		err := FormatServices(serviceForest("r1", "auth", "inventory"), formatErrWriter{})
 		if err == nil {
 			t.Fatal("expected error from failing writer, got nil")
 		}

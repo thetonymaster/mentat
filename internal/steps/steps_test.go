@@ -373,6 +373,105 @@ func TestCELScenarioInitFailsBeforeDrive(t *testing.T) {
 	// ctrl's t.Cleanup asserts Query/GetByID were never called → no SUT resolved.
 }
 
+// TestSchemaStep exercises the `the response body matches schema` step. The
+// schema matcher reads ev.Output.Body, which the shell driver does not populate,
+// so the body is set directly on the world's Evidence (the engine.Build inside
+// buildEng registers the schema matcher + result comparator).
+func TestSchemaStep(t *testing.T) {
+	eng := buildEng(t, happyTrace())
+	const schema = `{"type":"object","required":["status"],` +
+		`"properties":{"status":{"type":"string"}}}`
+
+	tests := []struct {
+		name    string
+		body    string
+		wantErr bool
+	}{
+		{name: "valid body passes", body: `{"status":"confirmed"}`, wantErr: false},
+		{name: "missing field fails", body: `{}`, wantErr: true},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			w := &world{eng: eng}
+			w.ev = core.Evidence{Output: core.Output{Body: []byte(tt.body)}}
+			err := w.responseBodyMatchesSchema(&godog.DocString{Content: schema})
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
+			}
+		})
+	}
+
+	t.Run("nil docstring is an error", func(t *testing.T) {
+		w := &world{eng: eng}
+		if err := w.responseBodyMatchesSchema(nil); err == nil {
+			t.Fatal("want error for nil docstring, got nil")
+		}
+	})
+}
+
+// TestRegexStep exercises the `the result matches regex` grammar end-to-end
+// through a godog suite: a matching pattern passes the suite; a non-matching one
+// fails it and surfaces the result-comparator's regex reason. buildEng's `svc`
+// shell target prints "done", so answer == "done".
+func TestRegexStep(t *testing.T) {
+	tests := []struct {
+		name     string
+		feature  string
+		wantPass bool
+		contains []string // substrings required in suite output (failure cases)
+	}{
+		{
+			name: "matching pattern passes",
+			feature: `Feature: regex
+  Scenario: answer matches
+    Given the agent target "svc"
+    When I run scenario "happy"
+    Then the result matches regex "^do.e$"
+`,
+			wantPass: true,
+		},
+		{
+			name: "non-matching pattern fails with reason",
+			feature: `Feature: regex-red
+  Scenario: answer does not match
+    Given the agent target "svc"
+    When I run scenario "happy"
+    Then the result matches regex "zzz"
+`,
+			wantPass: false,
+			contains: []string{"result regex"},
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			eng := buildEng(t, happyTrace())
+			var out bytes.Buffer
+			suite := godog.TestSuite{
+				ScenarioInitializer: Initializer(eng),
+				Options: &godog.Options{
+					Format:          "pretty",
+					Output:          &out,
+					FeatureContents: []godog.Feature{{Name: tt.name, Contents: []byte(tt.feature)}},
+				},
+			}
+			status := suite.Run()
+			if tt.wantPass && status != 0 {
+				t.Fatalf("expected passing suite, status=%d\n%s", status, out.String())
+			}
+			if !tt.wantPass && status == 0 {
+				t.Fatalf("expected failing suite, got 0\n%s", out.String())
+			}
+			for _, sub := range tt.contains {
+				if !strings.Contains(out.String(), sub) {
+					t.Fatalf("expected %q in suite output, got:\n%s", sub, out.String())
+				}
+			}
+		})
+	}
+}
+
 func TestRunSatisfiesDocNil(t *testing.T) {
 	w := &world{}
 	if err := w.runSatisfiesDoc(nil); err == nil {

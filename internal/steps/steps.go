@@ -42,9 +42,11 @@ func Initializer(eng *engine.Engine) func(*godog.ScenarioContext) {
 		sc.Step(`^the result contains "([^"]*)"$`, w.resultContains)
 		sc.Step(`^the result equals "([^"]*)"$`, w.resultEquals)
 		sc.Step(`^the response status is (\d+)$`, w.responseStatus)
+		sc.Step(`^the result matches regex "([^"]*)"$`, w.resultMatchesRegex)
 		sc.Step(`^the services are called in order:$`, w.servicesInOrder)
 		sc.Step(`^the service "([^"]+)" is never called$`, w.serviceNeverCalled)
 		sc.Step(`^the response body json-contains:$`, w.responseBodyJSONContains)
+		sc.Step(`^the response body matches schema:$`, w.responseBodyMatchesSchema)
 		sc.Step(`^the run satisfies "([^"]*)"$`, w.runSatisfies)
 		sc.Step(`^the run satisfies:$`, w.runSatisfiesDoc)
 
@@ -139,6 +141,10 @@ func (w *world) resultEquals(s string) error {
 	return w.check("result", comparator.ResultExpectation{Matcher: "exact", Want: s})
 }
 
+func (w *world) resultMatchesRegex(re string) error {
+	return w.check("result", comparator.ResultExpectation{Matcher: "regex", Want: re})
+}
+
 func (w *world) responseStatus(code int) error {
 	return w.check("result", comparator.ResultExpectation{Matcher: "status", Want: fmt.Sprintf("%d", code)})
 }
@@ -167,6 +173,13 @@ func (w *world) serviceNeverCalled(name string) error {
 
 func (w *world) responseBodyJSONContains(doc *godog.DocString) error {
 	return w.check("result", comparator.ResultExpectation{Matcher: "json-subset", Want: doc.Content})
+}
+
+func (w *world) responseBodyMatchesSchema(doc *godog.DocString) error {
+	if doc == nil {
+		return fmt.Errorf("the response body matches schema: expected a docstring schema, got none")
+	}
+	return w.check("result", comparator.ResultExpectation{Matcher: "schema", Want: doc.Content})
 }
 
 func (w *world) runSatisfies(expr string) error {

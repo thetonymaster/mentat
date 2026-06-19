@@ -1,13 +1,17 @@
 package comparator
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
 
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/registry"
@@ -18,7 +22,7 @@ import (
 func RegisterBuiltinMatchers() {
 	for _, m := range []core.Matcher{
 		exactMatcher{}, containsMatcher{}, regexMatcher{},
-		jsonSubsetMatcher{}, statusMatcher{},
+		jsonSubsetMatcher{}, statusMatcher{}, schemaMatcher{},
 	} {
 		registry.RegisterMatcher(m.Name(), m)
 	}
@@ -150,4 +154,96 @@ func subset(w, g any) bool {
 	default:
 		return reflect.DeepEqual(w, g)
 	}
+}
+
+// schemaResourceID is the fixed in-memory id under which the schema is compiled.
+// jsonschema prefixes a metaschema-validation error with `"<id>#" is not valid
+// against metaschema: `; stripping that prefix keeps the user-facing error free
+// of the internal id while preserving the actionable reason.
+const schemaResourceID = "mem:///schema"
+
+// cleanSchemaCompileErr strips the known internal resource-id preamble from a
+// jsonschema compile error so the surfaced message is clean and actionable.
+func cleanSchemaCompileErr(err error) string {
+	return strings.TrimPrefix(err.Error(), `"`+schemaResourceID+`#" is not valid against metaschema: `)
+}
+
+type schemaMatcher struct{}
+
+func (schemaMatcher) Name() string { return "schema" }
+
+// Match validates the response body against the JSON Schema in want. The schema
+// is compiled fresh per call; an invalid schema is a hard error (never a silent
+// pass — invariant 4). An empty body validates as JSON null (a failure with a
+// descriptive reason, not an error); a non-empty body that is not valid JSON is
+// a hard error, mirroring the CEL `body` decision. Target is not consulted.
+func (schemaMatcher) Match(_ context.Context, ev core.Evidence, want, _ string) (core.Verdict, error) {
+	sch, err := compileSchema(want)
+	if err != nil {
+		// Terminal user-facing config error (the schema literal in the spec is wrong);
+		// use %s with a cleaned message so the internal resource id is never surfaced.
+		return core.Verdict{}, fmt.Errorf("result: schema: invalid JSON Schema: %s", cleanSchemaCompileErr(err))
+	}
+	inst, err := schemaInstance(ev.Output.Body)
+	if err != nil {
+		return core.Verdict{}, err
+	}
+	if verr := sch.Validate(inst); verr != nil {
+		return core.Verdict{Pass: false, Reasons: schemaReasons(verr)}, nil
+	}
+	return core.Verdict{Pass: true}, nil
+}
+
+// compileSchema compiles the JSON Schema in want. A fixed in-memory resource id
+// (schemaResourceID) avoids leaking the working directory in compile errors;
+// Match strips the id from the error it surfaces to the caller.
+func compileSchema(want string) (*jsonschema.Schema, error) {
+	c := jsonschema.NewCompiler()
+	doc, err := jsonschema.UnmarshalJSON(strings.NewReader(want))
+	if err != nil {
+		return nil, err
+	}
+	if err := c.AddResource(schemaResourceID, doc); err != nil {
+		return nil, err
+	}
+	return c.Compile(schemaResourceID)
+}
+
+// schemaInstance decodes the response body to a JSON value for validation. An
+// empty (or whitespace-only) body decodes to nil (JSON null) — validated, not
+// errored. A non-empty body that is not valid JSON is a hard error.
+func schemaInstance(body []byte) (any, error) {
+	if len(bytes.TrimSpace(body)) == 0 {
+		return nil, nil
+	}
+	v, err := jsonschema.UnmarshalJSON(bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("result: schema: response body is not valid JSON: %w", err)
+	}
+	return v, nil
+}
+
+// schemaReasons renders the validator's per-instance failures as discrete
+// reasons (e.g. "result schema: /total: got string, want number"). An error of
+// an unexpected type degrades to a single wrapped reason rather than a panic.
+func schemaReasons(err error) []string {
+	var ve *jsonschema.ValidationError
+	if !errors.As(err, &ve) {
+		return []string{fmt.Sprintf("result schema: %v", err)}
+	}
+	var reasons []string
+	for _, u := range ve.BasicOutput().Errors {
+		if u.Error == nil {
+			continue
+		}
+		loc := u.InstanceLocation
+		if loc == "" {
+			loc = "/"
+		}
+		reasons = append(reasons, fmt.Sprintf("result schema: %s: %s", loc, u.Error.String()))
+	}
+	if len(reasons) == 0 {
+		reasons = []string{fmt.Sprintf("result schema: %v", err)}
+	}
+	return reasons
 }
