@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,14 +16,20 @@ import (
 )
 
 var (
-	reSatisfiesInline = regexp.MustCompile(`^the run satisfies "([^"]*)"$`)
-	reSatisfiesDoc    = regexp.MustCompile(`^the run satisfies:$`)
+	reSatisfiesInline     = regexp.MustCompile(`^the run satisfies "([^"]*)"$`)
+	reSatisfiesDoc        = regexp.MustCompile(`^the run satisfies:$`)
+	reRunsSatisfiesInline = regexp.MustCompile(`^the runs satisfy "([^"]*)"$`)
+	reRunsSatisfiesDoc    = regexp.MustCompile(`^the runs satisfy:$`)
+	reRunsTag             = regexp.MustCompile(`^@runs\((\d+)(?:,(parallel))?\)$`)
 )
 
 type world struct {
-	eng    *engine.Engine
-	target string
-	ev     core.Evidence
+	eng      *engine.Engine
+	target   string
+	ev       core.Evidence
+	evs      []core.Evidence
+	n        int
+	parallel bool
 }
 
 // Initializer binds the v1 grammar; a fresh world is created per scenario.
@@ -49,10 +56,17 @@ func Initializer(eng *engine.Engine) func(*godog.ScenarioContext) {
 		sc.Step(`^the response body matches schema:$`, w.responseBodyMatchesSchema)
 		sc.Step(`^the run satisfies "([^"]*)"$`, w.runSatisfies)
 		sc.Step(`^the run satisfies:$`, w.runSatisfiesDoc)
+		sc.Step(`^the runs satisfy "([^"]*)"$`, w.runsSatisfies)
+		sc.Step(`^the runs satisfy:$`, w.runsSatisfiesDoc)
 
 		// §7: compile every CEL expression in the scenario before any step runs,
 		// so a malformed expectation fails before an expensive SUT is driven.
 		sc.Before(func(ctx context.Context, scenario *godog.Scenario) (context.Context, error) {
+			n, parallel, err := parseRunsTag(scenario.Tags)
+			if err != nil {
+				return ctx, err
+			}
+			w.n, w.parallel = n, parallel
 			if err := w.precompileScenario(scenario.Steps); err != nil {
 				return ctx, err
 			}
@@ -70,15 +84,23 @@ func (w *world) drive(args []string) error {
 	if w.target == "" {
 		return fmt.Errorf("no target set; use a Given ... target step first")
 	}
-	ev, err := w.eng.Drive(context.Background(), w.target, args)
+	n := w.n
+	if n < 1 {
+		n = 1
+	}
+	evs, err := w.eng.DriveN(context.Background(), w.target, args, n, w.parallel)
 	if err != nil {
 		return err
 	}
-	w.ev = ev
+	w.evs = evs
+	w.ev = evs[0] // single-run comparators evaluate the first run
 	return nil
 }
 
 func (w *world) check(name string, exp core.Expectation) error {
+	if w.n > 1 {
+		return fmt.Errorf("single-run step in a @runs(%d) scenario evaluates only the first run; use \"the runs satisfy\" for assertions across all runs", w.n)
+	}
 	c, ok := w.eng.Comparator(name)
 	if !ok {
 		return fmt.Errorf("no comparator %q", name)
@@ -193,25 +215,66 @@ func (w *world) runSatisfiesDoc(doc *godog.DocString) error {
 	return w.check("cel", comparator.CELExpectation{Expr: doc.Content})
 }
 
-// precompileScenario compiles every "the run satisfies" expression in the
-// scenario before any step executes (§7). A syntax/type/unknown-var error fails
-// the scenario at init, before the SUT is driven.
+func (w *world) runsSatisfies(expr string) error {
+	return w.checkRuns(expr)
+}
+
+func (w *world) runsSatisfiesDoc(doc *godog.DocString) error {
+	if doc == nil {
+		return fmt.Errorf("the runs satisfy: expected a docstring expression, got none")
+	}
+	return w.checkRuns(doc.Content)
+}
+
+func (w *world) checkRuns(expr string) error {
+	if len(w.evs) == 0 {
+		return fmt.Errorf("the runs satisfy: no runs driven; use a When ... step first")
+	}
+	c, ok := w.eng.AggregateComparator("aggregate-cel")
+	if !ok {
+		return fmt.Errorf("no aggregate comparator %q", "aggregate-cel")
+	}
+	v, err := c.Aggregate(context.Background(), w.evs, comparator.AggregateCELExpectation{Expr: expr})
+	if err != nil {
+		return fmt.Errorf("aggregate-cel: %w", err)
+	}
+	if !v.Pass {
+		return fmt.Errorf("aggregate-cel failed: %s", strings.Join(v.Reasons, "; "))
+	}
+	return nil
+}
+
+// precompileScenario compiles every "the run satisfies" and "the runs satisfy"
+// expression in the scenario before any step executes (§7). A syntax/type/unknown-var
+// error fails the scenario at init, before the SUT is driven.
 func (w *world) precompileScenario(steps []*messages.PickleStep) error {
 	for _, st := range steps {
-		expr, ok := satisfiesExpr(st)
-		if !ok {
+		if expr, ok := satisfiesExpr(st); ok {
+			c, ok := w.eng.Comparator("cel")
+			if !ok {
+				return fmt.Errorf("scenario-init: 'the run satisfies' requires the cel comparator, which is not registered")
+			}
+			pc, ok := c.(interface{ Compile(string) error })
+			if !ok {
+				return fmt.Errorf("scenario-init: cel comparator %T does not support pre-compilation", c)
+			}
+			if err := pc.Compile(expr); err != nil {
+				return fmt.Errorf("scenario-init: %w", err)
+			}
 			continue
 		}
-		c, ok := w.eng.Comparator("cel")
-		if !ok {
-			return fmt.Errorf("scenario-init: 'the run satisfies' requires the cel comparator, which is not registered")
-		}
-		pc, ok := c.(interface{ Compile(string) error })
-		if !ok {
-			return fmt.Errorf("scenario-init: cel comparator %T does not support pre-compilation", c)
-		}
-		if err := pc.Compile(expr); err != nil {
-			return fmt.Errorf("scenario-init: %w", err)
+		if expr, ok := runsSatisfiesExpr(st); ok {
+			c, ok := w.eng.AggregateComparator("aggregate-cel")
+			if !ok {
+				return fmt.Errorf("scenario-init: 'the runs satisfy' requires the aggregate-cel comparator, which is not registered")
+			}
+			pc, ok := c.(interface{ Compile(string) error })
+			if !ok {
+				return fmt.Errorf("scenario-init: aggregate comparator %T does not support pre-compilation", c)
+			}
+			if err := pc.Compile(expr); err != nil {
+				return fmt.Errorf("scenario-init: %w", err)
+			}
 		}
 	}
 	return nil
@@ -227,4 +290,35 @@ func satisfiesExpr(st *messages.PickleStep) (string, bool) {
 		return st.Argument.DocString.Content, true
 	}
 	return "", false
+}
+
+// runsSatisfiesExpr extracts a CEL expression from a "the runs satisfy" step.
+func runsSatisfiesExpr(st *messages.PickleStep) (string, bool) {
+	if m := reRunsSatisfiesInline.FindStringSubmatch(st.Text); m != nil {
+		return m[1], true
+	}
+	if reRunsSatisfiesDoc.MatchString(st.Text) && st.Argument != nil && st.Argument.DocString != nil {
+		return st.Argument.DocString.Content, true
+	}
+	return "", false
+}
+
+// parseRunsTag reads @runs(N) / @runs(N,parallel). Absent -> (1, false, nil). A tag
+// that begins "@runs(" but does not match the strict form is a hard error.
+func parseRunsTag(tags []*messages.PickleTag) (int, bool, error) {
+	for _, tag := range tags {
+		if !strings.HasPrefix(tag.Name, "@runs(") {
+			continue
+		}
+		m := reRunsTag.FindStringSubmatch(tag.Name)
+		if m == nil {
+			return 0, false, fmt.Errorf("scenario-init: malformed @runs tag %q (want @runs(N) or @runs(N,parallel))", tag.Name)
+		}
+		n, err := strconv.Atoi(m[1])
+		if err != nil || n < 1 {
+			return 0, false, fmt.Errorf("scenario-init: @runs requires N>=1, got %q", tag.Name)
+		}
+		return n, m[2] == "parallel", nil
+	}
+	return 1, false, nil
 }

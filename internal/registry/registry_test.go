@@ -28,11 +28,13 @@ func (fakeDriver) Run(_ context.Context, _ core.RunSpec) (core.RunResult, error)
 func resetRegistries(t *testing.T) {
 	t.Helper()
 	comparators = map[string]core.Comparator{}
+	aggregateComparators = map[string]core.AggregateComparator{}
 	drivers = map[string]core.Driver{}
 	matchers = map[string]core.Matcher{}
 	stores = map[string]StoreFactory{}
 	t.Cleanup(func() {
 		comparators = map[string]core.Comparator{}
+		aggregateComparators = map[string]core.AggregateComparator{}
 		drivers = map[string]core.Driver{}
 		matchers = map[string]core.Matcher{}
 		stores = map[string]StoreFactory{}
@@ -143,6 +145,34 @@ func TestMatcherRegistry(t *testing.T) {
 			}
 			if ok && got.Name() != tt.regName {
 				t.Fatalf("Matcher(%q).Name()=%q, want %q", tt.lookup, got.Name(), tt.regName)
+			}
+		})
+	}
+}
+
+type fakeAggCmp struct{}
+
+func (fakeAggCmp) Name() string { return "fake-agg" }
+func (fakeAggCmp) Aggregate(_ context.Context, _ []core.Evidence, _ core.Expectation) (core.Verdict, error) {
+	return core.Verdict{Pass: true}, nil
+}
+
+func TestAggregateComparatorRegistry(t *testing.T) {
+	resetRegistries(t)
+	RegisterAggregateComparator("fake-agg", fakeAggCmp{})
+	tests := []struct {
+		name   string
+		lookup string
+		wantOK bool
+	}{
+		{name: "registered name hits", lookup: "fake-agg", wantOK: true},
+		{name: "unknown name misses", lookup: "missing-agg", wantOK: false},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			if _, ok := AggregateComparator(tt.lookup); ok != tt.wantOK {
+				t.Fatalf("AggregateComparator(%q) ok=%v, want %v", tt.lookup, ok, tt.wantOK)
 			}
 		})
 	}

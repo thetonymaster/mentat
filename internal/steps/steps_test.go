@@ -2,6 +2,8 @@ package steps
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -330,6 +332,15 @@ func TestPrecompileScenario(t *testing.T) {
 	if err := w.precompileScenario(bad); err == nil {
 		t.Fatal("want error for malformed expr at scenario-init, got nil")
 	}
+
+	// Fix 3: docstring form of "the runs satisfy:" is precompiled via the aggregate-cel path.
+	runsDoc := []*messages.PickleStep{{
+		Text:     `the runs satisfy:`,
+		Argument: &messages.PickleStepArgument{DocString: &messages.PickleDocString{Content: `rate(r, 'search' in r.tools) >= 0.5`}},
+	}}
+	if err := w.precompileScenario(runsDoc); err != nil {
+		t.Fatalf("runs-satisfy docstring precompile: %v", err)
+	}
 }
 
 // TestCELScenarioInitFailsBeforeDrive proves §7: a malformed expression fails the
@@ -476,6 +487,289 @@ func TestRunSatisfiesDocNil(t *testing.T) {
 	w := &world{}
 	if err := w.runSatisfiesDoc(nil); err == nil {
 		t.Fatal("want error for nil docstring, got nil")
+	}
+}
+
+// TestRunsSatisfiesDocNil tests that runsSatisfiesDoc returns an error for a nil docstring.
+func TestRunsSatisfiesDocNil(t *testing.T) {
+	w := &world{}
+	if err := w.runsSatisfiesDoc(nil); err == nil {
+		t.Fatal("want error for nil docstring, got nil")
+	}
+}
+
+// TestCheckRunsErrors exercises checkRuns error paths (no evs driven).
+func TestCheckRunsErrors(t *testing.T) {
+	eng := buildEng(t, happyTrace())
+	tests := []struct {
+		name   string
+		setup  func(w *world)
+		errSub string
+	}{
+		{
+			name:   "no_evs_driven",
+			setup:  func(w *world) {}, // evs is nil
+			errSub: "no runs driven",
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			w := &world{eng: eng}
+			tt.setup(w)
+			err := w.checkRuns("true")
+			if err == nil {
+				t.Fatal("want error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.errSub) {
+				t.Fatalf("expected error containing %q, got: %v", tt.errSub, err)
+			}
+		})
+	}
+}
+
+// TestParseRunsTag tests the @runs tag parser including error paths.
+func TestParseRunsTag(t *testing.T) {
+	tests := []struct {
+		name    string
+		tags    []*messages.PickleTag
+		wantN   int
+		wantPar bool
+		wantErr bool
+		errSub  string
+	}{
+		{
+			name:    "absent_tag_defaults_to_1",
+			tags:    nil,
+			wantN:   1,
+			wantPar: false,
+		},
+		{
+			name:    "runs_3",
+			tags:    []*messages.PickleTag{{Name: "@runs(3)"}},
+			wantN:   3,
+			wantPar: false,
+		},
+		{
+			name:    "runs_2_parallel",
+			tags:    []*messages.PickleTag{{Name: "@runs(2,parallel)"}},
+			wantN:   2,
+			wantPar: true,
+		},
+		{
+			name:    "malformed_tag",
+			tags:    []*messages.PickleTag{{Name: "@runs(bad)"}},
+			wantErr: true,
+			errSub:  "malformed @runs tag",
+		},
+		{
+			name:    "zero_n_is_rejected",
+			tags:    []*messages.PickleTag{{Name: "@runs(0)"}},
+			wantErr: true,
+			errSub:  "@runs requires N>=1",
+		},
+		{
+			name:    "unrelated_tag_ignored",
+			tags:    []*messages.PickleTag{{Name: "@smoke"}},
+			wantN:   1,
+			wantPar: false,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			n, par, err := parseRunsTag(tt.tags)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				if !strings.Contains(err.Error(), tt.errSub) {
+					t.Fatalf("expected error containing %q, got: %v", tt.errSub, err)
+				}
+				return
+			}
+			if n != tt.wantN {
+				t.Fatalf("n=%d want=%d", n, tt.wantN)
+			}
+			if par != tt.wantPar {
+				t.Fatalf("parallel=%v want=%v", par, tt.wantPar)
+			}
+		})
+	}
+}
+
+// runsEngine builds an engine whose store returns happyTrace for every run, with
+// distinct run ids, for hermetic @runs scenarios.
+func runsEngine(t *testing.T, tr *trace.Trace) *engine.Engine {
+	t.Helper()
+	cfg := config.Config{
+		OTLPEndpoint: "x",
+		Targets:      map[string]config.Target{"bot": {Adapter: "shell", Command: []string{"sh", "-c", "echo hi"}, MaxConcurrency: 4}},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "t"}}, nil).AnyTimes()
+	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(tr, nil).AnyTimes()
+	var n int
+	cor := correlate.New(func() string { n++; return fmt.Sprintf("run-%d", n) }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+	eng, err := engine.Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("engine.Build: %v", err)
+	}
+	return eng
+}
+
+func TestRunsSatisfiesStep(t *testing.T) {
+	feature := `Feature: multirun
+  @runs(3)
+  Scenario: search always present
+    Given the agent target "bot"
+    When I run scenario "x"
+    Then the runs satisfy "rate(r, 'search' in r.tools) >= 0.9"
+`
+	var out bytes.Buffer
+	suite := godog.TestSuite{
+		ScenarioInitializer: Initializer(runsEngine(t, happyTrace())),
+		Options: &godog.Options{
+			Format:          "pretty",
+			Output:          &out,
+			Strict:          true, // undefined steps must be treated as failures
+			FeatureContents: []godog.Feature{{Name: "multirun", Contents: []byte(feature)}},
+		},
+	}
+	if status := suite.Run(); status != 0 {
+		t.Fatalf("expected pass (happyTrace has search), status=%d\n%s", status, out.String())
+	}
+}
+
+// badDistEngine returns an engine whose store yields a trace WITH "search" on a
+// fraction of runs and WITHOUT it on the rest, deterministically by call count.
+func badDistEngine(t *testing.T, withSearch, total int) *engine.Engine {
+	t.Helper()
+	cfg := config.Config{
+		OTLPEndpoint: "x",
+		Targets:      map[string]config.Target{"bot": {Adapter: "shell", Command: []string{"sh", "-c", "echo hi"}, MaxConcurrency: 1}},
+	}
+	withTrace := &trace.Trace{
+		Roots: []*trace.Span{{Name: "invoke_agent", Attrs: map[string]string{genai.Op: genai.OpInvokeAgent}}},
+		Spans: []*trace.Span{
+			{Name: "invoke_agent", Attrs: map[string]string{genai.Op: genai.OpInvokeAgent}},
+			{Name: "tool search", Attrs: map[string]string{genai.Op: genai.OpExecuteTool, genai.ToolName: "search"}},
+		},
+	}
+	withoutTrace := &trace.Trace{
+		Roots: []*trace.Span{{Name: "invoke_agent", Attrs: map[string]string{genai.Op: genai.OpInvokeAgent}}},
+		Spans: []*trace.Span{{Name: "invoke_agent", Attrs: map[string]string{genai.Op: genai.OpInvokeAgent}}},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	// calls counts GetByID invocations; each run makes exactly 1 GetByID when the
+	// polling timeout fires immediately (Timeout: time.Nanosecond forces a single
+	// poll per run — if spans>0 the correlator returns best-effort at deadline).
+	var calls int
+	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "t"}}, nil).AnyTimes()
+	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, _ string) (*trace.Trace, error) {
+		calls++
+		if calls <= withSearch {
+			return withTrace, nil
+		}
+		return withoutTrace, nil
+	}).Times(total)
+	var n int
+	cor := correlate.New(func() string { n++; return fmt.Sprintf("run-%d", n) }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Nanosecond})
+	eng, err := engine.Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("engine.Build: %v", err)
+	}
+	return eng
+}
+
+// TestMultirunGoesRedOnBadDistribution is the L3 meta-test: 5/10 runs have
+// "search" so rate=0.5, the assertion requires >=0.8; Mentat must go RED.
+func TestMultirunGoesRedOnBadDistribution(t *testing.T) {
+	feature := `Feature: meta-multirun
+  @runs(10)
+  Scenario: search must be consulted in >= 80% of runs
+    Given the agent target "bot"
+    When I run scenario "x"
+    Then the runs satisfy "rate(r, 'search' in r.tools) >= 0.8"
+`
+	var out bytes.Buffer
+	suite := godog.TestSuite{
+		ScenarioInitializer: Initializer(badDistEngine(t, 5, 10)),
+		Options: &godog.Options{
+			Format:          "pretty",
+			Output:          &out,
+			Strict:          true,
+			FeatureContents: []godog.Feature{{Name: "meta-multirun", Contents: []byte(feature)}},
+		},
+	}
+	if status := suite.Run(); status == 0 {
+		t.Fatalf("expected RED on a 0.5 search rate vs >=0.8, but suite passed\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "aggregate-cel failed") {
+		t.Fatalf("expected aggregate-cel failure reason, got:\n%s", out.String())
+	}
+}
+
+// TestMultirunGoesGreenOnGoodDistribution: 9/10 runs have "search" so rate=0.9
+// >= 0.8; Mentat must go GREEN.
+func TestMultirunGoesGreenOnGoodDistribution(t *testing.T) {
+	feature := `Feature: meta-multirun
+  @runs(10)
+  Scenario: search consulted in >= 80% of runs
+    Given the agent target "bot"
+    When I run scenario "x"
+    Then the runs satisfy "rate(r, 'search' in r.tools) >= 0.8"
+`
+	var out bytes.Buffer
+	suite := godog.TestSuite{
+		ScenarioInitializer: Initializer(badDistEngine(t, 9, 10)),
+		Options: &godog.Options{
+			Format:          "pretty",
+			Output:          &out,
+			Strict:          true,
+			FeatureContents: []godog.Feature{{Name: "meta-multirun", Contents: []byte(feature)}},
+		},
+	}
+	if status := suite.Run(); status != 0 {
+		t.Fatalf("expected GREEN on a 0.9 search rate vs >=0.8, status=%d\n%s", status, out.String())
+	}
+}
+
+// TestSingleRunStepRejectedInMultirunScenario is the L3 meta-test that proves a
+// single-run comparator step used inside a @runs(N>1) scenario is a hard,
+// descriptive error (no silent first-run-only evaluation). The feature uses
+// "total tokens are under 5000" which would PASS against happyTrace's 1800 tokens
+// if the guard were absent — a GREEN result here means the guard is missing.
+func TestSingleRunStepRejectedInMultirunScenario(t *testing.T) {
+	feature := `Feature: mixed-grammar
+  @runs(2)
+  Scenario: single-run step under @runs is rejected
+    Given the agent target "bot"
+    When I run scenario "x"
+    Then total tokens are under 5000
+`
+	var out bytes.Buffer
+	suite := godog.TestSuite{
+		ScenarioInitializer: Initializer(runsEngine(t, happyTrace())),
+		Options: &godog.Options{
+			Format:          "pretty",
+			Output:          &out,
+			Strict:          true,
+			FeatureContents: []godog.Feature{{Name: "mixed-grammar", Contents: []byte(feature)}},
+		},
+	}
+	status := suite.Run()
+	if status == 0 {
+		t.Fatalf("expected RED: single-run step inside @runs(2) must be rejected, but suite passed\n%s", out.String())
+	}
+	outStr := out.String()
+	if !strings.Contains(outStr, "@runs(2)") {
+		t.Fatalf("expected error to mention @runs(2), got:\n%s", outStr)
+	}
+	if !strings.Contains(outStr, "the runs satisfy") {
+		t.Fatalf("expected error to mention \"the runs satisfy\", got:\n%s", outStr)
 	}
 }
 

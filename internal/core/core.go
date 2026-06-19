@@ -19,11 +19,23 @@ type Output struct {
 	Answer   string // extracted result (see ExtractAnswer)
 }
 
+// FailureKind classifies a harness-level run failure by which engine call failed
+// (§6). It is the value of Evidence.FailureKind for a failed run.
+const (
+	FailureKindDriver  = "driver"  // driver invocation failed
+	FailureKindResolve = "resolve" // trace resolution failed
+)
+
 // Evidence is everything a comparator may inspect about a single run.
 type Evidence struct {
 	RunID  string
 	Trace  *trace.Trace
 	Output Output
+	// Failed marks a harness-level failure for this run (driver invocation or trace
+	// resolution). A failed run carries no Trace. FailureKind is "" when not failed,
+	// else "driver" or "resolve" (classified by which engine call failed, §6).
+	Failed      bool
+	FailureKind string
 }
 
 type Verdict struct {
@@ -37,6 +49,14 @@ type Expectation = any
 type Comparator interface {
 	Name() string
 	Compare(ctx context.Context, ev Evidence, e Expectation) (Verdict, error)
+}
+
+// AggregateComparator asserts a property across the N Evidence values of a
+// multi-run (@runs) scenario. It is a sibling of Comparator, not a replacement:
+// the single-Evidence Comparator and every existing comparator are unchanged.
+type AggregateComparator interface {
+	Name() string
+	Aggregate(ctx context.Context, evs []Evidence, e Expectation) (Verdict, error)
 }
 
 // RunSpec is the driver input. The adapter applies RunID/Tags via its transport.

@@ -71,6 +71,59 @@ func (mr *MockComparatorMockRecorder) Name() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Name", reflect.TypeOf((*MockComparator)(nil).Name))
 }
 
+// MockAggregateComparator is a mock of AggregateComparator interface.
+type MockAggregateComparator struct {
+	ctrl     *gomock.Controller
+	recorder *MockAggregateComparatorMockRecorder
+	isgomock struct{}
+}
+
+// MockAggregateComparatorMockRecorder is the mock recorder for MockAggregateComparator.
+type MockAggregateComparatorMockRecorder struct {
+	mock *MockAggregateComparator
+}
+
+// NewMockAggregateComparator creates a new mock instance.
+func NewMockAggregateComparator(ctrl *gomock.Controller) *MockAggregateComparator {
+	mock := &MockAggregateComparator{ctrl: ctrl}
+	mock.recorder = &MockAggregateComparatorMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockAggregateComparator) EXPECT() *MockAggregateComparatorMockRecorder {
+	return m.recorder
+}
+
+// Aggregate mocks base method.
+func (m *MockAggregateComparator) Aggregate(ctx context.Context, evs []core.Evidence, e core.Expectation) (core.Verdict, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Aggregate", ctx, evs, e)
+	ret0, _ := ret[0].(core.Verdict)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Aggregate indicates an expected call of Aggregate.
+func (mr *MockAggregateComparatorMockRecorder) Aggregate(ctx, evs, e any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Aggregate", reflect.TypeOf((*MockAggregateComparator)(nil).Aggregate), ctx, evs, e)
+}
+
+// Name mocks base method.
+func (m *MockAggregateComparator) Name() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Name")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// Name indicates an expected call of Name.
+func (mr *MockAggregateComparatorMockRecorder) Name() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Name", reflect.TypeOf((*MockAggregateComparator)(nil).Name))
+}
+
 // MockDriver is a mock of Driver interface.
 type MockDriver struct {
 	ctrl     *gomock.Controller

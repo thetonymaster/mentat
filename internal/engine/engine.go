@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/thetonymaster/mentat/internal/config"
 	"github.com/thetonymaster/mentat/internal/core"
@@ -33,10 +34,13 @@ func (e *Engine) Comparator(name string) (core.Comparator, bool) {
 	return registry.Comparator(name)
 }
 
-// Drive injects the run tag, runs the SUT via its adapter, then resolves and
-// merges the run's trace. The per-target semaphore enforces max_concurrency.
-// When PinRun has been called, Drive resolves the pinned run id from the store
-// and returns it directly without injecting or running the SUT.
+// AggregateComparator resolves a named aggregate comparator from the registry.
+func (e *Engine) AggregateComparator(name string) (core.AggregateComparator, bool) {
+	return registry.AggregateComparator(name)
+}
+
+// Drive injects the run tag, runs the SUT, then resolves and merges its trace.
+// When PinRun was called, it resolves the pinned run id without driving.
 func (e *Engine) Drive(ctx context.Context, target string, args []string) (core.Evidence, error) {
 	if e.pinned != "" {
 		tr, err := e.cor.Resolve(ctx, e.st, e.pinned)
@@ -45,6 +49,18 @@ func (e *Engine) Drive(ctx context.Context, target string, args []string) (core.
 		}
 		return core.Evidence{RunID: e.pinned, Trace: tr}, nil
 	}
+	ev, err := e.driveOnce(ctx, target, args)
+	if err != nil {
+		return core.Evidence{}, err
+	}
+	return ev, nil
+}
+
+// driveOnce performs one live drive. On a harness failure it returns an Evidence
+// flagged Failed (with RunID + FailureKind) AND the wrapped error, so single-run
+// Drive can surface the error while multi-run DriveN can record the sample.
+// Structural errors (unknown target/adapter) carry an empty RunID.
+func (e *Engine) driveOnce(ctx context.Context, target string, args []string) (core.Evidence, error) {
 	t, ok := e.cfg.Targets[target]
 	if !ok {
 		return core.Evidence{}, fmt.Errorf("engine: unknown target %q", target)
@@ -53,7 +69,6 @@ func (e *Engine) Drive(ctx context.Context, target string, args []string) (core.
 	if !ok {
 		return core.Evidence{}, fmt.Errorf("engine: no driver for adapter %q", t.Adapter)
 	}
-
 	spec := core.RunSpec{
 		Target:  target,
 		Adapter: t.Adapter,
@@ -65,25 +80,80 @@ func (e *Engine) Drive(ctx context.Context, target string, args []string) (core.
 		},
 		Env: map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": e.cfg.OTLPEndpoint},
 	}
-	// Inject sets spec.RunID and spec.Tags["test.run.id"] in place (pointer
-	// receiver), so the subsequent drv.Run value-copy carries the run id.
 	runID := e.cor.Inject(ctx, &spec)
 
 	sem := e.sems[target]
 	select {
 	case sem <- struct{}{}:
 	case <-ctx.Done():
-		return core.Evidence{}, fmt.Errorf("engine: drive %q: %w", target, ctx.Err())
+		return core.Evidence{RunID: runID, Failed: true, FailureKind: core.FailureKindDriver}, fmt.Errorf("engine: drive %q: %w", target, ctx.Err())
 	}
 	defer func() { <-sem }()
 
 	res, err := drv.Run(ctx, spec)
 	if err != nil {
-		return core.Evidence{}, fmt.Errorf("engine: drive %q: %w", target, err)
+		return core.Evidence{RunID: runID, Failed: true, FailureKind: core.FailureKindDriver}, fmt.Errorf("engine: drive %q: %w", target, err)
 	}
 	tr, err := e.cor.Resolve(ctx, e.st, runID)
 	if err != nil {
-		return core.Evidence{}, fmt.Errorf("engine: resolve run %q: %w", runID, err)
+		return core.Evidence{RunID: runID, Failed: true, FailureKind: core.FailureKindResolve}, fmt.Errorf("engine: resolve run %q: %w", runID, err)
 	}
 	return core.Evidence{RunID: runID, Trace: tr, Output: res.Output}, nil
+}
+
+// DriveN runs the scenario n times and returns one Evidence per run. A harness
+// failure on an iteration becomes a typed failed sample (not an aborted batch);
+// a structural error aborts. Serial by default; parallel iterations each acquire
+// the existing per-target semaphore, with results collected by index.
+func (e *Engine) DriveN(ctx context.Context, target string, args []string, n int, parallel bool) ([]core.Evidence, error) {
+	if n < 1 {
+		return nil, fmt.Errorf("engine: DriveN needs n>=1, got %d", n)
+	}
+	if e.pinned != "" && n > 1 {
+		return nil, fmt.Errorf("engine: cannot multi-run a pinned scenario (n=%d); replay is deterministic", n)
+	}
+	evs := make([]core.Evidence, n)
+	collect := func(i int) error {
+		ev, err := e.driveOnce(ctx, target, args)
+		if err != nil && ev.RunID == "" {
+			return err // structural error: abort
+		}
+		evs[i] = ev // success, or a typed failed sample (ev.Failed)
+		return nil
+	}
+	if !parallel {
+		for i := 0; i < n; i++ {
+			if ctx.Err() != nil {
+				return nil, fmt.Errorf("engine: DriveN %q cancelled: %w", target, ctx.Err())
+			}
+			if err := collect(i); err != nil {
+				return nil, err
+			}
+		}
+		return evs, nil
+	}
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("engine: DriveN %q cancelled: %w", target, ctx.Err())
+	}
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var structErr error
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if err := collect(i); err != nil {
+				mu.Lock()
+				if structErr == nil {
+					structErr = err
+				}
+				mu.Unlock()
+			}
+		}(i)
+	}
+	wg.Wait()
+	if structErr != nil {
+		return nil, structErr
+	}
+	return evs, nil
 }
