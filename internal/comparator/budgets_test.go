@@ -313,3 +313,76 @@ func TestBudgetsCompare(t *testing.T) {
 		})
 	}
 }
+
+// derivableTrace builds a trace whose single LLM span carries input/output tokens
+// and a request model but NO emitted cost_usd, so cost must be derived.
+func derivableTrace(in, out int, model string) *trace.Trace {
+	return &trace.Trace{Spans: []*trace.Span{{
+		Name: "chat",
+		Attrs: map[string]string{
+			genai.Op:           genai.OpChat,
+			genai.InTokens:     strconv.Itoa(in),
+			genai.OutTokens:    strconv.Itoa(out),
+			genai.RequestModel: model,
+		},
+	}}}
+}
+
+func TestCostSumDerivesFromTokens(t *testing.T) {
+	// 1,000,000 in @ $10/MTok + 1,000,000 out @ $20/MTok = $30.00
+	pricing := core.Pricing{"m": {InputPerMTok: 10, OutputPerMTok: 20}}
+
+	tests := []struct {
+		name     string
+		tr       *trace.Trace
+		pricing  core.Pricing
+		wantCost float64
+		wantErr  bool
+		errSub   string
+	}{
+		{
+			name:     "derives from tokens when model is priced",
+			tr:       derivableTrace(1_000_000, 1_000_000, "m"),
+			pricing:  pricing,
+			wantCost: 30.0,
+		},
+		{
+			name:    "model absent from configured table is a hard error",
+			tr:      derivableTrace(1_000_000, 0, "unpriced"),
+			pricing: pricing,
+			wantErr: true,
+			errSub:  "not in pricing table",
+		},
+		{
+			name:    "token span with no cost and empty table is unavailable",
+			tr:      derivableTrace(1_000_000, 0, "m"),
+			pricing: nil,
+			wantErr: true,
+			errSub:  "cost not available",
+		},
+		{
+			name:     "emitted cost wins over derivation",
+			tr:       costTrace(0.05), // existing helper: carries cost_usd, no tokens
+			pricing:  pricing,
+			wantCost: 0.05,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := costSum(tt.tr, tt.pricing)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				if tt.errSub != "" && !strings.Contains(err.Error(), tt.errSub) {
+					t.Fatalf("error %q missing %q", err.Error(), tt.errSub)
+				}
+				return
+			}
+			if got != tt.wantCost {
+				t.Fatalf("costSum = %v, want %v", got, tt.wantCost)
+			}
+		})
+	}
+}

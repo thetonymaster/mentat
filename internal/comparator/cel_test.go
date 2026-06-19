@@ -185,3 +185,27 @@ func TestCELBodyHandling(t *testing.T) {
 		})
 	}
 }
+
+// TestCostParityBudgetsAndCEL pins spec §5: the cel `cost` variable and budgets
+// derive the same value from the same trace + pricing table. The trace carries
+// tokens + model but no emitted cost, so both must derive 30.0.
+func TestCostParityBudgetsAndCEL(t *testing.T) {
+	pricing := core.Pricing{"m": {InputPerMTok: 10, OutputPerMTok: 20}}
+	tr := derivableTrace(1_000_000, 1_000_000, "m") // derives to $30.00
+	ev := core.Evidence{Trace: tr}
+
+	// budgets: $30.00 is within a $30.00 budget but over a $29.99 budget.
+	within := floatPtr(30.0)
+	over := floatPtr(29.99)
+	if v, err := NewBudgets(pricing).Compare(context.Background(), ev, BudgetExpectation{MaxCostUSD: within}); err != nil || !v.Pass {
+		t.Fatalf("budgets within: pass=%v err=%v", v.Pass, err)
+	}
+	if v, err := NewBudgets(pricing).Compare(context.Background(), ev, BudgetExpectation{MaxCostUSD: over}); err != nil || v.Pass {
+		t.Fatalf("budgets over: pass=%v err=%v", v.Pass, err)
+	}
+
+	// cel: the same derived value satisfies `cost == 30.0`.
+	if v, err := NewCEL(pricing).Compare(context.Background(), ev, CELExpectation{Expr: `cost == 30.0`}); err != nil || !v.Pass {
+		t.Fatalf("cel cost==30.0: pass=%v err=%v reasons=%v", v.Pass, err, v.Reasons)
+	}
+}
