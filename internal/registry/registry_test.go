@@ -28,11 +28,13 @@ func (fakeDriver) Run(_ context.Context, _ core.RunSpec) (core.RunResult, error)
 func resetRegistries(t *testing.T) {
 	t.Helper()
 	comparators = map[string]core.Comparator{}
+	aggregateComparators = map[string]core.AggregateComparator{}
 	drivers = map[string]core.Driver{}
 	matchers = map[string]core.Matcher{}
 	stores = map[string]StoreFactory{}
 	t.Cleanup(func() {
 		comparators = map[string]core.Comparator{}
+		aggregateComparators = map[string]core.AggregateComparator{}
 		drivers = map[string]core.Driver{}
 		matchers = map[string]core.Matcher{}
 		stores = map[string]StoreFactory{}
@@ -145,6 +147,12 @@ func TestMatcherRegistry(t *testing.T) {
 				t.Fatalf("Matcher(%q).Name()=%q, want %q", tt.lookup, got.Name(), tt.regName)
 			}
 		})
+	}
+}
+
+func TestAggregateComparatorRegistry(t *testing.T) {
+	if _, ok := AggregateComparator("missing-agg"); ok {
+		t.Fatalf("unexpected aggregate comparator before registration")
 	}
 }
 

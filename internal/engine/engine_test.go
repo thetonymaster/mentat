@@ -381,6 +381,27 @@ func TestDriveRunError(t *testing.T) {
 	}
 }
 
+func TestAggregateComparatorLookup(t *testing.T) {
+	cfg := config.Config{
+		OTLPEndpoint: "http://localhost:4318",
+		Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+		Targets:      map[string]config.Target{},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	cor := correlate.New(func() string { return "run-1" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+	eng, err := Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if _, ok := eng.AggregateComparator("aggregate-cel"); !ok {
+		t.Fatalf("aggregate-cel must be registered")
+	}
+	if _, ok := eng.AggregateComparator("nope"); ok {
+		t.Fatalf("unknown aggregate comparator must not be found")
+	}
+}
+
 func TestDriveHTTPTarget(t *testing.T) {
 	var gotScenario, gotBaggage string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -7,9 +7,10 @@ import (
 
 // Stateless seams register instances; the stateful store seam registers factories (see StoreFactory).
 var (
-	comparators = map[string]core.Comparator{}
-	drivers     = map[string]core.Driver{}
-	matchers    = map[string]core.Matcher{}
+	comparators          = map[string]core.Comparator{}
+	aggregateComparators = map[string]core.AggregateComparator{}
+	drivers              = map[string]core.Driver{}
+	matchers             = map[string]core.Matcher{}
 )
 
 // StoreFactory builds a TraceStore from config. Stores are stateful (endpoints,
@@ -29,6 +30,17 @@ func RegisterComparator(name string, c core.Comparator) { comparators[name] = c 
 
 // Comparator resolves a registered Comparator by name.
 func Comparator(name string) (core.Comparator, bool) { c, ok := comparators[name]; return c, ok }
+
+// RegisterAggregateComparator registers an AggregateComparator under the given name.
+func RegisterAggregateComparator(name string, c core.AggregateComparator) {
+	aggregateComparators[name] = c
+}
+
+// AggregateComparator resolves a registered AggregateComparator by name.
+func AggregateComparator(name string) (core.AggregateComparator, bool) {
+	c, ok := aggregateComparators[name]
+	return c, ok
+}
 
 // Comparators returns all registered comparator names.
 func Comparators() []string {

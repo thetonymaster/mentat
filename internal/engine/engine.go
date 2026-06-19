@@ -33,6 +33,11 @@ func (e *Engine) Comparator(name string) (core.Comparator, bool) {
 	return registry.Comparator(name)
 }
 
+// AggregateComparator resolves a named aggregate comparator from the registry.
+func (e *Engine) AggregateComparator(name string) (core.AggregateComparator, bool) {
+	return registry.AggregateComparator(name)
+}
+
 // Drive injects the run tag, runs the SUT via its adapter, then resolves and
 // merges the run's trace. The per-target semaphore enforces max_concurrency.
 // When PinRun has been called, Drive resolves the pinned run id from the store
