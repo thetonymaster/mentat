@@ -142,6 +142,7 @@ func TestMatcherRegistryMissReturnsFalse(t *testing.T) {
 }
 
 func TestStoreRegistryRoundTrip(t *testing.T) {
+	resetRegistries(t)
 	want := store.NewInMemStore(nil)
 	RegisterStore("inmem-test", func(config.Config) (core.TraceStore, error) { return want, nil })
 
@@ -159,6 +160,7 @@ func TestStoreRegistryRoundTrip(t *testing.T) {
 }
 
 func TestStoreRegistryMissReturnsFalse(t *testing.T) {
+	resetRegistries(t)
 	if _, ok := Store("nope-not-registered"); ok {
 		t.Fatal("Store(unregistered) returned ok=true, want false")
 	}
