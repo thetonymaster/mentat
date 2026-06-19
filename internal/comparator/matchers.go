@@ -156,6 +156,18 @@ func subset(w, g any) bool {
 	}
 }
 
+// schemaResourceID is the fixed in-memory id under which the schema is compiled.
+// jsonschema prefixes a metaschema-validation error with `"<id>#" is not valid
+// against metaschema: `; stripping that prefix keeps the user-facing error free
+// of the internal id while preserving the actionable reason.
+const schemaResourceID = "mem:///schema"
+
+// cleanSchemaCompileErr strips the known internal resource-id preamble from a
+// jsonschema compile error so the surfaced message is clean and actionable.
+func cleanSchemaCompileErr(err error) string {
+	return strings.TrimPrefix(err.Error(), `"`+schemaResourceID+`#" is not valid against metaschema: `)
+}
+
 type schemaMatcher struct{}
 
 func (schemaMatcher) Name() string { return "schema" }
@@ -168,7 +180,9 @@ func (schemaMatcher) Name() string { return "schema" }
 func (schemaMatcher) Match(_ context.Context, ev core.Evidence, want, _ string) (core.Verdict, error) {
 	sch, err := compileSchema(want)
 	if err != nil {
-		return core.Verdict{}, fmt.Errorf("result: schema: invalid JSON Schema: %w", err)
+		// Terminal user-facing config error (the schema literal in the spec is wrong);
+		// use %s with a cleaned message so the internal resource id is never surfaced.
+		return core.Verdict{}, fmt.Errorf("result: schema: invalid JSON Schema: %s", cleanSchemaCompileErr(err))
 	}
 	inst, err := schemaInstance(ev.Output.Body)
 	if err != nil {
@@ -181,17 +195,18 @@ func (schemaMatcher) Match(_ context.Context, ev core.Evidence, want, _ string) 
 }
 
 // compileSchema compiles the JSON Schema in want. A fixed in-memory resource id
-// keeps any compile-error text free of filesystem paths.
+// (schemaResourceID) avoids leaking the working directory in compile errors;
+// Match strips the id from the error it surfaces to the caller.
 func compileSchema(want string) (*jsonschema.Schema, error) {
 	c := jsonschema.NewCompiler()
 	doc, err := jsonschema.UnmarshalJSON(strings.NewReader(want))
 	if err != nil {
 		return nil, err
 	}
-	if err := c.AddResource("mem:///schema", doc); err != nil {
+	if err := c.AddResource(schemaResourceID, doc); err != nil {
 		return nil, err
 	}
-	return c.Compile("mem:///schema")
+	return c.Compile(schemaResourceID)
 }
 
 // schemaInstance decodes the response body to a JSON value for validation. An

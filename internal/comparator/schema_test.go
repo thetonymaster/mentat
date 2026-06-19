@@ -13,13 +13,14 @@ func TestSchemaMatcher(t *testing.T) {
 		`"properties":{"total":{"type":"number"}}}`
 
 	tests := []struct {
-		name      string
-		body      string
-		want      string
-		wantPass  bool
-		wantErr   bool
-		reasonSub string // substring required in a failure reason (when !wantPass)
-		errSub    string // substring required in a hard error (when wantErr)
+		name       string
+		body       string
+		want       string
+		wantPass   bool
+		wantErr    bool
+		reasonSub  string // substring required in a failure reason (when !wantPass)
+		errSub     string // substring required in a hard error (when wantErr)
+		errExclude string // substring that must NOT appear in a hard error (when wantErr)
 	}{
 		{
 			name:     "valid body passes",
@@ -49,6 +50,13 @@ func TestSchemaMatcher(t *testing.T) {
 			reasonSub: "null",
 		},
 		{
+			name:      "whitespace-only body fails, not a hard error",
+			body:      "  \n  ",
+			want:      schema,
+			wantPass:  false,
+			reasonSub: "null",
+		},
+		{
 			name:    "non-JSON body is a hard error",
 			body:    `not json`,
 			want:    schema,
@@ -56,11 +64,12 @@ func TestSchemaMatcher(t *testing.T) {
 			errSub:  "not valid JSON",
 		},
 		{
-			name:    "invalid schema is a hard error",
-			body:    `{}`,
-			want:    `{"type": 123}`,
-			wantErr: true,
-			errSub:  "invalid JSON Schema",
+			name:       "invalid schema is a hard error",
+			body:       `{}`,
+			want:       `{"type": 123}`,
+			wantErr:    true,
+			errSub:     "invalid JSON Schema",
+			errExclude: "mem:///",
 		},
 	}
 	for _, tt := range tests {
@@ -75,6 +84,9 @@ func TestSchemaMatcher(t *testing.T) {
 			if tt.wantErr {
 				if tt.errSub != "" && !strings.Contains(err.Error(), tt.errSub) {
 					t.Fatalf("error %q missing %q", err.Error(), tt.errSub)
+				}
+				if tt.errExclude != "" && strings.Contains(err.Error(), tt.errExclude) {
+					t.Fatalf("error %q must not contain internal id %q", err.Error(), tt.errExclude)
 				}
 				return
 			}
