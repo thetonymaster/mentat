@@ -147,6 +147,9 @@ func TestCELNilTraceReferencedError(t *testing.T) {
 	if err == nil {
 		t.Fatal("want error when a trace var is referenced but Trace is nil, got nil")
 	}
+	if !strings.Contains(err.Error(), "evidence has no trace") {
+		t.Fatalf("want error containing %q, got %v", "evidence has no trace", err)
+	}
 }
 
 func TestCELBodyHandling(t *testing.T) {

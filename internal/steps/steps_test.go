@@ -367,6 +367,13 @@ func TestCELScenarioInitFailsBeforeDrive(t *testing.T) {
 	// ctrl's t.Cleanup asserts Query/GetByID were never called → no SUT resolved.
 }
 
+func TestRunSatisfiesDocNil(t *testing.T) {
+	w := &world{}
+	if err := w.runSatisfiesDoc(nil); err == nil {
+		t.Fatal("want error for nil docstring, got nil")
+	}
+}
+
 // TestStepMethods exercises each step method that the happy-scenario godog run
 // does not reach, using a crafted Evidence so comparators have the data they need.
 func TestStepMethods(t *testing.T) {

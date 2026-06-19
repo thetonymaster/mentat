@@ -174,6 +174,9 @@ func (w *world) runSatisfies(expr string) error {
 }
 
 func (w *world) runSatisfiesDoc(doc *godog.DocString) error {
+	if doc == nil {
+		return fmt.Errorf("the run satisfies: expected a docstring expression, got none")
+	}
 	return w.check("cel", comparator.CELExpectation{Expr: doc.Content})
 }
 
