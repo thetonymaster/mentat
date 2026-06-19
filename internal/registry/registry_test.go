@@ -150,9 +150,31 @@ func TestMatcherRegistry(t *testing.T) {
 	}
 }
 
+type fakeAggCmp struct{}
+
+func (fakeAggCmp) Name() string { return "fake-agg" }
+func (fakeAggCmp) Aggregate(_ context.Context, _ []core.Evidence, _ core.Expectation) (core.Verdict, error) {
+	return core.Verdict{Pass: true}, nil
+}
+
 func TestAggregateComparatorRegistry(t *testing.T) {
-	if _, ok := AggregateComparator("missing-agg"); ok {
-		t.Fatalf("unexpected aggregate comparator before registration")
+	resetRegistries(t)
+	RegisterAggregateComparator("fake-agg", fakeAggCmp{})
+	tests := []struct {
+		name   string
+		lookup string
+		wantOK bool
+	}{
+		{name: "registered name hits", lookup: "fake-agg", wantOK: true},
+		{name: "unknown name misses", lookup: "missing-agg", wantOK: false},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			if _, ok := AggregateComparator(tt.lookup); ok != tt.wantOK {
+				t.Fatalf("AggregateComparator(%q) ok=%v, want %v", tt.lookup, ok, tt.wantOK)
+			}
+		})
 	}
 }
 
