@@ -20,16 +20,18 @@ func (fakeDriver) Run(_ context.Context, _ core.RunSpec) (core.RunResult, error)
 	return core.RunResult{}, nil
 }
 
-// resetRegistries wipes both global maps before a test and restores them after,
+// resetRegistries wipes all global maps before a test and restores them after,
 // so every test function starts from a clean, isolated registry regardless of
 // execution order.
 func resetRegistries(t *testing.T) {
 	t.Helper()
 	comparators = map[string]core.Comparator{}
 	drivers = map[string]core.Driver{}
+	matchers = map[string]core.Matcher{}
 	t.Cleanup(func() {
 		comparators = map[string]core.Comparator{}
 		drivers = map[string]core.Driver{}
+		matchers = map[string]core.Matcher{}
 	})
 }
 
@@ -105,5 +107,32 @@ func TestRegisterAndResolveDriver(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// fakeMatcher is a minimal core.Matcher for registry round-trip tests.
+type fakeMatcher struct{ name string }
+
+func (f fakeMatcher) Name() string { return f.name }
+func (f fakeMatcher) Match(_ context.Context, _ core.Evidence, _, _ string) (core.Verdict, error) {
+	return core.Verdict{Pass: true}, nil
+}
+
+func TestMatcherRegistryRoundTrip(t *testing.T) {
+	resetRegistries(t)
+	RegisterMatcher("fake", fakeMatcher{name: "fake"})
+	got, ok := Matcher("fake")
+	if !ok {
+		t.Fatal("Matcher(\"fake\") not found after RegisterMatcher")
+	}
+	if got.Name() != "fake" {
+		t.Fatalf("Name() = %q, want %q", got.Name(), "fake")
+	}
+}
+
+func TestMatcherRegistryMissReturnsFalse(t *testing.T) {
+	resetRegistries(t)
+	if _, ok := Matcher("nope-not-registered"); ok {
+		t.Fatal("Matcher(unregistered) returned ok=true, want false")
 	}
 }

@@ -5,6 +5,7 @@ import "github.com/thetonymaster/mentat/internal/core"
 var (
 	comparators = map[string]core.Comparator{}
 	drivers     = map[string]core.Driver{}
+	matchers    = map[string]core.Matcher{}
 )
 
 // RegisterComparator registers a Comparator under the given name.
@@ -27,3 +28,9 @@ func RegisterDriver(scheme string, d core.Driver) { drivers[scheme] = d }
 
 // Driver resolves a registered Driver by scheme.
 func Driver(scheme string) (core.Driver, bool) { d, ok := drivers[scheme]; return d, ok }
+
+// RegisterMatcher registers a result Matcher under the given name.
+func RegisterMatcher(name string, m core.Matcher) { matchers[name] = m }
+
+// Matcher resolves a registered Matcher by name.
+func Matcher(name string) (core.Matcher, bool) { m, ok := matchers[name]; return m, ok }
