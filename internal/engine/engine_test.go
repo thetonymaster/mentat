@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -399,6 +400,202 @@ func TestAggregateComparatorLookup(t *testing.T) {
 	}
 	if _, ok := eng.AggregateComparator("nope"); ok {
 		t.Fatalf("unknown aggregate comparator must not be found")
+	}
+}
+
+func TestDriveNCollectsSamples(t *testing.T) {
+	cfg := config.Config{
+		OTLPEndpoint: "http://localhost:4318",
+		Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+		Targets: map[string]config.Target{
+			"echo": {Adapter: "shell", Command: []string{"sh", "-c", "echo hi"}, MaxConcurrency: 1},
+		},
+	}
+	tr := &trace.Trace{Spans: []*trace.Span{{Name: "root"}}, Roots: []*trace.Span{{Name: "root"}}}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "t"}}, nil).AnyTimes()
+	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(tr, nil).AnyTimes()
+
+	var n int
+	cor := correlate.New(func() string { n++; return "run-" + itoa(n) }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+	eng, err := Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	evs, err := eng.DriveN(context.Background(), "echo", nil, 3, false)
+	if err != nil {
+		t.Fatalf("DriveN: %v", err)
+	}
+	if len(evs) != 3 {
+		t.Fatalf("got %d samples, want 3", len(evs))
+	}
+	seen := map[string]bool{}
+	for _, ev := range evs {
+		if ev.Failed {
+			t.Fatalf("unexpected failed sample: %+v", ev)
+		}
+		seen[ev.RunID] = true
+	}
+	if len(seen) != 3 {
+		t.Fatalf("run ids not distinct: %v", seen)
+	}
+}
+
+func TestDriveNResolveFailureBecomesSample(t *testing.T) {
+	cfg := config.Config{
+		OTLPEndpoint: "http://localhost:4318",
+		Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+		Targets: map[string]config.Target{
+			"echo": {Adapter: "shell", Command: []string{"sh", "-c", "echo hi"}, MaxConcurrency: 1},
+		},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	cor := mocks.NewMockCorrelator(ctrl)
+	cor.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("run-x").Times(2)
+	// first resolve OK, second fails -> failed sample, not an aborted batch.
+	tr := &trace.Trace{Spans: []*trace.Span{{Name: "root"}}}
+	gomock.InOrder(
+		cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), "run-x").Return(tr, nil),
+		cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), "run-x").Return(nil, errors.New("store down")),
+	)
+	eng, err := Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	evs, err := eng.DriveN(context.Background(), "echo", nil, 2, false)
+	if err != nil {
+		t.Fatalf("DriveN must not error on a per-run resolve failure: %v", err)
+	}
+	if len(evs) != 2 {
+		t.Fatalf("got %d samples, want 2", len(evs))
+	}
+	if evs[0].Failed {
+		t.Fatalf("first run should have succeeded")
+	}
+	if !evs[1].Failed || evs[1].FailureKind != "resolve" {
+		t.Fatalf("second run want failed/resolve, got %+v", evs[1])
+	}
+}
+
+func TestDriveNPinnedRejectsMulti(t *testing.T) {
+	cfg := config.Config{
+		OTLPEndpoint: "http://localhost:4318",
+		Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+		Targets:      map[string]config.Target{},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	cor := mocks.NewMockCorrelator(ctrl)
+	eng, err := Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	eng.PinRun("pinned-1")
+	if _, err := eng.DriveN(context.Background(), "x", nil, 2, false); err == nil {
+		t.Fatalf("pinned + n>1 must error")
+	}
+}
+
+func itoa(n int) string { return string(rune('0' + n)) }
+
+func TestDriveNInvalidN(t *testing.T) {
+	cfg := config.Config{
+		OTLPEndpoint: "http://localhost:4318",
+		Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+		Targets:      map[string]config.Target{},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	cor := mocks.NewMockCorrelator(ctrl)
+	eng, err := Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if _, err := eng.DriveN(context.Background(), "x", nil, 0, false); err == nil {
+		t.Fatalf("n=0 must error")
+	}
+}
+
+func TestDriveNParallel(t *testing.T) {
+	cfg := config.Config{
+		OTLPEndpoint: "http://localhost:4318",
+		Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+		Targets: map[string]config.Target{
+			"echo": {Adapter: "shell", Command: []string{"sh", "-c", "echo hi"}, MaxConcurrency: 4},
+		},
+	}
+	tr := &trace.Trace{Spans: []*trace.Span{{Name: "root"}}, Roots: []*trace.Span{{Name: "root"}}}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "t"}}, nil).AnyTimes()
+	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(tr, nil).AnyTimes()
+
+	var mu sync.Mutex
+	var counter int
+	cor := correlate.New(func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		counter++
+		return "run-" + itoa(counter)
+	}, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+	eng, err := Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	evs, err := eng.DriveN(context.Background(), "echo", nil, 3, true)
+	if err != nil {
+		t.Fatalf("DriveN parallel: %v", err)
+	}
+	if len(evs) != 3 {
+		t.Fatalf("got %d samples, want 3", len(evs))
+	}
+}
+
+func TestDriveNSerialCancelledContext(t *testing.T) {
+	cfg := config.Config{
+		OTLPEndpoint: "http://localhost:4318",
+		Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+		Targets: map[string]config.Target{
+			"echo": {Adapter: "shell", Command: []string{"sh", "-c", "echo hi"}, MaxConcurrency: 1},
+		},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	cor := mocks.NewMockCorrelator(ctrl)
+	eng, err := Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel
+	_, err = eng.DriveN(ctx, "echo", nil, 3, false)
+	if err == nil {
+		t.Fatalf("cancelled context must error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled in chain, got: %v", err)
+	}
+}
+
+func TestDriveNParallelStructuralError(t *testing.T) {
+	cfg := config.Config{
+		OTLPEndpoint: "http://localhost:4318",
+		Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+		Targets:      map[string]config.Target{},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	cor := mocks.NewMockCorrelator(ctrl)
+	eng, err := Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	// "unknown target" is structural — parallel DriveN must return it as error
+	_, err = eng.DriveN(context.Background(), "nosuch", nil, 2, true)
+	if err == nil {
+		t.Fatalf("structural error in parallel mode must abort")
 	}
 }
 
