@@ -33,7 +33,13 @@ type AggregateProgram struct {
 // "tools", "cost"). The comparator uses this to bind only the trace-derived fields
 // the expression actually references — mirroring single-run bindVars reference-
 // gating (§6).
-func (p *AggregateProgram) Fields() map[string]bool { return p.fields }
+func (p *AggregateProgram) Fields() map[string]bool {
+	out := make(map[string]bool, len(p.fields))
+	for k, v := range p.fields {
+		out[k] = v
+	}
+	return out
+}
 
 // NewAggregateEngine builds the aggregate CEL environment.
 func NewAggregateEngine() (*AggregateEngine, error) {
