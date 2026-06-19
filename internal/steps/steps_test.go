@@ -2,6 +2,7 @@ package steps
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -637,6 +638,101 @@ func TestRunsSatisfiesStep(t *testing.T) {
 	}
 	if status := suite.Run(); status != 0 {
 		t.Fatalf("expected pass (happyTrace has search), status=%d\n%s", status, out.String())
+	}
+}
+
+// badDistEngine returns an engine whose store yields a trace WITH "search" on a
+// fraction of runs and WITHOUT it on the rest, deterministically by call count.
+func badDistEngine(t *testing.T, withSearch, total int) *engine.Engine {
+	t.Helper()
+	cfg := config.Config{
+		OTLPEndpoint: "x",
+		Targets:      map[string]config.Target{"bot": {Adapter: "shell", Command: []string{"sh", "-c", "echo hi"}, MaxConcurrency: 1}},
+	}
+	withTrace := &trace.Trace{
+		Roots: []*trace.Span{{Name: "invoke_agent", Attrs: map[string]string{genai.Op: genai.OpInvokeAgent}}},
+		Spans: []*trace.Span{
+			{Name: "invoke_agent", Attrs: map[string]string{genai.Op: genai.OpInvokeAgent}},
+			{Name: "tool search", Attrs: map[string]string{genai.Op: genai.OpExecuteTool, genai.ToolName: "search"}},
+		},
+	}
+	withoutTrace := &trace.Trace{
+		Roots: []*trace.Span{{Name: "invoke_agent", Attrs: map[string]string{genai.Op: genai.OpInvokeAgent}}},
+		Spans: []*trace.Span{{Name: "invoke_agent", Attrs: map[string]string{genai.Op: genai.OpInvokeAgent}}},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	// calls counts GetByID invocations; each run makes exactly 1 GetByID when the
+	// polling timeout fires immediately (Timeout: time.Nanosecond forces a single
+	// poll per run — if spans>0 the correlator returns best-effort at deadline).
+	var calls int
+	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "t"}}, nil).AnyTimes()
+	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, _ string) (*trace.Trace, error) {
+		calls++
+		if calls <= withSearch {
+			return withTrace, nil
+		}
+		return withoutTrace, nil
+	}).Times(total)
+	var n int
+	cor := correlate.New(func() string { n++; return "run-" + string(rune('a'+n)) }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Nanosecond})
+	eng, err := engine.Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("engine.Build: %v", err)
+	}
+	return eng
+}
+
+// TestMultirunGoesRedOnBadDistribution is the L3 meta-test: 5/10 runs have
+// "search" so rate=0.5, the assertion requires >=0.8; Mentat must go RED.
+func TestMultirunGoesRedOnBadDistribution(t *testing.T) {
+	feature := `Feature: meta-multirun
+  @runs(10)
+  Scenario: search must be consulted in >= 80% of runs
+    Given the agent target "bot"
+    When I run scenario "x"
+    Then the runs satisfy "rate(r, 'search' in r.tools) >= 0.8"
+`
+	var out bytes.Buffer
+	suite := godog.TestSuite{
+		ScenarioInitializer: Initializer(badDistEngine(t, 5, 10)),
+		Options: &godog.Options{
+			Format:          "pretty",
+			Output:          &out,
+			Strict:          true,
+			FeatureContents: []godog.Feature{{Name: "meta-multirun", Contents: []byte(feature)}},
+		},
+	}
+	if status := suite.Run(); status == 0 {
+		t.Fatalf("expected RED on a 0.5 search rate vs >=0.8, but suite passed\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "aggregate-cel failed") {
+		t.Fatalf("expected aggregate-cel failure reason, got:\n%s", out.String())
+	}
+}
+
+// TestMultirunGoesGreenOnGoodDistribution: 9/10 runs have "search" so rate=0.9
+// >= 0.8; Mentat must go GREEN.
+func TestMultirunGoesGreenOnGoodDistribution(t *testing.T) {
+	feature := `Feature: meta-multirun
+  @runs(10)
+  Scenario: search consulted in >= 80% of runs
+    Given the agent target "bot"
+    When I run scenario "x"
+    Then the runs satisfy "rate(r, 'search' in r.tools) >= 0.8"
+`
+	var out bytes.Buffer
+	suite := godog.TestSuite{
+		ScenarioInitializer: Initializer(badDistEngine(t, 9, 10)),
+		Options: &godog.Options{
+			Format:          "pretty",
+			Output:          &out,
+			Strict:          true,
+			FeatureContents: []godog.Feature{{Name: "meta-multirun", Contents: []byte(feature)}},
+		},
+	}
+	if status := suite.Run(); status != 0 {
+		t.Fatalf("expected GREEN on a 0.9 search rate vs >=0.8, status=%d\n%s", status, out.String())
 	}
 }
 
