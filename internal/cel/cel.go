@@ -32,28 +32,39 @@ type Engine struct {
 	declared map[string]bool
 }
 
-// NewEngine builds the CEL environment with the declared variable schema.
+// schema is the single source of truth for the CEL variable set (§5): each entry
+// pairs a variable name with its CEL type. NewEngine derives BOTH the environment
+// declarations and the declared-name set from this one list, so the two can never
+// drift. (A variable present in the env but missing from declared would type-check
+// yet be dropped from References, causing an eval-time unbound-variable error.)
+var schema = []struct {
+	name string
+	typ  *celgo.Type
+}{
+	{VarStatus, celgo.IntType},
+	{VarExitCode, celgo.IntType},
+	{VarBody, celgo.DynType},
+	{VarBodyText, celgo.StringType},
+	{VarAnswer, celgo.StringType},
+	{VarTokens, celgo.IntType},
+	{VarCost, celgo.DoubleType},
+	{VarLatencyMs, celgo.IntType},
+	{VarErrors, celgo.IntType},
+	{VarTools, celgo.ListType(celgo.StringType)},
+	{VarServices, celgo.ListType(celgo.StringType)},
+}
+
+// NewEngine builds the CEL environment from the single-source schema.
 func NewEngine() (*Engine, error) {
-	env, err := celgo.NewEnv(
-		celgo.Variable(VarStatus, celgo.IntType),
-		celgo.Variable(VarExitCode, celgo.IntType),
-		celgo.Variable(VarBody, celgo.DynType),
-		celgo.Variable(VarBodyText, celgo.StringType),
-		celgo.Variable(VarAnswer, celgo.StringType),
-		celgo.Variable(VarTokens, celgo.IntType),
-		celgo.Variable(VarCost, celgo.DoubleType),
-		celgo.Variable(VarLatencyMs, celgo.IntType),
-		celgo.Variable(VarErrors, celgo.IntType),
-		celgo.Variable(VarTools, celgo.ListType(celgo.StringType)),
-		celgo.Variable(VarServices, celgo.ListType(celgo.StringType)),
-	)
+	opts := make([]celgo.EnvOption, 0, len(schema))
+	declared := make(map[string]bool, len(schema))
+	for _, v := range schema {
+		opts = append(opts, celgo.Variable(v.name, v.typ))
+		declared[v.name] = true
+	}
+	env, err := celgo.NewEnv(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cel: building environment: %w", err)
-	}
-	declared := map[string]bool{
-		VarStatus: true, VarExitCode: true, VarBody: true, VarBodyText: true,
-		VarAnswer: true, VarTokens: true, VarCost: true, VarLatencyMs: true,
-		VarErrors: true, VarTools: true, VarServices: true,
 	}
 	return &Engine{env: env, declared: declared}, nil
 }
