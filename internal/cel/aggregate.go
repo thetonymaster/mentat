@@ -24,9 +24,16 @@ type AggregateEngine struct{ env *celgo.Env }
 
 // AggregateProgram is a type-checked aggregate expression whose result is bool.
 type AggregateProgram struct {
-	expr string
-	prg  celgo.Program
+	expr   string
+	prg    celgo.Program
+	fields map[string]bool
 }
+
+// Fields returns the set of record field names selected by the expression (e.g.
+// "tools", "cost"). The comparator uses this to bind only the trace-derived fields
+// the expression actually references — mirroring single-run bindVars reference-
+// gating (§6).
+func (p *AggregateProgram) Fields() map[string]bool { return p.fields }
 
 // NewAggregateEngine builds the aggregate CEL environment.
 func NewAggregateEngine() (*AggregateEngine, error) {
@@ -44,18 +51,18 @@ func NewAggregateEngine() (*AggregateEngine, error) {
 
 // Compile type-checks expr; the result type must be bool (no silent fallback).
 func (e *AggregateEngine) Compile(expr string) (*AggregateProgram, error) {
-	ast, iss := e.env.Compile(expr)
+	celAst, iss := e.env.Compile(expr)
 	if iss != nil && iss.Err() != nil {
 		return nil, fmt.Errorf("cel: compiling aggregate %q: %w", expr, iss.Err())
 	}
-	if !ast.OutputType().IsExactType(celgo.BoolType) {
-		return nil, fmt.Errorf("cel: aggregate %q must evaluate to bool, got %s", expr, ast.OutputType())
+	if !celAst.OutputType().IsExactType(celgo.BoolType) {
+		return nil, fmt.Errorf("cel: aggregate %q must evaluate to bool, got %s", expr, celAst.OutputType())
 	}
-	prg, err := e.env.Program(ast)
+	prg, err := e.env.Program(celAst)
 	if err != nil {
 		return nil, fmt.Errorf("cel: building aggregate program for %q: %w", expr, err)
 	}
-	return &AggregateProgram{expr: expr, prg: prg}, nil
+	return &AggregateProgram{expr: expr, prg: prg, fields: referencedFields(celAst)}, nil
 }
 
 // Eval runs the program against bound vars (must include "runs").
@@ -69,6 +76,20 @@ func (p *AggregateProgram) Eval(vars map[string]any) (bool, error) {
 		return false, fmt.Errorf("cel: aggregate %q did not return bool, got %T", p.expr, out.Value())
 	}
 	return b, nil
+}
+
+// referencedFields returns the set of record field names the expression selects
+// (e.g. r.tokens, r.cost), so the comparator binds only the trace-derived fields the
+// expression actually uses — mirroring single-run bindVars reference-gating (§6).
+func referencedFields(a *celgo.Ast) map[string]bool {
+	fields := map[string]bool{}
+	nav := ast.NavigateAST(a.NativeRep())
+	for _, n := range ast.MatchDescendants(nav, func(e ast.NavigableExpr) bool {
+		return e.Kind() == ast.SelectKind
+	}) {
+		fields[n.AsSelect().FieldName()] = true
+	}
+	return fields
 }
 
 // toFloats converts a CEL list value into a []float64.

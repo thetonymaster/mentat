@@ -145,6 +145,24 @@ func TestRateCountMacros(t *testing.T) {
 	}
 }
 
+func TestAggregateReferencedFields(t *testing.T) {
+	eng, err := NewAggregateEngine()
+	if err != nil {
+		t.Fatalf("NewAggregateEngine: %v", err)
+	}
+	prg, err := eng.Compile(`rate(r, "search" in r.tools) >= 0.5 && mean(r, r.cost) < 1.0`)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	f := prg.Fields()
+	if !f["tools"] || !f["cost"] {
+		t.Fatalf("expected tools+cost referenced, got %v", f)
+	}
+	if f["services"] || f["latencyMs"] {
+		t.Fatalf("did not expect services/latencyMs, got %v", f)
+	}
+}
+
 func TestMetricMacros(t *testing.T) {
 	tests := []struct {
 		name string

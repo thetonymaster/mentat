@@ -77,9 +77,10 @@ func (c *aggregateCEL) Aggregate(_ context.Context, evs []core.Evidence, e core.
 	if err != nil {
 		return core.Verdict{}, err
 	}
+	fields := prg.Fields()
 	records := make([]any, 0, len(evs))
 	for i, ev := range evs {
-		rec, err := c.record(ev)
+		rec, err := c.record(ev, fields)
 		if err != nil {
 			return core.Verdict{}, fmt.Errorf("aggregate-cel: run %d (%s): %w", i, ev.RunID, err)
 		}
@@ -95,9 +96,10 @@ func (c *aggregateCEL) Aggregate(_ context.Context, evs []core.Evidence, e core.
 	return core.Verdict{Pass: false, Reasons: []string{aggregateReason(exp.Expr, evs)}}, nil
 }
 
-// record builds the per-run CEL map. A successful run gets every field; a failed
-// run omits the six trace-derived keys (so referencing one is a hard CEL error).
-func (c *aggregateCEL) record(ev core.Evidence) (map[string]any, error) {
+// record builds the per-run CEL map. Boundary fields are always present; each
+// trace-derived field is bound only when the expression references it (cost/services
+// hard-error on absent data, so binding them unconditionally would break agent runs).
+func (c *aggregateCEL) record(ev core.Evidence, fields map[string]bool) (map[string]any, error) {
 	rec := map[string]any{
 		"runId":       ev.RunID,
 		"failed":      ev.Failed,
@@ -110,29 +112,39 @@ func (c *aggregateCEL) record(ev core.Evidence) (map[string]any, error) {
 	if ev.Failed || ev.Trace == nil {
 		return rec, nil
 	}
-	tokens, err := tokenSum(ev.Trace)
-	if err != nil {
-		return nil, fmt.Errorf("binding tokens: %w", err)
+	if fields["tokens"] {
+		n, err := tokenSum(ev.Trace)
+		if err != nil {
+			return nil, fmt.Errorf("binding tokens: %w", err)
+		}
+		rec["tokens"] = int64(n)
 	}
-	tools, err := toolSequence(ev.Trace)
-	if err != nil {
-		return nil, fmt.Errorf("binding tools: %w", err)
+	if fields["cost"] {
+		v, err := costSum(ev.Trace, c.pricing)
+		if err != nil {
+			return nil, fmt.Errorf("binding cost: %w", err)
+		}
+		rec["cost"] = v
 	}
-	rec["tokens"] = int64(tokens)
-	rec["errors"] = int64(errorCount(ev.Trace))
-	rec["latencyMs"] = ev.Trace.Envelope().Milliseconds()
-	rec["tools"] = toAnyList(tools)
-	// services is optional: only bound when every span carries service.name. If
-	// unavailable, the key is absent — referencing it in CEL without the key is a
-	// hard type-error (no silent fallback).
-	if svcs, serr := serviceSequence(ev.Trace); serr == nil {
+	if fields["errors"] {
+		rec["errors"] = int64(errorCount(ev.Trace))
+	}
+	if fields["latencyMs"] {
+		rec["latencyMs"] = ev.Trace.Envelope().Milliseconds()
+	}
+	if fields["tools"] {
+		tools, err := toolSequence(ev.Trace)
+		if err != nil {
+			return nil, fmt.Errorf("binding tools: %w", err)
+		}
+		rec["tools"] = toAnyList(tools)
+	}
+	if fields["services"] {
+		svcs, err := serviceSequence(ev.Trace)
+		if err != nil {
+			return nil, fmt.Errorf("binding services: %w", err)
+		}
 		rec["services"] = toAnyList(svcs)
-	}
-	// cost is optional: only bound when the trace carries cost data or a pricing table
-	// is provided. If unavailable, the key is absent — referencing it in CEL is a
-	// hard type-error (no silent fallback).
-	if cost, cerr := costSum(ev.Trace, c.pricing); cerr == nil {
-		rec["cost"] = cost
 	}
 	return rec, nil
 }

@@ -54,6 +54,23 @@ func TestAggregateRateHappyPath(t *testing.T) {
 	}
 }
 
+func TestAggregateReferenceGating(t *testing.T) {
+	c := NewAggregateCEL(nil) // nil pricing
+	evs := []core.Evidence{evidence("search"), evidence("search")}
+	// tools-only expression must NOT compute cost/services (which would hard-error).
+	v, err := c.Aggregate(context.Background(), evs, AggregateCELExpectation{Expr: `rate(r, "search" in r.tools) >= 0.9`})
+	if err != nil {
+		t.Fatalf("tools-only aggregate must not error on absent cost/services: %v", err)
+	}
+	if !v.Pass {
+		t.Fatalf("expected pass, reasons=%v", v.Reasons)
+	}
+	// referencing cost with no pricing + no cost data must be a HARD error (no silent fallback).
+	if _, err := c.Aggregate(context.Background(), evs, AggregateCELExpectation{Expr: `mean(r, r.cost) < 1.0`}); err == nil {
+		t.Fatalf("expected a hard error binding cost when there is no pricing/cost data")
+	}
+}
+
 func TestAggregateWrongExpectationType(t *testing.T) {
 	c := NewAggregateCEL(nil)
 	if _, err := c.Aggregate(context.Background(), nil, "nope"); err == nil {
