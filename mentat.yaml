@@ -5,3 +5,11 @@ targets:
   research-agent:
     adapter: shell
     command: ["go", "run", "./tracelab/researchbot/cmd/researchbot"]
+  checkout:
+    adapter: http
+    max_concurrency: 8
+    http:
+      url: "http://localhost:8080/orders"
+      method: POST
+      headers:
+        Content-Type: application/json

@@ -18,6 +18,7 @@ import (
 // Engine.Comparator) only ever read those maps after Build returns.
 func Build(cfg config.Config, st core.TraceStore, cor core.Correlator) (*Engine, error) {
 	registry.RegisterDriver("shell", driver.NewShell())
+	registry.RegisterDriver("http", driver.NewHTTP())
 	registry.RegisterComparator("sequence", comparator.NewSequence())
 	registry.RegisterComparator("budgets", comparator.NewBudgets())
 	registry.RegisterComparator("result", comparator.NewResult())

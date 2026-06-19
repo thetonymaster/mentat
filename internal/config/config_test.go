@@ -9,11 +9,20 @@ func TestLoadAppliesPerAdapterConcurrencyDefaults(t *testing.T) {
 	tests := []struct {
 		name            string
 		adapter         string
+		extraYAML       string
 		wantConcurrency int
 	}{
 		{name: "shell defaults to 1", adapter: "shell", wantConcurrency: 1},
 		{name: "mcp defaults to 1", adapter: "mcp", wantConcurrency: 1},
-		{name: "http defaults to 8", adapter: "http", wantConcurrency: 8},
+		{
+			name:    "http defaults to 8",
+			adapter: "http",
+			extraYAML: `
+    http:
+      url: "http://localhost:8080"
+      method: GET`,
+			wantConcurrency: 8,
+		},
 		{name: "grpc defaults to 8", adapter: "grpc", wantConcurrency: 8},
 	}
 
@@ -27,7 +36,7 @@ poll: { interval: "200ms", stableFor: 3, timeout: "30s" }
 targets:
   target-a:
     adapter: ` + tt.adapter + `
-    command: ["go", "run", "./cmd"]
+    command: ["go", "run", "./cmd"]` + tt.extraYAML + `
 `)
 			cfg, err := Load(data)
 			if err != nil {
@@ -76,5 +85,147 @@ func TestLoadRejectsMalformedYAML(t *testing.T) {
 	_, err := Load([]byte("targets: [unterminated"))
 	if err == nil {
 		t.Fatal("expected error for malformed YAML")
+	}
+}
+
+func TestLoadHTTPTarget(t *testing.T) {
+	tests := []struct {
+		name        string
+		yaml        string
+		wantErr     bool
+		wantErrSub  string
+		wantURL     string
+		wantMethod  string
+		wantConc    int
+		wantHeaders map[string]string
+	}{
+		{
+			name: "valid http target loads with default concurrency 8",
+			yaml: `
+targets:
+  checkout:
+    adapter: http
+    http:
+      url: "http://localhost:8080/orders"
+      method: POST
+      headers:
+        Content-Type: application/json
+`,
+			wantURL:     "http://localhost:8080/orders",
+			wantMethod:  "POST",
+			wantConc:    8,
+			wantHeaders: map[string]string{"Content-Type": "application/json"},
+		},
+		{
+			name: "http target without headers loads (headers optional)",
+			yaml: `
+targets:
+  checkout:
+    adapter: http
+    http:
+      url: "http://localhost:8080/orders"
+      method: POST
+`,
+			wantURL:    "http://localhost:8080/orders",
+			wantMethod: "POST",
+			wantConc:   8,
+		},
+		{
+			name: "http target missing url is a descriptive error",
+			yaml: `
+targets:
+  checkout:
+    adapter: http
+    http:
+      method: POST
+`,
+			wantErr:    true,
+			wantErrSub: `target "checkout": http.url is required`,
+		},
+		{
+			name: "http target missing method is a descriptive error",
+			yaml: `
+targets:
+  checkout:
+    adapter: http
+    http:
+      url: "http://localhost:8080/orders"
+`,
+			wantErr:    true,
+			wantErrSub: `target "checkout": http.method is required`,
+		},
+		{
+			name: "http target whitespace-only url is a descriptive error",
+			yaml: `
+targets:
+  checkout:
+    adapter: http
+    http:
+      url: "   "
+      method: POST
+`,
+			wantErr:    true,
+			wantErrSub: `target "checkout": http.url is required`,
+		},
+		{
+			name: "http target whitespace-only method is a descriptive error",
+			yaml: `
+targets:
+  checkout:
+    adapter: http
+    http:
+      url: "http://localhost:8080/orders"
+      method: "   "
+`,
+			wantErr:    true,
+			wantErrSub: `target "checkout": http.method is required`,
+		},
+		{
+			name: "http target trims surrounding whitespace on url and method",
+			yaml: `
+targets:
+  checkout:
+    adapter: http
+    http:
+      url: "  http://localhost:8080/orders  "
+      method: "  POST  "
+`,
+			wantURL:    "http://localhost:8080/orders",
+			wantMethod: "POST",
+			wantConc:   8,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Load([]byte(tt.yaml))
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), tt.wantErrSub) {
+					t.Fatalf("error %q does not contain %q", err.Error(), tt.wantErrSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			got := cfg.Targets["checkout"]
+			if got.HTTP.URL != tt.wantURL {
+				t.Errorf("URL = %q, want %q", got.HTTP.URL, tt.wantURL)
+			}
+			if got.HTTP.Method != tt.wantMethod {
+				t.Errorf("Method = %q, want %q", got.HTTP.Method, tt.wantMethod)
+			}
+			if got.MaxConcurrency != tt.wantConc {
+				t.Errorf("MaxConcurrency = %d, want %d", got.MaxConcurrency, tt.wantConc)
+			}
+			for k, v := range tt.wantHeaders {
+				if got.HTTP.Headers[k] != v {
+					t.Errorf("Headers[%q] = %q, want %q", k, got.HTTP.Headers[k], v)
+				}
+			}
+		})
 	}
 }

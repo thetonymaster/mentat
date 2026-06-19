@@ -43,11 +43,20 @@ type Comparator interface {
 type RunSpec struct {
 	Target  string
 	Adapter string
-	Command []string // shell adapter argv
+	Command []string // shell adapter argv; http adapter parses --scenario from it
 	Env     map[string]string
 	Input   string // prompt / request body
+	HTTP    HTTPSpec
 	RunID   string
 	Tags    map[string]string // test.run.id, test.scenario, test.case
+}
+
+// HTTPSpec is the http adapter's per-target request config (mirrors config.HTTP,
+// kept in core so the driver has no dependency on the config layer).
+type HTTPSpec struct {
+	URL     string
+	Method  string
+	Headers map[string]string
 }
 
 type RunResult struct {

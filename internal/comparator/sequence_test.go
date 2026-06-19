@@ -3,6 +3,7 @@ package comparator
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/genai"
@@ -117,6 +118,81 @@ func TestSequenceCompare(t *testing.T) {
 			}
 			if tt.wantErr && got.Pass {
 				t.Fatalf("wantErr=true but got Pass=true; err=%v", err)
+			}
+		})
+	}
+}
+
+// svcTrace builds a *trace.Trace of SERVER spans, one per name, each carrying a
+// service.name attr and a strictly increasing Start so first-seen order is the
+// call order. A name may repeat (same service emitting multiple spans).
+func svcTrace(names ...string) *trace.Trace {
+	tr := &trace.Trace{}
+	base := time.Unix(0, 0)
+	for i, n := range names {
+		tr.Spans = append(tr.Spans, &trace.Span{
+			Name:  "POST",
+			Start: base.Add(time.Duration(i) * time.Millisecond),
+			Attrs: map[string]string{"service.name": n},
+		})
+	}
+	return tr
+}
+
+func TestSequenceServiceKind(t *testing.T) {
+	tests := []struct {
+		name     string
+		ev       core.Evidence
+		exp      core.Expectation
+		wantPass bool
+		wantErr  bool
+	}{
+		{
+			name:     "service ordered-subsequence passes (extra services allowed)",
+			ev:       core.Evidence{Trace: svcTrace("gateway", "auth", "inventory", "payment", "notify")},
+			exp:      SequenceExpectation{Kind: "service", Order: []string{"auth", "inventory", "payment"}},
+			wantPass: true,
+		},
+		{
+			name:     "service wrong order fails (payment before inventory)",
+			ev:       core.Evidence{Trace: svcTrace("gateway", "auth", "payment", "inventory", "notify")},
+			exp:      SequenceExpectation{Kind: "service", Order: []string{"auth", "inventory", "payment", "notify"}},
+			wantPass: false,
+		},
+		{
+			name:     "service forbidden fails (legacy-pricing called)",
+			ev:       core.Evidence{Trace: svcTrace("gateway", "auth", "legacy-pricing", "inventory")},
+			exp:      SequenceExpectation{Kind: "service", Forbidden: []string{"legacy-pricing"}},
+			wantPass: false,
+		},
+		{
+			name:     "service deduplicates repeated service spans",
+			ev:       core.Evidence{Trace: svcTrace("gateway", "gateway", "auth")},
+			exp:      SequenceExpectation{Kind: "service", Order: []string{"gateway", "auth"}},
+			wantPass: true,
+		},
+		{
+			name:    "service span missing service.name returns error",
+			ev:      core.Evidence{Trace: &trace.Trace{Spans: []*trace.Span{{Name: "POST", Attrs: map[string]string{}}}}},
+			exp:     SequenceExpectation{Kind: "service", Order: []string{"auth"}},
+			wantErr: true,
+		},
+		{
+			name:    "unknown Kind returns error",
+			ev:      core.Evidence{Trace: svcTrace("gateway", "auth")},
+			exp:     SequenceExpectation{Kind: "endpoint", Order: []string{"auth"}},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := NewSequence().Compare(context.Background(), tt.ev, tt.exp)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr = %v", err, tt.wantErr)
+			}
+			if !tt.wantErr && got.Pass != tt.wantPass {
+				t.Fatalf("Pass = %v, want %v; reasons = %v", got.Pass, tt.wantPass, got.Reasons)
 			}
 		})
 	}
