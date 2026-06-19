@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -423,7 +424,7 @@ func TestDriveNCollectsSamples(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		n++
-		return "run-" + itoa(n)
+		return fmt.Sprintf("run-%d", n)
 	}, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
 	eng, err := Build(cfg, st, cor)
 	if err != nil {
@@ -504,8 +505,6 @@ func TestDriveNPinnedRejectsMulti(t *testing.T) {
 	}
 }
 
-func itoa(n int) string { return string(rune('0' + n)) }
-
 func TestDriveNInvalidN(t *testing.T) {
 	cfg := config.Config{
 		OTLPEndpoint: "http://localhost:4318",
@@ -544,7 +543,7 @@ func TestDriveNParallel(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		counter++
-		return "run-" + itoa(counter)
+		return fmt.Sprintf("run-%d", counter)
 	}, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
 	eng, err := Build(cfg, st, cor)
 	if err != nil {

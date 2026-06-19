@@ -3,6 +3,7 @@ package steps
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -610,7 +611,7 @@ func runsEngine(t *testing.T, tr *trace.Trace) *engine.Engine {
 	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "t"}}, nil).AnyTimes()
 	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(tr, nil).AnyTimes()
 	var n int
-	cor := correlate.New(func() string { n++; return "run-" + string(rune('a'+n)) }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+	cor := correlate.New(func() string { n++; return fmt.Sprintf("run-%d", n) }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
 	eng, err := engine.Build(cfg, st, cor)
 	if err != nil {
 		t.Fatalf("engine.Build: %v", err)
@@ -675,7 +676,7 @@ func badDistEngine(t *testing.T, withSearch, total int) *engine.Engine {
 		return withoutTrace, nil
 	}).Times(total)
 	var n int
-	cor := correlate.New(func() string { n++; return "run-" + string(rune('a'+n)) }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Nanosecond})
+	cor := correlate.New(func() string { n++; return fmt.Sprintf("run-%d", n) }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Nanosecond})
 	eng, err := engine.Build(cfg, st, cor)
 	if err != nil {
 		t.Fatalf("engine.Build: %v", err)

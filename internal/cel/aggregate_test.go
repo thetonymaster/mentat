@@ -176,6 +176,8 @@ func TestMetricMacros(t *testing.T) {
 		{"p95 latency nearest-rank", "p95(r, r.latencyMs) == 400.0", true},
 		{"p50 latency", "p50(r, r.latencyMs) == 200.0", true}, // ceil(0.5*4)=2 -> 2nd of [100,200,300,400]
 		{"int field coerced to double", "mean(r, r.latencyMs) < 300.0", true},
+		{"stddev latency positive", "stddev(r, r.latencyMs) > 0.0", true},
+		{"p99 latency nearest-rank", "p99(r, r.latencyMs) == 400.0", true},
 	}
 	for _, tt := range tests {
 		tt := tt
