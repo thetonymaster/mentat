@@ -74,7 +74,11 @@ func toFloats(v ref.Val) ([]float64, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cel: aggregate list is not numeric: %w", err)
 	}
-	return out.([]float64), nil
+	fs, ok := out.([]float64)
+	if !ok {
+		return nil, fmt.Errorf("cel: aggregate list: ConvertToNative returned unexpected type %T", out)
+	}
+	return fs, nil
 }
 
 // aggFuncs registers the list-reducing functions the macros expand into.
@@ -170,12 +174,6 @@ func percentile(xs []float64, q float64) float64 {
 		return s[len(s)-1]
 	}
 	rank := int(math.Ceil(q * float64(len(s))))
-	if rank < 1 {
-		rank = 1
-	}
-	if rank > len(s) {
-		rank = len(s)
-	}
 	return s[rank-1]
 }
 

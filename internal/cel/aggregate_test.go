@@ -61,3 +61,29 @@ func TestAggregateNonBoolRejected(t *testing.T) {
 		t.Fatalf("expected non-bool expression to be rejected")
 	}
 }
+
+func TestAggregateEmptySampleErrors(t *testing.T) {
+	eng, err := NewAggregateEngine()
+	if err != nil {
+		t.Fatalf("NewAggregateEngine: %v", err)
+	}
+	tests := []struct {
+		name string
+		expr string
+	}{
+		{"sum empty", "__sum__([]) == 0.0"},
+		{"percentile empty", "__percentile__([], 0.5) == 0.0"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			prg, cErr := eng.Compile(tt.expr)
+			if cErr != nil {
+				t.Fatalf("Compile(%q): %v", tt.expr, cErr)
+			}
+			if _, eErr := prg.Eval(map[string]any{"runs": []any{}}); eErr == nil {
+				t.Fatalf("%q: expected eval error for empty sample, got nil", tt.expr)
+			}
+		})
+	}
+}
