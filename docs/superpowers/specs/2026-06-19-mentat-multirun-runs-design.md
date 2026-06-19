@@ -260,27 +260,30 @@ assertions honest: you must scope them to non-failed runs.
 
 ## 8. Reporting
 
-No new seam. On failure the aggregate comparator returns
-`Verdict{Pass:false, Reasons:[...]}` where `Reasons` carries:
-
-1. the failing assertion as **computed-vs-expected**, e.g.
-   `rate('search' in r.tools) = 0.60, want >= 0.80 (6/10 runs)`; and
-2. a **compact per-run table** — iteration index, `test.run.id`, the value of the
-   asserted quantity for that run, and `failed`/`failureKind`:
+No new seam. On a failed aggregate the comparator returns
+`Verdict{Pass:false, Reasons:[...]}` whose reason carries the failing **expression**,
+the **sample size**, and a **compact per-run table** — iteration index,
+`test.run.id`, `failed`, and `failureKind`:
 
 ```
-FAIL: rate('search' in r.tools) = 0.60, want >= 0.80  (6/10 runs)
-  run  test.run.id   value   failed  kind
-   1   a1b2c3..      yes     no
-   2   c3d4e5..      NO      no
-   ...
-   7   e5f6a7..      NO      no
-=> inspect a failing run: /traces e5f6a7..
+aggregate false: "rate(r, 'search' in r.tools) >= 0.8"  (10 runs)
+  run  test.run.id            failed  kind
+  0    a1b2c3..               false
+  1    c3d4e5..               false
+  ...
+  9    e5f6a7..               true    resolve
 ```
 
 This surfaces through godog's existing JUnit and pretty formatters exactly like a
 single-run `Verdict.Reasons` (§10 of the foundational design). The `test.run.id`
 values are copy-pasteable into the `/traces` skill to inspect the offending run.
+
+*Future refinement (deferred):* the failing assertion as **computed-vs-expected**
+(e.g. `rate = 0.60, want >= 0.80`) and a per-run **value column** for the asserted
+quantity. Both require surfacing the aggregate's numeric result and evaluating the
+macro's inner per-run sub-expression, neither of which the v1 bool-returning program
+exposes; the run-id table already preserves the key affordance (jump to the offending
+run's trace).
 
 ## 9. Error handling / edge cases
 
