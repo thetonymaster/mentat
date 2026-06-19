@@ -111,11 +111,6 @@ func (c *aggregateCEL) record(ev core.Evidence, fields map[string]bool) (map[str
 		"answer":      ev.Output.Answer,
 	}
 	if ev.Failed || ev.Trace == nil {
-		// Provide empty lists so membership checks (e.g. "x" in r.tools) return false
-		// rather than erroring on absent keys. Numeric fields (latencyMs, cost, tokens)
-		// are intentionally absent — accessing them on a failed run is a hard error.
-		rec["tools"] = []any{}
-		rec["services"] = []any{}
 		return rec, nil
 	}
 	if fields["tokens"] {
