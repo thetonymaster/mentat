@@ -222,3 +222,25 @@ func TestShellAdditionalBranches(t *testing.T) {
 		})
 	}
 }
+
+// TestShellInjectsNoTraceparent is the shell-driver complement to the http
+// driver's no-traceparent assertion (http_test.go): correlation rides
+// OTEL_RESOURCE_ATTRIBUTES (a resource attribute), never a propagated
+// traceparent, so the SUT's own first span roots the trace (spec §5). The host
+// may export TRACEPARENT; t.Setenv clears it so ${VAR:-NONE} proves the driver
+// injected nothing.
+func TestShellInjectsNoTraceparent(t *testing.T) {
+	t.Setenv("TRACEPARENT", "")
+	spec := core.RunSpec{
+		Command: []string{"sh", "-c", `printf '%s\n' "${TRACEPARENT:-NONE}"`},
+		Tags:    map[string]string{"test.run.id": "run-tp"},
+		RunID:   "run-tp",
+	}
+	res, err := NewShell().Run(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := strings.TrimSpace(res.Output.Stdout); got != "NONE" {
+		t.Fatalf("shell driver must not inject traceparent; TRACEPARENT=%q", got)
+	}
+}

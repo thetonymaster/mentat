@@ -60,7 +60,16 @@ type HTTPSpec struct {
 }
 
 type RunResult struct {
-	RunID          string
+	RunID string
+	// PrimaryTraceID is reserved for a future traceparent complement (spec §5):
+	// a clean primary trace id for when a SUT adopts an injected traceparent. It
+	// is intentionally left unset under the baggage-only correlation path that
+	// ships today — baggage tag-first correlation is the invariant (it survives
+	// the SUT rooting its own trace, which traceparent alone cannot), and nothing
+	// in correlate.Resolve consumes this field. A second correlator (the
+	// traceparent complement) will populate it and add a fast-path in Resolve;
+	// until that consumer exists, injecting it would be a feature with no reader
+	// (YAGNI).
 	PrimaryTraceID string
 	Output         Output
 }
