@@ -21,5 +21,9 @@ func BuildStore(cfg config.Config) (core.TraceStore, error) {
 	if !ok {
 		return nil, fmt.Errorf("unknown store %q", cfg.Store)
 	}
-	return f(cfg)
+	st, err := f(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("building store %q: %w", cfg.Store, err)
+	}
+	return st, nil
 }

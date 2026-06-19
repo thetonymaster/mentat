@@ -98,7 +98,7 @@ func (statusMatcher) Name() string { return "status" }
 func (statusMatcher) Match(_ context.Context, ev core.Evidence, want, _ string) (core.Verdict, error) {
 	w, err := strconv.Atoi(want)
 	if err != nil {
-		return core.Verdict{}, fmt.Errorf("result: status want must be int, got %q", want)
+		return core.Verdict{}, fmt.Errorf("result: status want must be int, got %q: %w", want, err)
 	}
 	got := ev.Output.Status
 	if got == w {
