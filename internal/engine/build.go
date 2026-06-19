@@ -23,6 +23,7 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator) (*Engine,
 	registry.RegisterComparator("budgets", comparator.NewBudgets())
 	registry.RegisterComparator("result", comparator.NewResult())
 	registry.RegisterComparator("cel", comparator.NewCEL())
+	comparator.RegisterBuiltinMatchers()
 
 	sems := map[string]chan struct{}{}
 	for name, t := range cfg.Targets {
