@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -376,5 +378,57 @@ func TestDriveRunError(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDriveHTTPTarget(t *testing.T) {
+	var gotScenario, gotBaggage string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotScenario = r.Header.Get("X-Scenario")
+		gotBaggage = r.Header.Get("baggage")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"status":"confirmed"}`))
+	}))
+	defer srv.Close()
+
+	cfg := config.Config{
+		OTLPEndpoint: "http://localhost:4318",
+		Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+		Targets: map[string]config.Target{
+			"checkout": {
+				Adapter:        "http",
+				MaxConcurrency: 8,
+				HTTP:           config.HTTP{URL: srv.URL, Method: http.MethodPost},
+			},
+		},
+	}
+	tr := &trace.Trace{Spans: []*trace.Span{{Name: "POST", Attrs: map[string]string{"service.name": "gateway"}}}}
+
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "run-http"}}, nil).AnyTimes()
+	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(tr, nil).AnyTimes()
+
+	cor := correlate.New(func() string { return "run-http" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+
+	eng, err := Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	ev, err := eng.Drive(context.Background(), "checkout", []string{"--scenario", "happy"})
+	if err != nil {
+		t.Fatalf("Drive: %v", err)
+	}
+	if ev.Output.Status != http.StatusCreated {
+		t.Errorf("Status = %d, want 201", ev.Output.Status)
+	}
+	if ev.Output.Answer != `{"status":"confirmed"}` {
+		t.Errorf("Answer = %q", ev.Output.Answer)
+	}
+	if gotScenario != "happy" {
+		t.Errorf("SUT saw X-Scenario = %q, want happy", gotScenario)
+	}
+	if !strings.Contains(gotBaggage, "test.run.id=run-http") {
+		t.Errorf("SUT saw baggage %q, missing test.run.id=run-http", gotBaggage)
 	}
 }

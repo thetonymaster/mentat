@@ -58,7 +58,12 @@ func (e *Engine) Drive(ctx context.Context, target string, args []string) (core.
 		Target:  target,
 		Adapter: t.Adapter,
 		Command: append(append([]string{}, t.Command...), args...),
-		Env:     map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": e.cfg.OTLPEndpoint},
+		HTTP: core.HTTPSpec{
+			URL:     t.HTTP.URL,
+			Method:  t.HTTP.Method,
+			Headers: t.HTTP.Headers,
+		},
+		Env: map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": e.cfg.OTLPEndpoint},
 	}
 	// Inject sets spec.RunID and spec.Tags["test.run.id"] in place (pointer
 	// receiver), so the subsequent drv.Run value-copy carries the run id.
