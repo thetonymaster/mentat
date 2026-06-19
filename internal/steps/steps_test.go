@@ -479,6 +479,158 @@ func TestRunSatisfiesDocNil(t *testing.T) {
 	}
 }
 
+// TestRunsSatisfiesDocNil tests that runsSatisfiesDoc returns an error for a nil docstring.
+func TestRunsSatisfiesDocNil(t *testing.T) {
+	w := &world{}
+	if err := w.runsSatisfiesDoc(nil); err == nil {
+		t.Fatal("want error for nil docstring, got nil")
+	}
+}
+
+// TestCheckRunsErrors exercises checkRuns error paths (no evs, unknown comparator).
+func TestCheckRunsErrors(t *testing.T) {
+	eng := buildEng(t, happyTrace())
+	tests := []struct {
+		name   string
+		setup  func(w *world)
+		errSub string
+	}{
+		{
+			name:   "no_evs_driven",
+			setup:  func(w *world) {}, // evs is nil
+			errSub: "no runs driven",
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			w := &world{eng: eng}
+			tt.setup(w)
+			err := w.checkRuns("true")
+			if err == nil {
+				t.Fatal("want error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.errSub) {
+				t.Fatalf("expected error containing %q, got: %v", tt.errSub, err)
+			}
+		})
+	}
+}
+
+// TestParseRunsTag tests the @runs tag parser including error paths.
+func TestParseRunsTag(t *testing.T) {
+	tests := []struct {
+		name    string
+		tags    []*messages.PickleTag
+		wantN   int
+		wantPar bool
+		wantErr bool
+		errSub  string
+	}{
+		{
+			name:    "absent_tag_defaults_to_1",
+			tags:    nil,
+			wantN:   1,
+			wantPar: false,
+		},
+		{
+			name:    "runs_3",
+			tags:    []*messages.PickleTag{{Name: "@runs(3)"}},
+			wantN:   3,
+			wantPar: false,
+		},
+		{
+			name:    "runs_2_parallel",
+			tags:    []*messages.PickleTag{{Name: "@runs(2,parallel)"}},
+			wantN:   2,
+			wantPar: true,
+		},
+		{
+			name:    "malformed_tag",
+			tags:    []*messages.PickleTag{{Name: "@runs(bad)"}},
+			wantErr: true,
+			errSub:  "malformed @runs tag",
+		},
+		{
+			name:    "zero_n_is_rejected",
+			tags:    []*messages.PickleTag{{Name: "@runs(0)"}},
+			wantErr: true,
+			errSub:  "@runs requires N>=1",
+		},
+		{
+			name:    "unrelated_tag_ignored",
+			tags:    []*messages.PickleTag{{Name: "@smoke"}},
+			wantN:   1,
+			wantPar: false,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			n, par, err := parseRunsTag(tt.tags)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				if !strings.Contains(err.Error(), tt.errSub) {
+					t.Fatalf("expected error containing %q, got: %v", tt.errSub, err)
+				}
+				return
+			}
+			if n != tt.wantN {
+				t.Fatalf("n=%d want=%d", n, tt.wantN)
+			}
+			if par != tt.wantPar {
+				t.Fatalf("parallel=%v want=%v", par, tt.wantPar)
+			}
+		})
+	}
+}
+
+// runsEngine builds an engine whose store returns happyTrace for every run, with
+// distinct run ids, for hermetic @runs scenarios.
+func runsEngine(t *testing.T, tr *trace.Trace) *engine.Engine {
+	t.Helper()
+	cfg := config.Config{
+		OTLPEndpoint: "x",
+		Targets:      map[string]config.Target{"bot": {Adapter: "shell", Command: []string{"sh", "-c", "echo hi"}, MaxConcurrency: 4}},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "t"}}, nil).AnyTimes()
+	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(tr, nil).AnyTimes()
+	var n int
+	cor := correlate.New(func() string { n++; return "run-" + string(rune('a'+n)) }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+	eng, err := engine.Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("engine.Build: %v", err)
+	}
+	return eng
+}
+
+func TestRunsSatisfiesStep(t *testing.T) {
+	feature := `Feature: multirun
+  @runs(3)
+  Scenario: search always present
+    Given the agent target "bot"
+    When I run scenario "x"
+    Then the runs satisfy "rate(r, \"search\" in r.tools) >= 0.9"
+`
+	var out bytes.Buffer
+	suite := godog.TestSuite{
+		ScenarioInitializer: Initializer(runsEngine(t, happyTrace())),
+		Options: &godog.Options{
+			Format:          "pretty",
+			Output:          &out,
+			Strict:          true, // undefined steps must be treated as failures
+			FeatureContents: []godog.Feature{{Name: "multirun", Contents: []byte(feature)}},
+		},
+	}
+	if status := suite.Run(); status != 0 {
+		t.Fatalf("expected pass (happyTrace has search), status=%d\n%s", status, out.String())
+	}
+}
+
 // TestStepMethods exercises each step method that the happy-scenario godog run
 // does not reach, using a crafted Evidence so comparators have the data they need.
 func TestStepMethods(t *testing.T) {
