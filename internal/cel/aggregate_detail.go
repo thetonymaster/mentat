@@ -2,6 +2,7 @@ package cel
 
 import (
 	"fmt"
+	"reflect"
 
 	celgo "github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/ast"
@@ -143,10 +144,9 @@ func buildDetailPlan(env *celgo.Env, src *ast.AST) (*detailPlan, error) {
 	// conflicts with the original expression's type/ref tables keyed by ID.
 	perRunPrg, err := subProgram(env, nil, perRunExpr)
 	if err != nil {
-		// Unreachable-by-construction: buildPerRunMap constructs a comprehension over
-		// VarRuns (declared in the env) using double() (CEL builtin) and a deep-copied,
-		// renumbered proj whose types were validated by the original compile. The nil
-		// SourceInfo path in subProgram is exercised only here. Guard kept for
+		// Unreachable-by-construction: all identifiers in the deep-copied proj were
+		// env-declared at original compile time, so the from-scratch type-check of the
+		// constructed comprehension in the same env cannot fail. Guard kept for
 		// invariant-4 defense-in-depth.
 		return nil, fmt.Errorf("cel: building per-run sub-program for macro %q: %w", sh.macro, err)
 	}
@@ -208,6 +208,70 @@ func buildPerRunMap(iterVar string, proj ast.Expr, macro string) ast.Expr {
 		init, cond, step,
 		fac.NewAccuIdent(9),
 	)
+}
+
+// Detail is the cel-local computed-vs-expected result for a canonical aggregate.
+type Detail struct {
+	Macro    string
+	Op       string
+	Computed float64
+	Expected float64
+	PerRun   []float64
+}
+
+// Detail evaluates the cached plan. (zero, false, nil) when the expression is not
+// canonical; a sub-eval error is propagated (invariant 4).
+func (p *AggregateProgram) Detail(vars map[string]any) (Detail, bool, error) {
+	if p.plan == nil {
+		return Detail{}, false, nil
+	}
+	computed, err := evalDouble(p.plan.computedPrg, vars)
+	if err != nil {
+		return Detail{}, false, fmt.Errorf("cel: aggregate %q computed: %w", p.expr, err)
+	}
+	expected, err := evalDouble(p.plan.expectedPrg, vars)
+	if err != nil {
+		return Detail{}, false, fmt.Errorf("cel: aggregate %q expected: %w", p.expr, err)
+	}
+	perRun, err := evalDoubleList(p.plan.perRunPrg, vars)
+	if err != nil {
+		return Detail{}, false, fmt.Errorf("cel: aggregate %q per-run: %w", p.expr, err)
+	}
+	return Detail{
+		Macro: p.plan.macro, Op: p.plan.op,
+		Computed: computed, Expected: expected, PerRun: perRun,
+	}, true, nil
+}
+
+func evalDouble(prg celgo.Program, vars map[string]any) (float64, error) {
+	out, _, err := prg.Eval(vars)
+	if err != nil {
+		return 0, err
+	}
+	switch v := out.Value().(type) {
+	case float64:
+		return v, nil
+	case int64:
+		return float64(v), nil
+	default:
+		return 0, fmt.Errorf("sub-expr did not yield double or int, got %T", out.Value())
+	}
+}
+
+func evalDoubleList(prg celgo.Program, vars map[string]any) ([]float64, error) {
+	out, _, err := prg.Eval(vars)
+	if err != nil {
+		return nil, err
+	}
+	native, err := out.ConvertToNative(reflect.TypeOf([]float64{}))
+	if err != nil {
+		return nil, fmt.Errorf("per-run list is not numeric: %w", err)
+	}
+	fs, ok := native.([]float64)
+	if !ok {
+		return nil, fmt.Errorf("per-run list: unexpected native type %T", native)
+	}
+	return fs, nil
 }
 
 // subProgram compiles a single sub-expression into a runnable program, re-checking it
