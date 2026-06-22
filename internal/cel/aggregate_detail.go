@@ -125,18 +125,30 @@ func buildDetailPlan(env *celgo.Env, src *ast.AST) (*detailPlan, error) {
 	}
 	computedPrg, err := subProgram(env, src, sh.computed)
 	if err != nil {
-		return nil, fmt.Errorf("building computed sub-program: %w", err)
+		// Unreachable-by-construction: analyze only succeeds when the whole expression
+		// already passed env.Compile (full type-check). The computed sub-expression is a
+		// sub-tree of that checked AST, so subProgram's re-check cannot fail. Guard kept
+		// for invariant-4 defense-in-depth.
+		return nil, fmt.Errorf("cel: building computed sub-program for macro %q: %w", sh.macro, err)
 	}
 	expectedPrg, err := subProgram(env, src, sh.expected)
 	if err != nil {
-		return nil, fmt.Errorf("building expected sub-program: %w", err)
+		// Unreachable-by-construction: the expected operand is the runs-free side of an
+		// already type-checked comparison — a literal or constant sub-tree. Its re-check
+		// cannot fail. Guard kept for invariant-4 defense-in-depth.
+		return nil, fmt.Errorf("cel: building expected sub-program for macro %q: %w", sh.macro, err)
 	}
 	perRunExpr := buildPerRunMap(sh.iterVar, sh.proj, sh.macro)
 	// The perRunExpr is freshly constructed (all IDs=0); use nil SourceInfo to avoid
 	// conflicts with the original expression's type/ref tables keyed by ID.
 	perRunPrg, err := subProgram(env, nil, perRunExpr)
 	if err != nil {
-		return nil, fmt.Errorf("building per-run sub-program: %w", err)
+		// Unreachable-by-construction: buildPerRunMap constructs a comprehension over
+		// VarRuns (declared in the env) using double() (CEL builtin) and a deep-copied,
+		// renumbered proj whose types were validated by the original compile. The nil
+		// SourceInfo path in subProgram is exercised only here. Guard kept for
+		// invariant-4 defense-in-depth.
+		return nil, fmt.Errorf("cel: building per-run sub-program for macro %q: %w", sh.macro, err)
 	}
 	return &detailPlan{
 		macro:       sh.macro,
