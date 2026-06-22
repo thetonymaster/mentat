@@ -149,6 +149,50 @@ func TestAggregateCELCompileMalformed(t *testing.T) {
 	}
 }
 
+func TestAggregateCEL_Detail(t *testing.T) {
+	c := NewAggregateCEL(nil)
+	evs := []core.Evidence{
+		{RunID: "a", Output: core.Output{Status: 200}},
+		{RunID: "b", Failed: true, FailureKind: core.FailureKindResolve},
+		{RunID: "c", Output: core.Output{Status: 200}},
+	}
+	// rate(r, !r.failed) = 2/3 ≈ 0.667; assertion >= 0.8 -> FAIL, but Detail still set.
+	v, err := c.Aggregate(context.Background(), evs, AggregateCELExpectation{Expr: `rate(r, !r.failed) >= 0.8`})
+	if err != nil {
+		t.Fatalf("aggregate: %v", err)
+	}
+	if v.Pass {
+		t.Fatalf("want fail")
+	}
+	if v.Detail == nil {
+		t.Fatalf("want Detail populated on fail")
+	}
+	if v.Detail.Macro != "rate" || v.Detail.Op != ">=" || v.Detail.Expected != 0.8 {
+		t.Errorf("detail = %+v", v.Detail)
+	}
+	if v.Detail.Expr != `rate(r, !r.failed) >= 0.8` {
+		t.Errorf("expr = %q", v.Detail.Expr)
+	}
+
+	// Passing canonical assertion also carries Detail.
+	v2, err := c.Aggregate(context.Background(), evs, AggregateCELExpectation{Expr: `rate(r, !r.failed) >= 0.5`})
+	if err != nil {
+		t.Fatalf("aggregate: %v", err)
+	}
+	if !v2.Pass || v2.Detail == nil {
+		t.Fatalf("want pass with Detail, got pass=%v detail=%v", v2.Pass, v2.Detail)
+	}
+
+	// Non-canonical -> Detail nil.
+	v3, err := c.Aggregate(context.Background(), evs, AggregateCELExpectation{Expr: `count(r, r.failed) == 0 && count(r, !r.failed) == 3`})
+	if err != nil {
+		t.Fatalf("aggregate: %v", err)
+	}
+	if v3.Detail != nil {
+		t.Errorf("want nil Detail for compound, got %+v", v3.Detail)
+	}
+}
+
 func TestAggregateToolBindingError(t *testing.T) {
 	// an execute_tool span with no tool name makes toolSequence hard-error when
 	// `tools` is referenced — a binding error must propagate, not be swallowed.

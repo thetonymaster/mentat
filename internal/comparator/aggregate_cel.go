@@ -91,10 +91,14 @@ func (c *aggregateCEL) Aggregate(_ context.Context, evs []core.Evidence, e core.
 	if err != nil {
 		return core.Verdict{}, err
 	}
-	if pass {
-		return core.Verdict{Pass: true}, nil
+	detail, err := buildCoreDetail(prg, exp.Expr, records)
+	if err != nil {
+		return core.Verdict{}, fmt.Errorf("aggregate-cel: %w", err)
 	}
-	return core.Verdict{Pass: false, Reasons: []string{aggregateReason(exp.Expr, evs)}}, nil
+	if pass {
+		return core.Verdict{Pass: true, Detail: detail}, nil
+	}
+	return core.Verdict{Pass: false, Reasons: []string{aggregateReason(exp.Expr, evs, detail)}, Detail: detail}, nil
 }
 
 // record builds the per-run CEL map. Boundary fields are always present; each
@@ -160,7 +164,7 @@ func toAnyList(ss []string) []any {
 
 // aggregateReason renders the failing expression plus a compact per-run table so a
 // reader can copy a test.run.id into /traces to inspect the offending run (§8).
-func aggregateReason(expr string, evs []core.Evidence) string {
+func aggregateReason(expr string, evs []core.Evidence, _ *core.AggregateDetail) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "aggregate false: %s  (%d runs)\n", expr, len(evs))
 	fmt.Fprintf(&b, "  run  test.run.id            failed  kind\n")
@@ -168,4 +172,20 @@ func aggregateReason(expr string, evs []core.Evidence) string {
 		fmt.Fprintf(&b, "  %-3d  %-22s %-7t %s\n", i, ev.RunID, ev.Failed, ev.FailureKind)
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// buildCoreDetail runs the program's canonical-aggregate analysis and maps the
+// cel-local Detail to core.AggregateDetail. Returns (nil, nil) for non-canonical.
+func buildCoreDetail(prg *celengine.AggregateProgram, expr string, records []any) (*core.AggregateDetail, error) {
+	d, ok, err := prg.Detail(map[string]any{celengine.VarRuns: records})
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	return &core.AggregateDetail{
+		Expr: expr, Macro: d.Macro, Op: d.Op,
+		Computed: d.Computed, Expected: d.Expected, PerRun: d.PerRun,
+	}, nil
 }
