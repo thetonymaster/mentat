@@ -1,0 +1,42 @@
+package cel
+
+import (
+	"fmt"
+
+	celgo "github.com/google/cel-go/cel"
+	"github.com/google/cel-go/common/ast"
+)
+
+// refsRuns reports whether expr's subtree references the `runs` identifier.
+func refsRuns(expr ast.Expr) bool {
+	nav := ast.NavigateAST(ast.NewAST(expr, nil))
+	for _, n := range ast.MatchDescendants(nav, func(e ast.NavigableExpr) bool {
+		return e.Kind() == ast.IdentKind && e.AsIdent() == VarRuns
+	}) {
+		_ = n
+		return true
+	}
+	// the root itself may be the ident
+	return expr.Kind() == ast.IdentKind && expr.AsIdent() == VarRuns
+}
+
+// subProgram compiles a single sub-expression of src into a runnable program,
+// re-checking it in env so typed functions resolve. Primary path: native AST ->
+// proto -> cel.Ast -> Program. See Task 1 spike for the fallback if this misbehaves.
+func subProgram(env *celgo.Env, src *ast.AST, expr ast.Expr) (celgo.Program, error) {
+	sub := ast.NewAST(expr, src.SourceInfo())
+	pexpr, err := ast.ToProto(sub)
+	if err != nil {
+		return nil, fmt.Errorf("cel: sub-expr to proto: %w", err)
+	}
+	celAst := celgo.CheckedExprToAst(pexpr)
+	checked, iss := env.Check(celAst)
+	if iss != nil && iss.Err() != nil {
+		return nil, fmt.Errorf("cel: re-checking sub-expr: %w", iss.Err())
+	}
+	prg, err := env.Program(checked)
+	if err != nil {
+		return nil, fmt.Errorf("cel: building sub-program: %w", err)
+	}
+	return prg, nil
+}

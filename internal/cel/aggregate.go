@@ -45,6 +45,9 @@ func (p *AggregateProgram) Fields() map[string]bool {
 func NewAggregateEngine() (*AggregateEngine, error) {
 	opts := []celgo.EnvOption{
 		celgo.Variable(VarRuns, celgo.ListType(celgo.DynType)),
+		// EnableMacroCallTracking stores the original macro call (e.g. rate, p95) in
+		// SourceInfo so callers can recover the call name and arguments after expansion.
+		celgo.EnableMacroCallTracking(),
 	}
 	opts = append(opts, aggFuncs()...)
 	opts = append(opts, aggMacros()...)
