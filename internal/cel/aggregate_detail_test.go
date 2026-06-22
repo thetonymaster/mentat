@@ -19,6 +19,33 @@ func mustCompile(t *testing.T, expr string) *ast.AST {
 	return checked.NativeRep()
 }
 
+func TestBuildDetailPlan(t *testing.T) {
+	eng, err := NewAggregateEngine()
+	if err != nil {
+		t.Fatalf("engine: %v", err)
+	}
+	tests := []struct {
+		name     string
+		expr     string
+		wantPlan bool
+	}{
+		{"canonical", `p95(r, r.latencyMs) <= 1500`, true},
+		{"non-canonical", `rate(r, !r.failed) >= 0.8 && p95(r, r.latencyMs) <= 1500`, false},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := eng.Compile(tt.expr)
+			if err != nil {
+				t.Fatalf("compile: %v", err)
+			}
+			if (p.plan != nil) != tt.wantPlan {
+				t.Fatalf("plan present = %v, want %v", p.plan != nil, tt.wantPlan)
+			}
+		})
+	}
+}
+
 func TestAnalyze(t *testing.T) {
 	tests := []struct {
 		name      string

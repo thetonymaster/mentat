@@ -27,6 +27,7 @@ type AggregateProgram struct {
 	expr   string
 	prg    celgo.Program
 	fields map[string]bool
+	plan   *detailPlan // non-nil only for a canonical aggregate comparison
 }
 
 // Fields returns the set of record field names selected by the expression (e.g.
@@ -71,7 +72,11 @@ func (e *AggregateEngine) Compile(expr string) (*AggregateProgram, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cel: building aggregate program for %q: %w", expr, err)
 	}
-	return &AggregateProgram{expr: expr, prg: prg, fields: referencedFields(celAst)}, nil
+	plan, err := buildDetailPlan(e.env, celAst.NativeRep())
+	if err != nil {
+		return nil, fmt.Errorf("cel: aggregate %q: %w", expr, err)
+	}
+	return &AggregateProgram{expr: expr, prg: prg, fields: referencedFields(celAst), plan: plan}, nil
 }
 
 // Eval runs the program against bound vars (must include "runs").

@@ -6,6 +6,7 @@ import (
 	celgo "github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/ast"
 	"github.com/google/cel-go/common/operators"
+	"github.com/google/cel-go/common/types"
 )
 
 // refsRuns reports whether expr's subtree references the `runs` identifier.
@@ -105,11 +106,108 @@ func analyze(src *ast.AST) (*shape, bool) {
 	}, true
 }
 
-// subProgram compiles a single sub-expression of src into a runnable program,
-// re-checking it in env so typed functions resolve. Primary path: native AST ->
-// proto -> cel.Ast -> Program. See Task 1 spike for the fallback if this misbehaves.
+// detailPlan holds the three cached sub-programs for a canonical aggregate comparison.
+type detailPlan struct {
+	macro       string
+	op          string
+	computedPrg celgo.Program
+	expectedPrg celgo.Program
+	perRunPrg   celgo.Program // runs.map(iterVar, double(proj)) -> list<double>
+}
+
+// buildDetailPlan returns a plan for a canonical aggregate comparison, or (nil, nil)
+// when the expression is not canonical. A genuine sub-program build failure on a
+// canonical expression is a hard error (invariant 4).
+func buildDetailPlan(env *celgo.Env, src *ast.AST) (*detailPlan, error) {
+	sh, ok := analyze(src)
+	if !ok {
+		return nil, nil
+	}
+	computedPrg, err := subProgram(env, src, sh.computed)
+	if err != nil {
+		return nil, fmt.Errorf("building computed sub-program: %w", err)
+	}
+	expectedPrg, err := subProgram(env, src, sh.expected)
+	if err != nil {
+		return nil, fmt.Errorf("building expected sub-program: %w", err)
+	}
+	perRunExpr := buildPerRunMap(sh.iterVar, sh.proj, sh.macro)
+	// The perRunExpr is freshly constructed (all IDs=0); use nil SourceInfo to avoid
+	// conflicts with the original expression's type/ref tables keyed by ID.
+	perRunPrg, err := subProgram(env, nil, perRunExpr)
+	if err != nil {
+		return nil, fmt.Errorf("building per-run sub-program: %w", err)
+	}
+	return &detailPlan{
+		macro:       sh.macro,
+		op:          sh.op,
+		computedPrg: computedPrg,
+		expectedPrg: expectedPrg,
+		perRunPrg:   perRunPrg,
+	}, nil
+}
+
+// predicateMacros identifies macros whose projection is a bool predicate rather than a
+// numeric expression; these require bool-to-double coercion via a conditional.
+var predicateMacros = map[string]bool{
+	"count": true,
+	"rate":  true,
+}
+
+// buildPerRunMap constructs a `runs.map(iterVar, <elem>)` comprehension yielding
+// list<double>. For predicate macros (count/rate) the element is `proj ? 1.0 : 0.0`;
+// for numeric macros the element is `double(proj)`.
+// Each node receives a distinct ID so the type-checker's per-ID maps don't collide.
+// proj is deep-copied and renumbered so its IDs don't collide with the skeleton IDs
+// (1–9) or with the original expression's type/ref tables.
+func buildPerRunMap(iterVar string, proj ast.Expr, macro string) ast.Expr {
+	fac := ast.NewExprFactory()
+	accu := fac.AccuIdentName()
+
+	// Deep-copy proj so that renumbering doesn't mutate the original AST.
+	projCopy := fac.CopyExpr(proj)
+	// Renumber proj's sub-tree starting at ID 100, safely above the skeleton range.
+	nextID := int64(100)
+	projCopy.RenumberIDs(func(_ int64) int64 {
+		id := nextID
+		nextID++
+		return id
+	})
+
+	// Choose the element expression based on whether the macro projection is a predicate.
+	var elem ast.Expr
+	if predicateMacros[macro] {
+		// proj ? 1.0 : 0.0  — coerce bool to double without a missing overload.
+		elem = fac.NewCall(3, operators.Conditional, projCopy,
+			fac.NewLiteral(10, types.Double(1.0)),
+			fac.NewLiteral(11, types.Double(0.0)),
+		)
+	} else {
+		elem = fac.NewCall(3, "double", projCopy)
+	}
+
+	// IDs 1–9 for the comprehension skeleton nodes.
+	init := fac.NewList(1, []ast.Expr{}, []int32{})
+	cond := fac.NewLiteral(2, types.True)
+	step := fac.NewCall(4, operators.Add, fac.NewAccuIdent(5), fac.NewList(6, []ast.Expr{elem}, []int32{}))
+	return fac.NewComprehension(7,
+		fac.NewIdent(8, VarRuns),
+		iterVar, accu,
+		init, cond, step,
+		fac.NewAccuIdent(9),
+	)
+}
+
+// subProgram compiles a single sub-expression into a runnable program, re-checking it
+// in env so typed functions resolve. src may be nil for freshly constructed expressions
+// that carry no existing source info (all IDs=0). Primary path: native AST -> proto ->
+// cel.Ast -> Program. See Task 1 spike for the fallback if this misbehaves.
 func subProgram(env *celgo.Env, src *ast.AST, expr ast.Expr) (celgo.Program, error) {
-	sub := ast.NewAST(expr, src.SourceInfo())
+	var srcInfo *ast.SourceInfo
+	if src != nil {
+		srcInfo = src.SourceInfo()
+	}
+	sub := ast.NewAST(expr, srcInfo)
 	pexpr, err := ast.ToProto(sub)
 	if err != nil {
 		return nil, fmt.Errorf("cel: sub-expr to proto: %w", err)
