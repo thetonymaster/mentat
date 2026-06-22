@@ -162,10 +162,23 @@ func toAnyList(ss []string) []any {
 	return out
 }
 
-// aggregateReason renders the failing expression plus a compact per-run table so a
-// reader can copy a test.run.id into /traces to inspect the offending run (§8).
-func aggregateReason(expr string, evs []core.Evidence, _ *core.AggregateDetail) string {
+// aggregateReason renders the failing assertion. With a canonical Detail it shows
+// computed-vs-expected and a per-run value column; otherwise it shows the raw
+// expression. Both include a per-run table so a test.run.id can be pasted into /traces.
+func aggregateReason(expr string, evs []core.Evidence, d *core.AggregateDetail) string {
 	var b strings.Builder
+	if d != nil {
+		fmt.Fprintf(&b, "aggregate false: %s = %.2f, want %s %.2f  (%d runs)\n", d.Macro, d.Computed, d.Op, d.Expected, len(evs))
+		fmt.Fprintf(&b, "  run  test.run.id            failed  kind     value\n")
+		for i, ev := range evs {
+			val := ""
+			if i < len(d.PerRun) {
+				val = fmt.Sprintf("%g", d.PerRun[i])
+			}
+			fmt.Fprintf(&b, "  %-3d  %-22s %-7t %-8s %s\n", i, ev.RunID, ev.Failed, ev.FailureKind, val)
+		}
+		return strings.TrimRight(b.String(), "\n")
+	}
 	fmt.Fprintf(&b, "aggregate false: %s  (%d runs)\n", expr, len(evs))
 	fmt.Fprintf(&b, "  run  test.run.id            failed  kind\n")
 	for i, ev := range evs {
@@ -179,7 +192,7 @@ func aggregateReason(expr string, evs []core.Evidence, _ *core.AggregateDetail) 
 func buildCoreDetail(prg *celengine.AggregateProgram, expr string, records []any) (*core.AggregateDetail, error) {
 	d, ok, err := prg.Detail(map[string]any{celengine.VarRuns: records})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("evaluating detail for %q: %w", expr, err)
 	}
 	if !ok {
 		return nil, nil

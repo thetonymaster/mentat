@@ -126,7 +126,8 @@ func TestAggregateReasonHasPerRunTable(t *testing.T) {
 		t.Fatalf("expected fail")
 	}
 	reason := v.Reasons[0]
-	for _, sub := range []string{"r-2", "driver", "run", "r.tools"} {
+	// canonical expression: new message shows computed-vs-expected + value column, not the raw expr.
+	for _, sub := range []string{"r-2", "driver", "run", "value", "rate = ", "want >="} {
 		if !strings.Contains(reason, sub) {
 			t.Fatalf("reason %q missing %q", reason, sub)
 		}
@@ -182,6 +183,12 @@ func TestAggregateCEL_Detail(t *testing.T) {
 	if !v2.Pass || v2.Detail == nil {
 		t.Fatalf("want pass with Detail, got pass=%v detail=%v", v2.Pass, v2.Detail)
 	}
+	if v2.Detail.Macro != "rate" || v2.Detail.Op != ">=" || v2.Detail.Expected != 0.5 {
+		t.Errorf("pass detail = %+v", v2.Detail)
+	}
+	if v2.Detail.Expr != `rate(r, !r.failed) >= 0.5` {
+		t.Errorf("pass expr = %q", v2.Detail.Expr)
+	}
 
 	// Non-canonical -> Detail nil.
 	v3, err := c.Aggregate(context.Background(), evs, AggregateCELExpectation{Expr: `count(r, r.failed) == 0 && count(r, !r.failed) == 3`})
@@ -191,6 +198,32 @@ func TestAggregateCEL_Detail(t *testing.T) {
 	if v3.Detail != nil {
 		t.Errorf("want nil Detail for compound, got %+v", v3.Detail)
 	}
+}
+
+func TestAggregateReason(t *testing.T) {
+	evs := []core.Evidence{
+		{RunID: "aaa", Output: core.Output{Status: 200}},
+		{RunID: "bbb", Failed: true, FailureKind: core.FailureKindResolve},
+	}
+	t.Run("canonical -> computed-vs-expected + value column", func(t *testing.T) {
+		d := &core.AggregateDetail{
+			Expr: `rate(r, !r.failed) >= 0.8`, Macro: "rate", Op: ">=",
+			Computed: 0.5, Expected: 0.8, PerRun: []float64{1, 0},
+		}
+		got := aggregateReason(d.Expr, evs, d)
+		if !strings.Contains(got, "rate = 0.50, want >= 0.80") {
+			t.Errorf("missing computed-vs-expected line:\n%s", got)
+		}
+		if !strings.Contains(got, "value") {
+			t.Errorf("missing value column header:\n%s", got)
+		}
+	})
+	t.Run("nil detail -> legacy message", func(t *testing.T) {
+		got := aggregateReason(`count(r, r.failed) == 0 && true`, evs, nil)
+		if !strings.Contains(got, "aggregate false:") || strings.Contains(got, "want") {
+			t.Errorf("legacy message wrong:\n%s", got)
+		}
+	})
 }
 
 func TestAggregateToolBindingError(t *testing.T) {
