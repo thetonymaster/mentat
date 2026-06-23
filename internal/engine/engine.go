@@ -13,12 +13,16 @@ import (
 // Engine wires configuration, a trace store, and a correlator into the
 // Drive/Comparator lifecycle. Build is the only way to construct it.
 type Engine struct {
-	cfg    config.Config
-	cor    core.Correlator
-	st     core.TraceStore
-	sems   map[string]chan struct{} // per-target concurrency gate
-	pinned string                   // when set, Drive resolves this run id instead of driving
+	cfg     config.Config
+	cor     core.Correlator
+	st      core.TraceStore
+	sems    map[string]chan struct{} // per-target concurrency gate
+	pinned  string                   // when set, Drive resolves this run id instead of driving
+	pricing core.Pricing
 }
+
+// Pricing returns the per-model cost table wired at Build (may be nil).
+func (e *Engine) Pricing() core.Pricing { return e.pricing }
 
 // PinRun makes subsequent Drive calls resolve runID from the store instead of
 // running the SUT — used by `mentatctl agent replay` to re-evaluate a stored run.

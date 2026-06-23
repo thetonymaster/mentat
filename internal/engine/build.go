@@ -35,7 +35,7 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator) (*Engine,
 		}
 		sems[name] = make(chan struct{}, n)
 	}
-	return &Engine{cfg: cfg, cor: cor, st: st, sems: sems}, nil
+	return &Engine{cfg: cfg, cor: cor, st: st, sems: sems, pricing: pricing}, nil
 }
 
 // toPricing converts the YAML pricing table into the transport-free core.Pricing

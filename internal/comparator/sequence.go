@@ -103,6 +103,10 @@ func toolSequence(t *trace.Trace) ([]string, error) {
 	return out, nil
 }
 
+// ToolSequence returns the execute_tool tool names in start order (exported wrapper
+// over toolSequence, mirroring ServiceSequence).
+func ToolSequence(t *trace.Trace) ([]string, error) { return toolSequence(t) }
+
 // ServiceSequence returns the distinct services in first-seen call order. It is
 // the exported entry point for the ctl service-format/diff paths, so they share
 // the sequence comparator's selection — single source of truth with the

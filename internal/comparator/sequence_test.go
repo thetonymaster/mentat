@@ -179,6 +179,23 @@ func TestServiceSequenceExported(t *testing.T) {
 	}
 }
 
+func TestToolSequence_Exported(t *testing.T) {
+	tr := toolTrace("search", "fetch")
+	got, err := ToolSequence(tr)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	want := []string{"search", "fetch"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("got[%d]=%q want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestSequenceServiceKind(t *testing.T) {
 	tests := []struct {
 		name     string
