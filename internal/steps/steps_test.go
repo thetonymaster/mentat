@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -900,6 +902,113 @@ func TestInitializer_CollectsFailingAggregateDetail(t *testing.T) {
 	}
 	if sr.Aggregate.Computed != 2 || sr.Aggregate.Expected != 0 {
 		t.Errorf("Aggregate computed/expected = %v/%v, want 2/0", sr.Aggregate.Computed, sr.Aggregate.Expected)
+	}
+}
+
+// writeExpectation writes one pattern file into a fresh dir and returns the dir.
+func writeExpectation(t *testing.T, body string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "p.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write pattern: %v", err)
+	}
+	return dir
+}
+
+func shapePatternEngine(t *testing.T, expDir string) *engine.Engine {
+	t.Helper()
+	cfg := config.Config{
+		OTLPEndpoint: "x",
+		Expectations: expDir,
+		Targets:      map[string]config.Target{"bot": {Adapter: "shell", Command: []string{"sh", "-c", "echo hi"}, MaxConcurrency: 1}},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "r"}}, nil).AnyTimes()
+	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(shapeTrace(), nil).AnyTimes()
+	cor := correlate.New(func() string { return "r" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+	eng, err := engine.Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("engine.Build: %v", err)
+	}
+	return eng
+}
+
+func runShapePatternFeature(t *testing.T, eng *engine.Engine, feature string) (int, string) {
+	t.Helper()
+	var out bytes.Buffer
+	suite := godog.TestSuite{
+		ScenarioInitializer: Initializer(eng),
+		Options: &godog.Options{
+			Format:          "pretty",
+			Output:          &out,
+			FeatureContents: []godog.Feature{{Name: "pattern", Contents: []byte(feature)}},
+		},
+	}
+	return suite.Run(), out.String()
+}
+
+func TestFeatureMatchesShapePattern(t *testing.T) {
+	eng := shapePatternEngine(t, writeExpectation(t, `name: research-shape
+clauses:
+  - exists: "gen_ai.tool.name=search"
+    count: ">=2"
+  - child: "gen_ai.tool.name=search"
+    of: "gen_ai.operation.name=chat"
+  - fanout:
+      parent: "gen_ai.operation.name=chat"
+      child: "gen_ai.tool.name=search"
+      count: ">=2"
+`))
+	feature := `Feature: pattern
+  Scenario: structural pattern holds
+    Given the agent target "bot"
+    When I run scenario "happy"
+    Then the run matches shape "research-shape"
+`
+	if status, out := runShapePatternFeature(t, eng, feature); status != 0 {
+		t.Fatalf("expected passing suite, status=%d\n%s", status, out)
+	}
+}
+
+func TestFeatureMatchesShapePatternRed(t *testing.T) {
+	eng := shapePatternEngine(t, writeExpectation(t, `name: impossible
+clauses:
+  - child: "gen_ai.operation.name=invoke_agent"
+    of: "gen_ai.tool.name=search"
+`))
+	feature := `Feature: pattern
+  Scenario: impossible containment fails
+    Given the agent target "bot"
+    When I run scenario "happy"
+    Then the run matches shape "impossible"
+`
+	status, out := runShapePatternFeature(t, eng, feature)
+	if status == 0 {
+		t.Fatalf("expected failing suite, but it passed\n%s", out)
+	}
+	if !strings.Contains(out, "shape failed") {
+		t.Fatalf("expected \"shape failed\" in output, got:\n%s", out)
+	}
+}
+
+func TestFeatureUnknownShapePattern(t *testing.T) {
+	eng := shapePatternEngine(t, writeExpectation(t, `name: known
+clauses:
+  - exists: "gen_ai.tool.name=search"
+`))
+	feature := `Feature: pattern
+  Scenario: unknown pattern name fails before driving
+    Given the agent target "bot"
+    When I run scenario "happy"
+    Then the run matches shape "does-not-exist"
+`
+	status, out := runShapePatternFeature(t, eng, feature)
+	if status == 0 {
+		t.Fatalf("expected failing suite for unknown pattern, but it passed\n%s", out)
+	}
+	if !strings.Contains(out, "unknown shape pattern") {
+		t.Fatalf("expected \"unknown shape pattern\" in output, got:\n%s", out)
 	}
 }
 
