@@ -1083,6 +1083,8 @@ func TestVerbToMatcher(t *testing.T) {
 }
 
 func TestResultToolStep(t *testing.T) {
+	// serial: engine.Build() writes to unsynchronized package-level registry maps;
+	// -race proves a data race under t.Parallel() (see commit f0b4505). Keep serial.
 	tests := []struct {
 		name     string
 		feature  string
@@ -1186,6 +1188,8 @@ func TestResultToolStep(t *testing.T) {
 }
 
 func TestResultAttrStep(t *testing.T) {
+	// serial: engine.Build() writes to unsynchronized package-level registry maps;
+	// -race proves a data race under t.Parallel() (see commit f0b4505). Keep serial.
 	tests := []struct {
 		name     string
 		feature  string
