@@ -69,6 +69,9 @@ func (shape) Compare(_ context.Context, ev core.Evidence, e core.Expectation) (c
 	if exp.Count != nil && exp.Count.Op != ">=" && exp.Count.Op != "==" {
 		return core.Verdict{}, fmt.Errorf("shape: unknown count op %q (want \">=\" or \"==\")", exp.Count.Op)
 	}
+	if exp.Count != nil && exp.Count.N < 0 {
+		return core.Verdict{}, fmt.Errorf("shape: count N must be >= 0, got %d", exp.Count.N)
+	}
 	switch exp.Kind {
 	case "exists":
 		return shapeExists(ev.Trace, exp), nil
@@ -88,6 +91,9 @@ func (shape) Compare(_ context.Context, ev core.Evidence, e core.Expectation) (c
 		}
 		if exp.Count == nil {
 			return core.Verdict{}, fmt.Errorf("shape: fanout requires a Count")
+		}
+		if exp.Relation != "" && exp.Relation != "child" {
+			return core.Verdict{}, fmt.Errorf("shape: fanout supports only direct children (v1); Relation %q not allowed", exp.Relation)
 		}
 		return shapeFanout(ev.Trace, exp), nil
 	default:

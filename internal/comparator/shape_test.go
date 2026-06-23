@@ -72,6 +72,7 @@ func TestShapeCompareErrors(t *testing.T) {
 		{"empty subject", core.Evidence{Trace: flatTrace()}, ShapeExpectation{Kind: "exists"}, "Subject selector is empty"},
 		{"unknown kind", core.Evidence{Trace: flatTrace()}, ShapeExpectation{Kind: "bogus", Subject: sel(t, "a=b")}, "unknown Kind"},
 		{"unknown count op", core.Evidence{Trace: flatTrace()}, ShapeExpectation{Kind: "exists", Subject: sel(t, "a=b"), Count: &Count{Op: "<", N: 1}}, "unknown count op"},
+		{"negative count N", core.Evidence{Trace: flatTrace()}, ShapeExpectation{Kind: "exists", Subject: sel(t, "a=b"), Count: &Count{Op: ">=", N: -1}}, "count N must be >= 0"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -225,6 +226,13 @@ func TestShapeFanout(t *testing.T) {
 	}
 }
 
+func TestShapeName(t *testing.T) {
+	t.Parallel()
+	if got := NewShape().Name(); got != "shape" {
+		t.Errorf("Name() = %q, want %q", got, "shape")
+	}
+}
+
 func TestShapeFanoutValidation(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -241,6 +249,11 @@ func TestShapeFanoutValidation(t *testing.T) {
 			name:    "nil Count",
 			exp:     ShapeExpectation{Kind: "fanout", Subject: sel(t, "a=b"), Parent: sel(t, "c=d")},
 			wantErr: "fanout requires a Count",
+		},
+		{
+			name:    "non-child relation",
+			exp:     ShapeExpectation{Kind: "fanout", Subject: sel(t, "a=b"), Parent: sel(t, "c=d"), Relation: "descendant", Count: &Count{Op: ">=", N: 1}},
+			wantErr: "fanout supports only direct children",
 		},
 	}
 	for _, tt := range tests {
