@@ -82,6 +82,7 @@ func TestLoadErrors(t *testing.T) {
 			"a.yaml": "name: dup\nclauses:\n  - exists: \"a=b\"\n",
 			"b.yaml": "name: dup\nclauses:\n  - exists: \"c=d\"\n",
 		}},
+		{"two yaml documents", map[string]string{"a.yaml": "name: x\nclauses:\n  - exists: \"a=b\"\n---\nname: y\nclauses:\n  - exists: \"c=d\"\n"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
