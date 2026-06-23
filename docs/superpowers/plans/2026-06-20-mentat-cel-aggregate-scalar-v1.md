@@ -17,7 +17,7 @@
 - Tests are **table-driven** with `tt := tt` capture and `t.Run(tt.name, …)`.
 - **No silent fallbacks** (invariant #4): a function that cannot do its job returns a wrapped `error` (`fmt.Errorf("…: %w", err)`) naming the concrete thing that failed — never a zero-value success.
 - **`internal/cel` must not import `internal/core`** (it stays a leaf engine). The cel-local `Detail` struct is mapped to `core.AggregateDetail` in the comparator.
-- **Coverage floor 80% per package** (`internal/cel`, `internal/comparator`). Check with `.claude/skills/coverage` or `go test ./... -coverprofile=cover.out && go tool cover -func=cover.out`.
+- **Coverage floor 80% per package** (`internal/cel`, `internal/comparator`). Check with `.claude/skills/coverage` or run coverage **per package** and verify each total independently (a combined profile can mask one package dropping below the floor).
 - **L3 meta-test is mandatory** — Mentat must go red on bad behaviour, asserted on the `mentat` binary's combined output.
 - Git: **Conventional Commits**; `git add .` is forbidden (add files individually); **no AI attribution** in commits.
 - Work on a dedicated branch off `main` (see Task 0).
@@ -1150,8 +1150,10 @@ Expected: `gofmt -l .` prints nothing; vet clean; all hermetic tests PASS.
 
 - [ ] **Step 2: Coverage floor**
 
-Run: `go test ./internal/cel/ ./internal/comparator/ -coverprofile=cover.out && go tool cover -func=cover.out | tail -1`
-Expected: each package ≥ 80%.
+Run each package separately so one package cannot mask another:
+`go test ./internal/cel/ -coverprofile=cover-cel.out && go tool cover -func=cover-cel.out | tail -1`
+`go test ./internal/comparator/ -coverprofile=cover-comparator.out && go tool cover -func=cover-comparator.out | tail -1`
+Expected: both package totals ≥ 80%.
 
 - [ ] **Step 3: Open the PR**
 

@@ -54,7 +54,7 @@ its `common/ast`, `common/operators`, and macro-call-tracking surface.
 
 `Detail` is populated **iff** the expression is, at the top level:
 
-```
+```text
 ‹aggregate-macro-call›  ‹comparison-op›  ‹runs-free numeric constant›
 ```
 
