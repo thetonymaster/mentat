@@ -149,7 +149,7 @@ func emitReports(rep core.RunReport, targets map[string]string) error {
 			return fmt.Errorf("create %s report %q: %w", name, path, err)
 		}
 		if err := r.Report(rep, f); err != nil {
-			f.Close()
+			_ = f.Close() // best-effort; the Report error takes precedence
 			return fmt.Errorf("writing %s report %q: %w", name, path, err)
 		}
 		if err := f.Close(); err != nil {

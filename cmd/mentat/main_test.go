@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -119,6 +118,3 @@ func TestOrDefault(t *testing.T) {
 		})
 	}
 }
-
-// Ensure the fmt import is used.
-var _ = fmt.Sprintf
