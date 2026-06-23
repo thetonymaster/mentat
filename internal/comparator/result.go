@@ -21,13 +21,15 @@ import (
 type ResultExpectation struct {
 	Matcher string // exact | contains | regex | json-subset | status | schema
 	Want    string
-	Target  string // "answer" (default) or "status"
+	Target  string      // boundary only: "answer" (default) | "status"; ignored when Source != nil
+	Source  *SpanSource // nil => driver Output (default); set => span-attribute source
 }
 
 type result struct{}
 
-// NewResult returns a Comparator that evaluates driver Output using registered
-// deterministic matchers. It reads only ev.Output; it never touches ev.Trace.
+// NewResult returns a Comparator that evaluates registered deterministic matchers.
+// With a nil ResultExpectation.Source it reads only ev.Output (the driver boundary);
+// with Source set it reads ev.Trace via resolveSpanSource (a per-span attribute value).
 func NewResult() core.Comparator { return result{} }
 func (result) Name() string      { return "result" }
 
@@ -35,6 +37,9 @@ func (result) Compare(ctx context.Context, ev core.Evidence, e core.Expectation)
 	exp, ok := e.(ResultExpectation)
 	if !ok {
 		return core.Verdict{}, fmt.Errorf("result: expectation must be ResultExpectation, got %T", e)
+	}
+	if exp.Source != nil {
+		return resolveSpanSource(ctx, ev, exp)
 	}
 	m, ok := registry.Matcher(exp.Matcher)
 	if !ok {

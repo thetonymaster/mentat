@@ -13,6 +13,7 @@ import (
 	"github.com/thetonymaster/mentat/internal/comparator"
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/engine"
+	"github.com/thetonymaster/mentat/internal/genai"
 	"github.com/thetonymaster/mentat/internal/report"
 )
 
@@ -23,6 +24,7 @@ var (
 	reRunsSatisfiesDoc    = regexp.MustCompile(`^the runs satisfy:$`)
 	reRunsTag             = regexp.MustCompile(`^@runs\((\d+)(?:,(parallel))?\)$`)
 	reMatchesShape        = regexp.MustCompile(`^the run matches shape "([^"]*)"$`)
+	reSpanOrdinal         = regexp.MustCompile(`^(\d+)(?:st|nd|rd|th)$`)
 )
 
 type world struct {
@@ -80,6 +82,14 @@ func InitializerWithCollector(eng *engine.Engine, col *report.Collector) func(*g
 		sc.Step(`^a span matching "([^"]*)" has exactly (\d+) children matching "([^"]*)"$`, w.shapeFanoutExactly)
 
 		sc.Step(`^the run matches shape "([^"]*)"$`, w.matchesShape)
+
+		// §4.1 span-attribute result source — tool convenience form
+		sc.Step(`^the result of (?:(the (?:first|last|\d+(?:st|nd|rd|th)) call|every call|any call) to )?tool "([^"]+)" (contains|equals|matches regex) "([^"]*)"$`, w.resultToolValue)
+		sc.Step(`^the result of (?:(the (?:first|last|\d+(?:st|nd|rd|th)) call|every call|any call) to )?tool "([^"]+)" (json-contains|matches schema):$`, w.resultToolDoc)
+
+		// §4.2 span-attribute result source — general selector form
+		sc.Step(`^attribute "([^"]+)" of (?:(the (?:first|last|\d+(?:st|nd|rd|th))|every|any) )?(?:the )?span matching "([^"]+)" (contains|equals|matches regex) "([^"]*)"$`, w.resultAttrValue)
+		sc.Step(`^attribute "([^"]+)" of (?:(the (?:first|last|\d+(?:st|nd|rd|th))|every|any) )?(?:the )?span matching "([^"]+)" (json-contains|matches schema):$`, w.resultAttrDoc)
 
 		// §7: compile every CEL expression in the scenario before any step runs,
 		// so a malformed expectation fails before an expensive SUT is driven.
@@ -200,6 +210,138 @@ func (w *world) latencyUnder(ms int) error {
 func (w *world) noErrorSpans() error {
 	zero := 0
 	return w.check("budgets", comparator.BudgetExpectation{MaxErrors: &zero})
+}
+
+// parseSpanSpec maps the captured span-spec slot to a Quant (+1-based index for
+// Nth). "" => QuantOne (bare). A trailing "call"/"span" word is ignored; leading
+// words: the/first/last/<n>th/every/any.
+func parseSpanSpec(slot string) (comparator.Quant, int, error) {
+	f := strings.Fields(slot)
+	if n := len(f); n > 0 && (f[n-1] == "call" || f[n-1] == "span") {
+		f = f[:n-1]
+	}
+	switch {
+	case len(f) == 0:
+		return comparator.QuantOne, 0, nil
+	case f[0] == "every":
+		return comparator.QuantEvery, 0, nil
+	case f[0] == "any":
+		return comparator.QuantAny, 0, nil
+	case len(f) == 2 && f[0] == "the" && f[1] == "first":
+		return comparator.QuantFirst, 0, nil
+	case len(f) == 2 && f[0] == "the" && f[1] == "last":
+		return comparator.QuantLast, 0, nil
+	case len(f) == 2 && f[0] == "the":
+		if mm := reSpanOrdinal.FindStringSubmatch(f[1]); mm != nil {
+			n, _ := strconv.Atoi(mm[1])
+			if n < 1 {
+				return 0, 0, fmt.Errorf("span ordinal must be >= 1, got %q", f[1])
+			}
+			return comparator.QuantNth, n, nil
+		}
+	}
+	return 0, 0, fmt.Errorf("unrecognized span selector %q", slot)
+}
+
+// verbToMatcher maps a Gherkin matcher verb to a registered matcher name.
+func verbToMatcher(verb string) (string, error) {
+	switch verb {
+	case "contains":
+		return "contains", nil
+	case "equals":
+		return "exact", nil
+	case "matches regex":
+		return "regex", nil
+	case "json-contains":
+		return "json-subset", nil
+	case "matches schema":
+		return "schema", nil
+	default:
+		return "", fmt.Errorf("unknown result matcher verb %q", verb)
+	}
+}
+
+// toolSpanSource builds a tool-convenience SpanSource (gen_ai.tool.name selector,
+// gen_ai.tool.call.result attribute) from a parsed span-spec slot.
+func toolSpanSource(slot, tool string) (*comparator.SpanSource, error) {
+	q, idx, err := parseSpanSpec(slot)
+	if err != nil {
+		return nil, fmt.Errorf("result of tool %q: %w", tool, err)
+	}
+	return &comparator.SpanSource{
+		Selector: comparator.Selector{{Key: genai.ToolName, Value: tool}},
+		Attr:     genai.ToolResult,
+		Quant:    q,
+		Index:    idx,
+	}, nil
+}
+
+func (w *world) resultToolValue(slot, tool, verb, want string) error {
+	src, err := toolSpanSource(slot, tool)
+	if err != nil {
+		return err
+	}
+	matcher, err := verbToMatcher(verb)
+	if err != nil {
+		return err
+	}
+	return w.check("result", comparator.ResultExpectation{Matcher: matcher, Want: want, Source: src})
+}
+
+func (w *world) resultToolDoc(slot, tool, verb string, doc *godog.DocString) error {
+	if doc == nil {
+		return fmt.Errorf("result of tool %q %s: expected a docstring, got none", tool, verb)
+	}
+	src, err := toolSpanSource(slot, tool)
+	if err != nil {
+		return err
+	}
+	matcher, err := verbToMatcher(verb)
+	if err != nil {
+		return err
+	}
+	return w.check("result", comparator.ResultExpectation{Matcher: matcher, Want: doc.Content, Source: src})
+}
+
+// attrSpanSource builds a general SpanSource from a named attribute, a span-spec
+// slot, and a raw k=v selector.
+func attrSpanSource(attr, slot, selStr string) (*comparator.SpanSource, error) {
+	q, idx, err := parseSpanSpec(slot)
+	if err != nil {
+		return nil, fmt.Errorf("attribute %q of span matching %q: %w", attr, selStr, err)
+	}
+	selr, err := comparator.ParseSelector(selStr)
+	if err != nil {
+		return nil, fmt.Errorf("parse result span selector %q: %w", selStr, err)
+	}
+	return &comparator.SpanSource{Selector: selr, Attr: attr, Quant: q, Index: idx}, nil
+}
+
+func (w *world) resultAttrValue(attr, slot, selStr, verb, want string) error {
+	src, err := attrSpanSource(attr, slot, selStr)
+	if err != nil {
+		return err
+	}
+	matcher, err := verbToMatcher(verb)
+	if err != nil {
+		return err
+	}
+	return w.check("result", comparator.ResultExpectation{Matcher: matcher, Want: want, Source: src})
+}
+
+func (w *world) resultAttrDoc(attr, slot, selStr, verb string, doc *godog.DocString) error {
+	if doc == nil {
+		return fmt.Errorf("attribute %q of span matching %q %s: expected a docstring, got none", attr, selStr, verb)
+	}
+	src, err := attrSpanSource(attr, slot, selStr)
+	if err != nil {
+		return err
+	}
+	matcher, err := verbToMatcher(verb)
+	if err != nil {
+		return err
+	}
+	return w.check("result", comparator.ResultExpectation{Matcher: matcher, Want: doc.Content, Source: src})
 }
 
 func (w *world) resultContains(s string) error {
