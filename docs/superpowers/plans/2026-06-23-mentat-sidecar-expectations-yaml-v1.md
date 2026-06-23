@@ -1289,20 +1289,21 @@ In `e2e/meta_test.go`, add one row to the `cases` slice in `TestBadScenariosAreC
 
 - [ ] **Step 4: Bring up the harness and run the e2e meta-test**
 
-Run:
+Run (NOTE: the subtest name contains `/`, which `-run` treats as hierarchy separators — use the **slash** path, not underscores, or Go silently runs zero subtests and prints a misleading "PASS"):
 ```bash
 make harness-up
-go test -tags e2e ./e2e/ -run 'TestBadScenariosAreCaught/features_meta_bad_expectation.feature' -v
+go test -tags e2e ./e2e/ -run 'TestBadScenariosAreCaught/features/meta/bad_expectation.feature' -v
+make harness-down
 ```
-Expected: PASS — the subtest confirms `mentat run features/meta/bad_expectation.feature` exits non-zero with `"shape failed"` in its combined output.
+Expected: `--- PASS: TestBadScenariosAreCaught/features/meta/bad_expectation.feature` — the subtest confirms `mentat run features/meta/bad_expectation.feature` exits non-zero with `"shape failed"` in its combined output. (Verified live 2026-06-23: PASS in 9.81s.)
 
 - [ ] **Step 5: Confirm the new dir does not break other e2e runs, then commit**
 
 Run (sanity: a non-pattern meta case still behaves, proving the new `expectations/` dir loads cleanly for every run):
 ```bash
-go test -tags e2e ./e2e/ -run 'TestBadScenariosAreCaught/features_meta_bad_shape.feature' -v
+go test -tags e2e ./e2e/ -run 'TestBadScenariosAreCaught/features/meta/bad_shape.feature' -v
 ```
-Expected: PASS.
+Expected: PASS (slash path, per the note above).
 
 ```bash
 git add expectations/bad_expectation.yaml features/meta/bad_expectation.feature e2e/meta_test.go
