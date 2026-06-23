@@ -992,11 +992,32 @@ clauses:
 	}
 }
 
+// TestFeatureUnknownShapePattern proves that an unknown shape pattern name fails
+// the scenario in sc.Before — before the SUT is driven. Times(0) on Query/GetByID
+// asserts the store is never contacted, mirroring TestCELScenarioInitFailsBeforeDrive.
 func TestFeatureUnknownShapePattern(t *testing.T) {
-	eng := shapePatternEngine(t, writeExpectation(t, `name: known
+	// Load a dir that has a KNOWN pattern so engine.Build succeeds; the feature
+	// references a DIFFERENT name ("does-not-exist") that was never loaded.
+	expDir := writeExpectation(t, `name: known
 clauses:
   - exists: "gen_ai.tool.name=search"
-`))
+`)
+	cfg := config.Config{
+		OTLPEndpoint: "x",
+		Expectations: expDir,
+		Targets:      map[string]config.Target{"bot": {Adapter: "shell", Command: []string{"sh", "-c", "echo hi"}, MaxConcurrency: 1}},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	// Times(0): the store must never be queried — the scenario aborts in sc.Before.
+	st.EXPECT().Query(gomock.Any(), gomock.Any()).Times(0)
+	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Times(0)
+	cor := correlate.New(func() string { return "r" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+	eng, err := engine.Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("engine.Build: %v", err)
+	}
+
 	feature := `Feature: pattern
   Scenario: unknown pattern name fails before driving
     Given the agent target "bot"
@@ -1010,6 +1031,7 @@ clauses:
 	if !strings.Contains(out, "unknown shape pattern") {
 		t.Fatalf("expected \"unknown shape pattern\" in output, got:\n%s", out)
 	}
+	// ctrl's t.Cleanup asserts Query/GetByID were never called → pre-check fired before drive.
 }
 
 // shapeTrace: invoke_agent(root) → chat → {search, search, summarize(ERROR)}. IDs are
