@@ -246,6 +246,75 @@ func TestShapeFanout(t *testing.T) {
 	}
 }
 
+func TestShapePattern(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		exp        ShapePatternExpectation
+		wantPass   bool
+		wantReason int // expected number of aggregated reasons when failing
+	}{
+		{
+			name: "all clauses pass",
+			exp: ShapePatternExpectation{Name: "ok", Clauses: []ShapeExpectation{
+				{Kind: "exists", Subject: sel(t, "gen_ai.tool.name=search")},
+				{Kind: "containment", Relation: "child",
+					Subject: sel(t, "gen_ai.tool.name=search"), Parent: sel(t, "gen_ai.operation.name=chat")},
+			}},
+			wantPass: true,
+		},
+		{
+			name: "two clauses fail, both reported",
+			exp: ShapePatternExpectation{Name: "bad", Clauses: []ShapeExpectation{
+				{Kind: "exists", Subject: sel(t, "gen_ai.tool.name=search")}, // passes
+				{Kind: "exists", Subject: sel(t, "gen_ai.tool.name=delete")}, // fails
+				{Kind: "containment", Relation: "child",
+					Subject: sel(t, "gen_ai.tool.name=search"), Parent: sel(t, "gen_ai.tool.name=nope")}, // fails
+			}},
+			wantPass:   false,
+			wantReason: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			v, err := NewShape().Compare(context.Background(), core.Evidence{Trace: treeTrace()}, tt.exp)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if v.Pass != tt.wantPass {
+				t.Fatalf("Pass=%v want %v; reasons=%v", v.Pass, tt.wantPass, v.Reasons)
+			}
+			if !tt.wantPass && len(v.Reasons) != tt.wantReason {
+				t.Errorf("got %d reasons, want %d: %v", len(v.Reasons), tt.wantReason, v.Reasons)
+			}
+		})
+	}
+}
+
+func TestShapePatternErrors(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		ev   core.Evidence
+		exp  core.Expectation
+	}{
+		{"empty clauses", core.Evidence{Trace: treeTrace()}, ShapePatternExpectation{Name: "empty"}},
+		{"malformed clause (unknown kind)", core.Evidence{Trace: treeTrace()},
+			ShapePatternExpectation{Name: "x", Clauses: []ShapeExpectation{{Kind: "bogus", Subject: sel(t, "a=b")}}}},
+		{"nil trace", core.Evidence{},
+			ShapePatternExpectation{Name: "x", Clauses: []ShapeExpectation{{Kind: "exists", Subject: sel(t, "a=b")}}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := NewShape().Compare(context.Background(), tt.ev, tt.exp); err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+		})
+	}
+}
+
 func TestShapeName(t *testing.T) {
 	t.Parallel()
 	if got := NewShape().Name(); got != "shape" {
