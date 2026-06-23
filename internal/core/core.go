@@ -41,6 +41,21 @@ type Evidence struct {
 type Verdict struct {
 	Pass    bool
 	Reasons []string
+	// Detail is the structured computed-vs-expected result of a canonical aggregate
+	// (@runs) comparison. Non-nil only for that case; every other comparator leaves it nil.
+	Detail *AggregateDetail
+}
+
+// AggregateDetail is the structured result of a canonical aggregate comparison
+// ("‹macro›(r, proj) ‹op› ‹const›"). PerRun is positionally aligned with the runs order;
+// predicate macros (rate/count) contribute 1.0/0.0.
+type AggregateDetail struct {
+	Expr     string
+	Macro    string
+	Op       string
+	Computed float64
+	Expected float64
+	PerRun   []float64
 }
 
 // Expectation is comparator-specific config; each comparator type-asserts its own.
