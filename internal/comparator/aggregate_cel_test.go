@@ -180,14 +180,14 @@ func TestAggregateCEL_Detail(t *testing.T) {
 			if err != nil {
 				t.Fatalf("aggregate: %v", err)
 			}
+			if v.Pass != tt.wantPass {
+				t.Fatalf("Pass = %v, want %v (reasons %v)", v.Pass, tt.wantPass, v.Reasons)
+			}
 			if tt.wantDetailNil {
 				if v.Detail != nil {
 					t.Errorf("want nil Detail, got %+v", v.Detail)
 				}
 				return
-			}
-			if v.Pass != tt.wantPass {
-				t.Fatalf("Pass = %v, want %v (reasons %v)", v.Pass, tt.wantPass, v.Reasons)
 			}
 			if v.Detail == nil {
 				t.Fatalf("want Detail populated")
