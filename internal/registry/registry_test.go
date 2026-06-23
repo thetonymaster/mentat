@@ -218,11 +218,23 @@ func TestStoreRegistry(t *testing.T) {
 
 func TestReporterRegistry(t *testing.T) {
 	resetRegistries(t)
-	RegisterReporter("fake", mocks.NewMockReporter(gomock.NewController(t)))
-	if _, ok := Reporter("fake"); !ok {
-		t.Fatal("registered reporter not found")
+	tests := []struct {
+		name    string
+		regName string
+		lookup  string
+		wantOK  bool
+	}{
+		{name: "found", regName: "fake", lookup: "fake", wantOK: true},
+		{name: "not-found", regName: "fake", lookup: "nope", wantOK: false},
 	}
-	if _, ok := Reporter("nope"); ok {
-		t.Fatal("unknown reporter unexpectedly found")
+	RegisterReporter("fake", mocks.NewMockReporter(gomock.NewController(t)))
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			_, ok := Reporter(tt.lookup)
+			if ok != tt.wantOK {
+				t.Fatalf("Reporter(%q) ok=%v, want %v", tt.lookup, ok, tt.wantOK)
+			}
+		})
 	}
 }

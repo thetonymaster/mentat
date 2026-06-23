@@ -1,6 +1,7 @@
 package report
 
 import (
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -16,8 +17,8 @@ func TestCollector(t *testing.T) {
 	if rep.Total != 2 || rep.Passed != 1 || rep.Failed != 1 {
 		t.Errorf("totals = %+v", rep)
 	}
-	if rep.TotalCost != 0.03 {
-		t.Errorf("total cost = %v", rep.TotalCost)
+	if math.Abs(rep.TotalCost-0.03) >= 1e-9 {
+		t.Errorf("total cost = %v, want ~0.03", rep.TotalCost)
 	}
 }
 
@@ -79,8 +80,8 @@ func TestCollector_Scenarios(t *testing.T) {
 			if rep.Failed != tt.wantFailed {
 				t.Errorf("Failed = %d, want %d", rep.Failed, tt.wantFailed)
 			}
-			if rep.TotalCost != tt.wantCost {
-				t.Errorf("TotalCost = %v, want %v", rep.TotalCost, tt.wantCost)
+			if math.Abs(rep.TotalCost-tt.wantCost) >= 1e-9 {
+				t.Errorf("TotalCost = %v, want ~%v", rep.TotalCost, tt.wantCost)
 			}
 			if len(rep.Scenarios) != tt.wantTotal {
 				t.Errorf("len(Scenarios) = %d, want %d", len(rep.Scenarios), tt.wantTotal)

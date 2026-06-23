@@ -631,6 +631,9 @@ func TestEngine_Pricing(t *testing.T) {
 	if eng.Pricing()["m"].InputPerMTok != 1 {
 		t.Errorf("pricing not exposed: %+v", eng.Pricing())
 	}
+	if eng.Pricing()["m"].OutputPerMTok != 2 {
+		t.Errorf("OutputPerMTok not exposed: %+v", eng.Pricing())
+	}
 }
 
 func TestDriveHTTPTarget(t *testing.T) {
