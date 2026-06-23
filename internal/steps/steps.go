@@ -13,6 +13,7 @@ import (
 	"github.com/thetonymaster/mentat/internal/comparator"
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/engine"
+	"github.com/thetonymaster/mentat/internal/report"
 )
 
 var (
@@ -24,18 +25,27 @@ var (
 )
 
 type world struct {
-	eng      *engine.Engine
-	target   string
-	ev       core.Evidence
-	evs      []core.Evidence
-	n        int
-	parallel bool
+	eng        *engine.Engine
+	col        *report.Collector
+	target     string
+	ev         core.Evidence
+	evs        []core.Evidence
+	n          int
+	parallel   bool
+	lastDetail *core.AggregateDetail
 }
 
-// Initializer binds the v1 grammar; a fresh world is created per scenario.
+// Initializer binds the v1 grammar; results go to a discarded collector.
+// Existing callers are unaffected; results are not surfaced.
 func Initializer(eng *engine.Engine) func(*godog.ScenarioContext) {
+	return InitializerWithCollector(eng, report.NewCollector())
+}
+
+// InitializerWithCollector binds the v1 grammar and records one ScenarioResult per
+// scenario into col. Use this at the composition root to capture run reports.
+func InitializerWithCollector(eng *engine.Engine, col *report.Collector) func(*godog.ScenarioContext) {
 	return func(sc *godog.ScenarioContext) {
-		w := &world{eng: eng}
+		w := &world{eng: eng, col: col}
 
 		sc.Step(`^the (?:agent|service) target "([^"]+)"$`, w.target_)
 		sc.Step(`^I run scenario "([^"]+)"$`, w.runScenario)
@@ -72,7 +82,29 @@ func Initializer(eng *engine.Engine) func(*godog.ScenarioContext) {
 			}
 			return ctx, nil
 		})
+
+		sc.After(func(ctx context.Context, scenario *godog.Scenario, stepErr error) (context.Context, error) {
+			v := core.Verdict{Pass: stepErr == nil, Detail: w.lastDetail}
+			if stepErr != nil {
+				v.Reasons = []string{stepErr.Error()}
+			}
+			sr, err := report.Derive(scenario.Name, tagNames(scenario.Tags), v, w.evs, w.eng.Pricing())
+			if err != nil {
+				return ctx, err
+			}
+			w.col.Append(sr)
+			return ctx, nil
+		})
 	}
+}
+
+// tagNames extracts the Name field from godog PickleTag slice.
+func tagNames(tags []*messages.PickleTag) []string {
+	out := make([]string, 0, len(tags))
+	for _, t := range tags {
+		out = append(out, t.Name)
+	}
+	return out
 }
 
 func (w *world) target_(name string) error { w.target = name; return nil }
@@ -238,6 +270,7 @@ func (w *world) checkRuns(expr string) error {
 	if err != nil {
 		return fmt.Errorf("aggregate-cel: %w", err)
 	}
+	w.lastDetail = v.Detail
 	if !v.Pass {
 		return fmt.Errorf("aggregate-cel failed: %s", strings.Join(v.Reasons, "; "))
 	}
