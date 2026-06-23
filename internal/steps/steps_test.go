@@ -1141,7 +1141,7 @@ func TestResultToolStep(t *testing.T) {
 			wantPass: true,
 		},
 		{
-			name: "docstring json-contains passes",
+			name: "docstring json-contains fails (plain string is not JSON)",
 			feature: `Feature: result-tool
   Scenario: summarize json
     Given the agent target "svc"
