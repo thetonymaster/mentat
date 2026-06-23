@@ -9,3 +9,4 @@ Feature: Research agent behaviour
     And the tool "delete_record" is never called
     And total tokens are under 5000
     And the result contains "Q3 revenue"
+    And the result of tool "search" contains "doc-1"
