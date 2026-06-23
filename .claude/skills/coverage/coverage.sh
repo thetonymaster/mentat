@@ -7,9 +7,19 @@ PATH_ARG="${1:-./...}"
 MIN="${2:-${COVERAGE_MIN:-80}}"
 PROFILE="cover.out"
 
-echo "==> go test ${PATH_ARG} (floor: ${MIN}%)"
+# COVERAGE_RACE=1 adds -race so a single test run does double duty (race detection
+# + coverage), letting CI drop a separate `go test -race` step. Default off: local
+# runs stay fast. Only the literal "1" enables it — any other value (incl. "0"/
+# "false") leaves race off, so COVERAGE_RACE=0 disables as a caller expects.
+# -covermode=atomic is already race-safe and required under -race.
+RACE_FLAG=""
+if [ "${COVERAGE_RACE:-}" = "1" ]; then
+  RACE_FLAG="-race"
+fi
+
+echo "==> go test ${PATH_ARG} ${RACE_FLAG} (floor: ${MIN}%)"
 # -covermode=atomic is safe under parallel/-race. Capture output AND keep a profile.
-TEST_OUT="$(go test "${PATH_ARG}" -covermode=atomic -coverprofile="${PROFILE}" -cover 2>&1)"
+TEST_OUT="$(go test "${PATH_ARG}" ${RACE_FLAG} -covermode=atomic -coverprofile="${PROFILE}" -cover 2>&1)"
 TEST_RC=$?
 echo "${TEST_OUT}"
 

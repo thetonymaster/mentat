@@ -35,7 +35,6 @@ Output a `VERIFY:` line per test: `Ran <name> — Result: PASS/FAIL/DID NOT RUN`
       wantErr bool
   }{ ... }
   for _, tt := range tests {
-      tt := tt
       t.Run(tt.name, func(t *testing.T) {
           got, err := Compare(ctx, tt.ev, tt.exp)
           if (err != nil) != tt.wantErr { t.Fatalf("err=%v wantErr=%v", err, tt.wantErr) }
@@ -43,8 +42,15 @@ Output a `VERIFY:` line per test: `Ran <name> — Result: PASS/FAIL/DID NOT RUN`
       })
   }
   ```
+  No `tt := tt` capture (unnecessary since Go 1.22; module is on 1.25).
   Every table covers: happy path, the failing/violation path, and the error path
   (malformed input → comparator returns error, never a false pass).
+- **`t.Parallel()` — soft default, not a gate.** Add `t.Parallel()` (top of the test
+  and inside each `t.Run`) to new table-driven tests **that share no mutable state** —
+  it catches ordering / shared-state / data-race bugs that matter for trace
+  correlation. It is a correctness practice, *not* a CI-speed measure, and *not*
+  required. **Never** combine it with `t.Setenv` / `t.Chdir` (they panic under
+  `t.Parallel()`); leave those tests serial.
 - **Mocks = uber gomock** for `core` interfaces (`Driver`, `TraceStore`, `Correlator`,
   `Reporter`, `Judge`). Use `ctrl := gomock.NewController(t)`, `m.EXPECT().Method(args).Return(...)`,
   and let the controller's `t.Cleanup` assert satisfaction. Regenerate via
