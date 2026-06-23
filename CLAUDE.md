@@ -57,10 +57,16 @@ from Tempo, and run **comparators** that assert how it behaved and what it produ
       // want / wantErr
   }{ ... }
   for _, tt := range tests {
-      tt := tt
       t.Run(tt.name, func(t *testing.T) { ... })
   }
   ```
+  (No `tt := tt` capture — unnecessary since Go 1.22; this module is on 1.25.)
+- **`t.Parallel()` — soft default, not a gate.** Prefer `t.Parallel()` in new
+  table-driven tests (at the top, and inside each `t.Run`) **when the test shares no
+  mutable state**. It surfaces ordering / shared-state / data-race bugs, which matter
+  for a trace-correlation framework. It is *not* a CI-speed measure (execution is
+  seconds; CI cost is compilation) and *not* required. **Skip it** for tests using
+  `t.Setenv` / `t.Chdir` — those *panic* under `t.Parallel()`.
 - **Mocks: uber gomock** (`go.uber.org/mock/gomock` + `mockgen`). Generate mocks for
   the `core` interfaces (`Driver`, `TraceStore`, `Correlator`, `Comparator`,
   `Reporter`, `Judge`) rather than hand-rolling fakes:
