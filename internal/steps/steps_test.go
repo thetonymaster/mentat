@@ -1051,6 +1051,37 @@ func spanResultTrace() *trace.Trace {
 	return &trace.Trace{Roots: []*trace.Span{root}, Spans: []*trace.Span{root, s1, s2, s3}}
 }
 
+// TestVerbToMatcher covers all five verb→matcher mappings and the error path for
+// an unknown verb. t.Parallel() is safe: no engine, env, or mutable state.
+func TestVerbToMatcher(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		verb    string
+		want    string
+		wantErr bool
+	}{
+		{name: "contains", verb: "contains", want: "contains"},
+		{name: "equals", verb: "equals", want: "exact"},
+		{name: "matches regex", verb: "matches regex", want: "regex"},
+		{name: "json-contains", verb: "json-contains", want: "json-subset"},
+		{name: "matches schema", verb: "matches schema", want: "schema"},
+		{name: "unknown verb returns error", verb: "bogus", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := verbToMatcher(tt.verb)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("verbToMatcher(%q) err=%v wantErr=%v", tt.verb, err, tt.wantErr)
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Fatalf("verbToMatcher(%q) = %q, want %q", tt.verb, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestResultToolStep(t *testing.T) {
 	tests := []struct {
 		name     string
