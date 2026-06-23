@@ -23,6 +23,19 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          # setup-go's built-in cache keys only on go.sum, so once populated it
+          # never re-saves (every run is a cache hit) and the build cache goes
+          # stale — the source-keyed actions/cache below refreshes each run.
+          cache: false
+      - name: cache go build (check)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-gobuild-check-${{ hashFiles('**/go.sum', '**/*.go') }}
+          restore-keys: |
+            ${{ runner.os }}-gobuild-check-
       - run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
       # No standalone `go vet ./...`: golangci-lint's `default: standard` set runs
       # the govet analyzer, so a separate vet step just recompiles every package
@@ -61,6 +74,16 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: false  # source-keyed cache below; see the check job for why.
+      - name: cache go build (e2e)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-gobuild-e2e-${{ hashFiles('**/go.sum', '**/*.go') }}
+          restore-keys: |
+            ${{ runner.os }}-gobuild-e2e-
       - name: start Tempo + Collector
         run: docker compose -f deploy/docker-compose.yml up -d
       - name: wait for Tempo
