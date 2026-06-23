@@ -13,6 +13,7 @@ import (
 // pipeline and asserts mentat exits zero (every comparator passes).
 // Requires: make harness-up (Tempo + Collector running).
 func TestHappyScenarioPasses(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		feature string
@@ -22,9 +23,10 @@ func TestHappyScenarioPasses(t *testing.T) {
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
-			cmd := exec.CommandContext(ctx, "go", "run", "./cmd/mentat", "run", tc.feature)
+			cmd := exec.CommandContext(ctx, mentatBin, "run", tc.feature)
 			cmd.Dir = ".."
 			out, err := cmd.CombinedOutput()
 			if ctx.Err() == context.DeadlineExceeded {

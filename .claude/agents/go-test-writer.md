@@ -59,6 +59,15 @@ Output a `VERIFY:` line per test: `Ran <name> — Result: PASS/FAIL/DID NOT RUN`
   verification is needed; otherwise gomock.
 - **Hermetic:** unit tests use the `inmem`/`otlp-file` `TraceStore` + gomock — no
   network, no Docker. Live-Tempo tests carry `//go:build e2e` and assume `make harness-up`.
+- **e2e authoring pattern (`e2e/`):** new scenarios exec the prebuilt `mentatBin`
+  (built once in `e2e/main_test.go`'s `TestMain`), **never** `go run ./cmd/mentat`
+  (that recompiles per invocation and serializes parallel scenarios on the cold
+  build). Call `t.Parallel()` at the top of every e2e test **and** inside each
+  `t.Run` subtest: e2e scenarios are I/O-bound (each blocks on Tempo trace-ingestion
+  via the correlator's stable-poll), so here `t.Parallel()` is a real wall-clock win,
+  not just hygiene — the suite overlaps the waits instead of summing them (~7× in
+  practice). Independence holds because each `mentat run` mints a fresh
+  `test.run.id`, so parallel scenarios never collide in Tempo.
 - **Comparator tests** load Plan-1 golden fixtures from `testdata/traces/researchbot/*.json`
   and assert the documented pass/fail matrix (happy passes; wrong_order/extra_tool/
   over_budget/bad_answer fail their comparator with a reason).

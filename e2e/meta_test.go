@@ -14,6 +14,7 @@ import (
 // Each feature drives a scenario that violates exactly one assertion, so the
 // corresponding comparator must trip and mentat must exit non-zero.
 func TestBadScenariosAreCaught(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		feature string
 		reason  string // substring expected in combined output
@@ -26,9 +27,10 @@ func TestBadScenariosAreCaught(t *testing.T) {
 	for _, c := range cases {
 		c := c
 		t.Run(c.feature, func(t *testing.T) {
+			t.Parallel()
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
-			cmd := exec.CommandContext(ctx, "go", "run", "./cmd/mentat", "run", c.feature)
+			cmd := exec.CommandContext(ctx, mentatBin, "run", c.feature)
 			cmd.Dir = ".."
 			out, err := cmd.CombinedOutput()
 			if ctx.Err() == context.DeadlineExceeded {

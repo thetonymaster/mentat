@@ -13,9 +13,10 @@ import (
 // http/baggage path and asserts mentat exits zero (every comparator passes).
 // Requires: make harness-up (Tempo + Collector + orderflow containers running).
 func TestOrderflowHappyPasses(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "go", "run", "./cmd/mentat", "run", "features/checkout.feature")
+	cmd := exec.CommandContext(ctx, mentatBin, "run", "features/checkout.feature")
 	cmd.Dir = ".."
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {

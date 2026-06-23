@@ -15,6 +15,7 @@ import (
 // happy-path assertion, so the corresponding comparator must trip and mentat must
 // exit non-zero. Requires: make harness-up.
 func TestOrderflowBadScenariosAreCaught(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		feature string // input: the bad-scenario feature mentat drives
@@ -29,9 +30,10 @@ func TestOrderflowBadScenariosAreCaught(t *testing.T) {
 	for _, c := range cases {
 		c := c
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
-			cmd := exec.CommandContext(ctx, "go", "run", "./cmd/mentat", "run", c.feature)
+			cmd := exec.CommandContext(ctx, mentatBin, "run", c.feature)
 			cmd.Dir = ".."
 			out, err := cmd.CombinedOutput()
 			if ctx.Err() == context.DeadlineExceeded {
