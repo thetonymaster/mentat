@@ -244,6 +244,36 @@ func TestToolsInOrderEmptyCell(t *testing.T) {
 	}
 }
 
+// TestShapeStepSelectorErrorsWrapped: shape step handlers must wrap ParseSelector
+// failures with which selector failed (subject/parent) and the raw value, per the
+// %w error-wrapping convention — not return the bare parser error.
+func TestShapeStepSelectorErrorsWrapped(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		call   func(w *world) error
+		errSub string
+	}{
+		{"exists subject", func(w *world) error { return w.shapeExists("noequals") }, `parse shape subject selector "noequals"`},
+		{"childOf subject", func(w *world) error { return w.shapeChildOf("badchild", "k=v") }, `parse shape subject selector "badchild"`},
+		{"childOf parent", func(w *world) error { return w.shapeChildOf("k=v", "badparent") }, `parse shape parent selector "badparent"`},
+		{"fanout parent", func(w *world) error { return w.shapeFanoutAtLeast("badparent", 2, "k=v") }, `parse shape parent selector "badparent"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			w := &world{} // no engine needed — parse error fires before check()
+			err := tt.call(w)
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tt.errSub)
+			}
+			if !strings.Contains(err.Error(), tt.errSub) {
+				t.Fatalf("expected error containing %q, got: %v", tt.errSub, err)
+			}
+		})
+	}
+}
+
 // TestCELStep exercises the inline + docstring "the run satisfies" grammar
 // end-to-end through a godog suite: a true expression passes the suite; a false
 // one fails it and surfaces the §9 value snapshot. happyTrace has tools
@@ -870,6 +900,101 @@ func TestInitializer_CollectsFailingAggregateDetail(t *testing.T) {
 	}
 	if sr.Aggregate.Computed != 2 || sr.Aggregate.Expected != 0 {
 		t.Errorf("Aggregate computed/expected = %v/%v, want 2/0", sr.Aggregate.Computed, sr.Aggregate.Expected)
+	}
+}
+
+// shapeTrace: invoke_agent(root) → chat → {search, search, summarize(ERROR)}. IDs are
+// set explicitly so shape's containment/fan-out matching works (LoadFixture omits IDs).
+func shapeTrace() *trace.Trace {
+	root := &trace.Span{ID: "root", Name: "invoke_agent", Attrs: map[string]string{genai.Op: genai.OpInvokeAgent}}
+	chat := &trace.Span{ID: "chat", ParentID: "root", Name: "chat", Attrs: map[string]string{genai.Op: genai.OpChat}}
+	mk := func(id, tool, status string) *trace.Span {
+		return &trace.Span{ID: id, ParentID: "chat", Name: "execute_tool " + tool, Status: status,
+			Attrs: map[string]string{genai.Op: genai.OpExecuteTool, genai.ToolName: tool}}
+	}
+	s1, s2, sum := mk("t1", "search", "OK"), mk("t2", "search", "OK"), mk("t3", "summarize", "ERROR")
+	return &trace.Trace{Roots: []*trace.Span{root}, Spans: []*trace.Span{root, chat, s1, s2, sum}}
+}
+
+func TestFeatureExercisesShapeGrammar(t *testing.T) {
+	cfg := config.Config{
+		OTLPEndpoint: "x",
+		Targets:      map[string]config.Target{"bot": {Adapter: "shell", Command: []string{"sh", "-c", "echo hi"}, MaxConcurrency: 1}},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "r"}}, nil).AnyTimes()
+	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(shapeTrace(), nil).AnyTimes()
+	cor := correlate.New(func() string { return "r" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+	eng, err := engine.Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("engine.Build: %v", err)
+	}
+
+	feature := `Feature: shape grammar
+  Scenario: structural assertions hold
+    Given the agent target "bot"
+    When I run scenario "happy"
+    Then a span matching "gen_ai.tool.name=search" exists
+    And no span matching "gen_ai.tool.name=delete" exists
+    And at least 2 spans match "gen_ai.tool.name=search"
+    And exactly 1 span matches "gen_ai.tool.name=summarize"
+    And a span matching "gen_ai.tool.name=search" is a child of a span matching "gen_ai.operation.name=chat"
+    And a span matching "gen_ai.tool.name=search" is a descendant of a span matching "gen_ai.operation.name=invoke_agent"
+    And a span matching "gen_ai.operation.name=chat" has at least 2 children matching "gen_ai.tool.name=search"
+    And a span matching "span.status=ERROR" exists
+`
+	var out bytes.Buffer
+	suite := godog.TestSuite{
+		ScenarioInitializer: Initializer(eng),
+		Options: &godog.Options{
+			Format:          "pretty",
+			Output:          &out,
+			FeatureContents: []godog.Feature{{Name: "shape", Contents: []byte(feature)}},
+		},
+	}
+	if status := suite.Run(); status != 0 {
+		t.Fatalf("expected passing suite, status=%d\n%s", status, out.String())
+	}
+}
+
+// TestFeatureGoesRedOnBadShape: invoke_agent is a root, so asserting it is a child of a
+// tool span must fail — the hermetic complement to the binary L3 meta-test (Task 6).
+func TestFeatureGoesRedOnBadShape(t *testing.T) {
+	cfg := config.Config{
+		OTLPEndpoint: "x",
+		Targets:      map[string]config.Target{"bot": {Adapter: "shell", Command: []string{"sh", "-c", "echo hi"}, MaxConcurrency: 1}},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "r"}}, nil).AnyTimes()
+	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(shapeTrace(), nil).AnyTimes()
+	cor := correlate.New(func() string { return "r" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+	eng, err := engine.Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("engine.Build: %v", err)
+	}
+
+	feature := `Feature: bad-shape
+  Scenario: impossible containment
+    Given the agent target "bot"
+    When I run scenario "any"
+    Then a span matching "gen_ai.operation.name=invoke_agent" is a child of a span matching "gen_ai.tool.name=search"
+`
+	var out bytes.Buffer
+	suite := godog.TestSuite{
+		ScenarioInitializer: Initializer(eng),
+		Options: &godog.Options{
+			Format:          "pretty",
+			Output:          &out,
+			FeatureContents: []godog.Feature{{Name: "bad-shape", Contents: []byte(feature)}},
+		},
+	}
+	if status := suite.Run(); status == 0 {
+		t.Fatalf("expected suite to fail (non-zero), but it passed\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "shape failed") {
+		t.Fatalf("expected output to contain \"shape failed\", got:\n%s", out.String())
 	}
 }
 

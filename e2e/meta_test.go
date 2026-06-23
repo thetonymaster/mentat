@@ -23,6 +23,7 @@ func TestBadScenariosAreCaught(t *testing.T) {
 		{"features/meta/over_budget.feature", "exceed budget"},
 		{"features/meta/forbidden.feature", "forbidden tool"},
 		{"features/meta/bad_answer.feature", "result contains"},
+		{"features/meta/bad_shape.feature", "shape failed"},
 	}
 	for _, c := range cases {
 		c := c

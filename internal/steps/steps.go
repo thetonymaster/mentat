@@ -69,6 +69,15 @@ func InitializerWithCollector(eng *engine.Engine, col *report.Collector) func(*g
 		sc.Step(`^the runs satisfy "([^"]*)"$`, w.runsSatisfies)
 		sc.Step(`^the runs satisfy:$`, w.runsSatisfiesDoc)
 
+		sc.Step(`^a span matching "([^"]*)" exists$`, w.shapeExists)
+		sc.Step(`^no span matching "([^"]*)" exists$`, w.shapeAbsent)
+		sc.Step(`^at least (\d+) spans? match(?:es)? "([^"]*)"$`, w.shapeAtLeast)
+		sc.Step(`^exactly (\d+) spans? match(?:es)? "([^"]*)"$`, w.shapeExactly)
+		sc.Step(`^a span matching "([^"]*)" is a child of a span matching "([^"]*)"$`, w.shapeChildOf)
+		sc.Step(`^a span matching "([^"]*)" is a descendant of a span matching "([^"]*)"$`, w.shapeDescendantOf)
+		sc.Step(`^a span matching "([^"]*)" has at least (\d+) children matching "([^"]*)"$`, w.shapeFanoutAtLeast)
+		sc.Step(`^a span matching "([^"]*)" has exactly (\d+) children matching "([^"]*)"$`, w.shapeFanoutExactly)
+
 		// §7: compile every CEL expression in the scenario before any step runs,
 		// so a malformed expectation fails before an expensive SUT is driven.
 		sc.Before(func(ctx context.Context, scenario *godog.Scenario) (context.Context, error) {
@@ -275,6 +284,97 @@ func (w *world) checkRuns(expr string) error {
 		return fmt.Errorf("aggregate-cel failed: %s", strings.Join(v.Reasons, "; "))
 	}
 	return nil
+}
+
+// parseShapeSelector wraps ParseSelector failures with which selector failed
+// (role: "subject" or "parent") and the raw value, per the %w error-wrapping
+// convention — so a malformed shape step reports actionable, consistent diagnostics.
+func parseShapeSelector(role, raw string) (comparator.Selector, error) {
+	sel, err := comparator.ParseSelector(raw)
+	if err != nil {
+		return nil, fmt.Errorf("parse shape %s selector %q: %w", role, raw, err)
+	}
+	return sel, nil
+}
+
+func (w *world) shapeExists(s string) error {
+	sel, err := parseShapeSelector("subject", s)
+	if err != nil {
+		return err
+	}
+	return w.check("shape", comparator.ShapeExpectation{Kind: "exists", Subject: sel})
+}
+
+func (w *world) shapeAbsent(s string) error {
+	sel, err := parseShapeSelector("subject", s)
+	if err != nil {
+		return err
+	}
+	return w.check("shape", comparator.ShapeExpectation{Kind: "absent", Subject: sel})
+}
+
+func (w *world) shapeAtLeast(n int, s string) error {
+	sel, err := parseShapeSelector("subject", s)
+	if err != nil {
+		return err
+	}
+	return w.check("shape", comparator.ShapeExpectation{Kind: "exists", Subject: sel, Count: &comparator.Count{Op: ">=", N: n}})
+}
+
+func (w *world) shapeExactly(n int, s string) error {
+	sel, err := parseShapeSelector("subject", s)
+	if err != nil {
+		return err
+	}
+	return w.check("shape", comparator.ShapeExpectation{Kind: "exists", Subject: sel, Count: &comparator.Count{Op: "==", N: n}})
+}
+
+func (w *world) shapeChildOf(child, parent string) error {
+	cs, err := parseShapeSelector("subject", child)
+	if err != nil {
+		return err
+	}
+	ps, err := parseShapeSelector("parent", parent)
+	if err != nil {
+		return err
+	}
+	return w.check("shape", comparator.ShapeExpectation{Kind: "containment", Subject: cs, Parent: ps, Relation: "child"})
+}
+
+func (w *world) shapeDescendantOf(child, parent string) error {
+	cs, err := parseShapeSelector("subject", child)
+	if err != nil {
+		return err
+	}
+	ps, err := parseShapeSelector("parent", parent)
+	if err != nil {
+		return err
+	}
+	return w.check("shape", comparator.ShapeExpectation{Kind: "containment", Subject: cs, Parent: ps, Relation: "descendant"})
+}
+
+func (w *world) shapeFanoutAtLeast(parent string, n int, child string) error {
+	ps, err := parseShapeSelector("parent", parent)
+	if err != nil {
+		return err
+	}
+	cs, err := parseShapeSelector("subject", child)
+	if err != nil {
+		return err
+	}
+	return w.check("shape", comparator.ShapeExpectation{Kind: "fanout", Subject: cs, Parent: ps, Relation: "child", Count: &comparator.Count{Op: ">=", N: n}})
+}
+
+func (w *world) shapeFanoutExactly(parent string, n int, child string) error {
+	ps, err := parseShapeSelector("parent", parent)
+	if err != nil {
+		return err
+	}
+	cs, err := parseShapeSelector("subject", child)
+	if err != nil {
+		return err
+	}
+	return w.check("shape", comparator.ShapeExpectation{Kind: "fanout", Subject: cs, Parent: ps, Relation: "child", Count: &comparator.Count{Op: "==", N: n}})
 }
 
 // precompileScenario compiles every "the run satisfies" and "the runs satisfy"
