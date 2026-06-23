@@ -137,11 +137,23 @@ func clauseToExpectation(c clauseYAML) (comparator.ShapeExpectation, error) {
 		return comparator.ShapeExpectation{Kind: "containment", Subject: childSel, Parent: parentSel, Relation: kinds[0]}, nil
 
 	default: // "fanout"
+		// parent/child/count all live inside the fanout block; top-level of/count
+		// are known clauseYAML fields (so KnownFields won't reject them) but
+		// meaningless here — reject rather than silently ignore (invariant #4).
+		if c.Of != "" {
+			return comparator.ShapeExpectation{}, fmt.Errorf("fanout clause does not take top-level 'of' (use fanout.parent)")
+		}
+		if c.Count != "" {
+			return comparator.ShapeExpectation{}, fmt.Errorf("fanout clause does not take top-level 'count' (use fanout.count)")
+		}
 		f := c.Fanout
 		if f.Parent == "" || f.Child == "" {
 			return comparator.ShapeExpectation{}, fmt.Errorf("fanout requires both 'parent' and 'child'")
 		}
-		if f.Count == "" {
+		// TrimSpace, not == "": a whitespace-only count would otherwise pass here,
+		// parse to a nil Count, and only fail at comparator-evaluation time —
+		// after the SUT is driven, defeating the load-time pre-check.
+		if strings.TrimSpace(f.Count) == "" {
 			return comparator.ShapeExpectation{}, fmt.Errorf("fanout requires 'count'")
 		}
 		parentSel, err := comparator.ParseSelector(f.Parent)
