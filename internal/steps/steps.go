@@ -87,6 +87,10 @@ func InitializerWithCollector(eng *engine.Engine, col *report.Collector) func(*g
 		sc.Step(`^the result of (?:(the (?:first|last|\d+(?:st|nd|rd|th)) call|every call|any call) to )?tool "([^"]+)" (contains|equals|matches regex) "([^"]*)"$`, w.resultToolValue)
 		sc.Step(`^the result of (?:(the (?:first|last|\d+(?:st|nd|rd|th)) call|every call|any call) to )?tool "([^"]+)" (json-contains|matches schema):$`, w.resultToolDoc)
 
+		// §4.2 span-attribute result source — general selector form
+		sc.Step(`^attribute "([^"]+)" of (?:(the (?:first|last|\d+(?:st|nd|rd|th))|every|any) )?(?:the )?span matching "([^"]+)" (contains|equals|matches regex) "([^"]*)"$`, w.resultAttrValue)
+		sc.Step(`^attribute "([^"]+)" of (?:(the (?:first|last|\d+(?:st|nd|rd|th))|every|any) )?(?:the )?span matching "([^"]+)" (json-contains|matches schema):$`, w.resultAttrDoc)
+
 		// §7: compile every CEL expression in the scenario before any step runs,
 		// so a malformed expectation fails before an expensive SUT is driven.
 		sc.Before(func(ctx context.Context, scenario *godog.Scenario) (context.Context, error) {
@@ -289,6 +293,47 @@ func (w *world) resultToolDoc(slot, tool, verb string, doc *godog.DocString) err
 		return fmt.Errorf("result of tool %q %s: expected a docstring, got none", tool, verb)
 	}
 	src, err := toolSpanSource(slot, tool)
+	if err != nil {
+		return err
+	}
+	matcher, err := verbToMatcher(verb)
+	if err != nil {
+		return err
+	}
+	return w.check("result", comparator.ResultExpectation{Matcher: matcher, Want: doc.Content, Source: src})
+}
+
+// attrSpanSource builds a general SpanSource from a named attribute, a span-spec
+// slot, and a raw k=v selector.
+func attrSpanSource(attr, slot, selStr string) (*comparator.SpanSource, error) {
+	q, idx, err := parseSpanSpec(slot)
+	if err != nil {
+		return nil, fmt.Errorf("attribute %q of span matching %q: %w", attr, selStr, err)
+	}
+	selr, err := comparator.ParseSelector(selStr)
+	if err != nil {
+		return nil, fmt.Errorf("parse result span selector %q: %w", selStr, err)
+	}
+	return &comparator.SpanSource{Selector: selr, Attr: attr, Quant: q, Index: idx}, nil
+}
+
+func (w *world) resultAttrValue(attr, slot, selStr, verb, want string) error {
+	src, err := attrSpanSource(attr, slot, selStr)
+	if err != nil {
+		return err
+	}
+	matcher, err := verbToMatcher(verb)
+	if err != nil {
+		return err
+	}
+	return w.check("result", comparator.ResultExpectation{Matcher: matcher, Want: want, Source: src})
+}
+
+func (w *world) resultAttrDoc(attr, slot, selStr, verb string, doc *godog.DocString) error {
+	if doc == nil {
+		return fmt.Errorf("attribute %q of span matching %q %s: expected a docstring, got none", attr, selStr, verb)
+	}
+	src, err := attrSpanSource(attr, slot, selStr)
 	if err != nil {
 		return err
 	}

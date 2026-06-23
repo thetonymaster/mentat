@@ -1185,6 +1185,76 @@ func TestResultToolStep(t *testing.T) {
 	}
 }
 
+func TestResultAttrStep(t *testing.T) {
+	tests := []struct {
+		name     string
+		feature  string
+		wantPass bool
+	}{
+		{
+			name: "selector form: last search result by attribute passes",
+			feature: `Feature: result-attr
+  Scenario: last search via selector
+    Given the agent target "svc"
+    When I run scenario "happy"
+    Then attribute "gen_ai.tool.call.result" of the last span matching "gen_ai.tool.name=search" equals "second-result"
+`,
+			wantPass: true,
+		},
+		{
+			name: "selector form: every search via selector passes",
+			feature: `Feature: result-attr
+  Scenario: every search via selector
+    Given the agent target "svc"
+    When I run scenario "happy"
+    Then attribute "gen_ai.tool.call.result" of every span matching "gen_ai.tool.name=search" contains "result"
+`,
+			wantPass: true,
+		},
+		{
+			name: "selector form: reserved span.* attribute (name) passes",
+			feature: `Feature: result-attr
+  Scenario: span name via selector
+    Given the agent target "svc"
+    When I run scenario "happy"
+    Then attribute "span.name" of the first span matching "gen_ai.tool.name=summarize" contains "summarize"
+`,
+			wantPass: true,
+		},
+		{
+			name: "selector form: bad selector fails the suite",
+			feature: `Feature: result-attr
+  Scenario: bad selector
+    Given the agent target "svc"
+    When I run scenario "happy"
+    Then attribute "gen_ai.tool.call.result" of the span matching "noequals" contains "x"
+`,
+			wantPass: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := buildEng(t, spanResultTrace())
+			var out bytes.Buffer
+			suite := godog.TestSuite{
+				ScenarioInitializer: Initializer(eng),
+				Options: &godog.Options{
+					Format:          "pretty",
+					Output:          &out,
+					FeatureContents: []godog.Feature{{Name: tt.name, Contents: []byte(tt.feature)}},
+				},
+			}
+			status := suite.Run()
+			if tt.wantPass && status != 0 {
+				t.Fatalf("expected passing suite, status=%d\n%s", status, out.String())
+			}
+			if !tt.wantPass && status == 0 {
+				t.Fatalf("expected failing suite, got 0\n%s", out.String())
+			}
+		})
+	}
+}
+
 func TestParseSpanSpec(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
