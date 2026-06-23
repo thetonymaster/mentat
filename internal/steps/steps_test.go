@@ -822,6 +822,57 @@ func TestInitializer_CollectsResults(t *testing.T) {
 	}
 }
 
+// TestInitializer_CollectsFailingAggregateDetail proves the failing-aggregate path
+// carries its Detail all the way to the Collector. checkRuns records w.lastDetail
+// BEFORE returning the failure error, and the After hook folds that Detail into the
+// scenario Verdict — so a RED "the runs satisfy" still yields a populated
+// ScenarioResult.Aggregate (computed-vs-expected), not a bare pass/fail flag.
+func TestInitializer_CollectsFailingAggregateDetail(t *testing.T) {
+	col := report.NewCollector()
+	eng := runsEngine(t, happyTrace())
+
+	// happyTrace always calls "search", so count==2 on every run; the assertion
+	// count==0 fails. It is canonical, so a Detail is produced and must survive.
+	feature := `Feature: collect-fail
+  @runs(2)
+  Scenario: failing aggregate carries detail
+    Given the agent target "bot"
+    When I run scenario "x"
+    Then the runs satisfy "count(r, 'search' in r.tools) == 0"
+`
+	var out bytes.Buffer
+	suite := godog.TestSuite{
+		ScenarioInitializer: InitializerWithCollector(eng, col),
+		Options: &godog.Options{
+			Format:          "pretty",
+			Output:          &out,
+			Strict:          true,
+			FeatureContents: []godog.Feature{{Name: "collect-fail", Contents: []byte(feature)}},
+		},
+	}
+	if status := suite.Run(); status == 0 {
+		t.Fatalf("expected RED on count==0 vs 2 search runs, but suite passed\n%s", out.String())
+	}
+
+	rep := col.Report(time.Unix(0, 0), 0)
+	if rep.Total != 1 {
+		t.Fatalf("collector got %d scenarios, want 1", rep.Total)
+	}
+	sr := rep.Scenarios[0]
+	if sr.Pass {
+		t.Fatalf("scenario Pass=true, want false")
+	}
+	if sr.Aggregate == nil {
+		t.Fatalf("Aggregate nil: lastDetail not captured before the failure return")
+	}
+	if sr.Aggregate.Macro != "count" || sr.Aggregate.Op != "==" {
+		t.Errorf("Aggregate macro/op = %q/%q, want count/==", sr.Aggregate.Macro, sr.Aggregate.Op)
+	}
+	if sr.Aggregate.Computed != 2 || sr.Aggregate.Expected != 0 {
+		t.Errorf("Aggregate computed/expected = %v/%v, want 2/0", sr.Aggregate.Computed, sr.Aggregate.Expected)
+	}
+}
+
 // TestStepMethods exercises each step method that the happy-scenario godog run
 // does not reach, using a crafted Evidence so comparators have the data they need.
 func TestStepMethods(t *testing.T) {

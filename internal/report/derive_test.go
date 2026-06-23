@@ -19,7 +19,8 @@ func TestDerive(t *testing.T) {
 		wantPass bool
 		wantRuns int
 		wantKind string   // FailureKind of second run (index 1)
-		wantAgg  float64  // Aggregate.Computed; 0 means Aggregate may be nil
+		checkAgg bool     // assert Aggregate is populated (replaces the 0-as-skip sentinel)
+		wantAgg  float64  // expected Aggregate.Computed (checked only when checkAgg)
 		wantSeq  []string // expected Sequence (nil = not checked)
 		wantCost float64  // total cost
 		wantLat  int64    // LatencyMS of first run (if trace is non-nil)
@@ -48,6 +49,7 @@ func TestDerive(t *testing.T) {
 			wantPass: false,
 			wantRuns: 2,
 			wantKind: core.FailureKindResolve,
+			checkAgg: true,
 			wantAgg:  0.5,
 		},
 		{
@@ -241,7 +243,7 @@ func TestDerive(t *testing.T) {
 					t.Errorf("Runs[1].FailureKind = %q, want %q", sr.Runs[1].FailureKind, tt.wantKind)
 				}
 			}
-			if tt.wantAgg != 0 {
+			if tt.checkAgg {
 				if sr.Aggregate == nil {
 					t.Fatalf("Aggregate is nil, want Computed=%v", tt.wantAgg)
 				}
