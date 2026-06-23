@@ -27,8 +27,9 @@ type ResultExpectation struct {
 
 type result struct{}
 
-// NewResult returns a Comparator that evaluates driver Output using registered
-// deterministic matchers. It reads only ev.Output; it never touches ev.Trace.
+// NewResult returns a Comparator that evaluates registered deterministic matchers.
+// With a nil ResultExpectation.Source it reads only ev.Output (the driver boundary);
+// with Source set it reads ev.Trace via resolveSpanSource (a per-span attribute value).
 func NewResult() core.Comparator { return result{} }
 func (result) Name() string      { return "result" }
 

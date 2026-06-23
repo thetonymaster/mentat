@@ -144,12 +144,15 @@ func (s SpanSource) evaluate(ctx context.Context, m core.Matcher, ev core.Eviden
 			reasons = append(reasons, s.reason(r.sp, r.v))
 		}
 		return core.Verdict{Pass: false, Reasons: reasons}, nil
-	default: // One / First / Last / Nth — exactly one target
+	case QuantOne, QuantFirst, QuantLast, QuantNth: // exactly one target
 		r := results[0]
 		if r.v.Pass {
 			return core.Verdict{Pass: true}, nil
 		}
 		return core.Verdict{Pass: false, Reasons: []string{s.reason(r.sp, r.v)}}, nil
+	default:
+		// unreachable: selectSpans rejects unknown Quant values before evaluate runs.
+		return core.Verdict{}, fmt.Errorf("result: evaluate: unhandled quant %d", s.Quant)
 	}
 }
 
