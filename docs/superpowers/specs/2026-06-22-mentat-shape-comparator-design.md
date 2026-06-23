@@ -102,7 +102,7 @@ type Selector []Pred
 
 Selectors are written in Gherkin as a quoted, comma-separated list of `key=value`:
 `"gen_ai.operation.name=execute_tool, gen_ai.tool.name=search"`. Parsing splits on `,`,
-trims each clause, and splits each clause on the **first** `=` (values may not contain
+trims each clause, and splits each clause on the **first** `=` (values may contain
 `=`; keys may not be empty). `service.name` and other resource attributes are selectable
 because the store (Tempo and the fixture loader) merges resource attributes onto every
 span — the same property `sequence` relies on (`sequence.go:13–16`).
@@ -287,4 +287,3 @@ declared order) so failure messages are deterministic.
   expected universal semantics sees why it passed/failed.
 - **Divergence from `sequence` on missing attributes.** Documented in §4 with rationale to
   prevent a future "consistency fix" that would break filter semantics.
-```
