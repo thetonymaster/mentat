@@ -9,8 +9,11 @@ import (
 	"github.com/cucumber/godog"
 	"github.com/google/uuid"
 	"github.com/thetonymaster/mentat/internal/config"
+	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/correlate"
 	"github.com/thetonymaster/mentat/internal/engine"
+	"github.com/thetonymaster/mentat/internal/registry"
+	"github.com/thetonymaster/mentat/internal/report"
 	"github.com/thetonymaster/mentat/internal/steps"
 )
 
@@ -24,6 +27,8 @@ func main() {
 	concurrency := fs.Int("concurrency", 1, "scenario scheduler width")
 	tags := fs.String("tags", "", "godog tag expression")
 	junit := fs.String("junit", "", "write JUnit XML to this file")
+	reportJSON := fs.String("report-json", "", "write a JSON run report to this file")
+	reportHTML := fs.String("report-html", "", "write an HTML run report to this file")
 	failFast := fs.Bool("fail-fast", false, "stop on first failure")
 	_ = fs.Parse(os.Args[2:])
 	paths := fs.Args()
@@ -79,11 +84,28 @@ func main() {
 		opts.Output = f
 	}
 
-	suite := godog.TestSuite{ScenarioInitializer: steps.Initializer(eng), Options: &opts}
+	col := report.NewCollector()
+	suite := godog.TestSuite{ScenarioInitializer: steps.InitializerWithCollector(eng, col), Options: &opts}
+	started := time.Now()
 	code := suite.Run()
 	if junitFile != nil {
 		if err := junitFile.Close(); err != nil {
 			fmt.Fprintf(os.Stderr, "mentat: close junit file %q: %v\n", *junit, err)
+			if code == 0 {
+				code = 1
+			}
+		}
+	}
+	targets := map[string]string{}
+	if *reportJSON != "" {
+		targets["json"] = *reportJSON
+	}
+	if *reportHTML != "" {
+		targets["html"] = *reportHTML
+	}
+	if len(targets) > 0 {
+		if err := emitReports(col.Report(started, time.Since(started)), targets); err != nil {
+			fmt.Fprintln(os.Stderr, "mentat:", err)
 			if code == 0 {
 				code = 1
 			}
@@ -111,4 +133,28 @@ func orDefault(n, def int) int {
 		return def
 	}
 	return n
+}
+
+// emitReports writes each selected report. A failure (unknown reporter, create/encode
+// error) is returned — never swallowed (invariant #4). The caller turns it into a
+// non-zero exit.
+func emitReports(rep core.RunReport, targets map[string]string) error {
+	for name, path := range targets {
+		r, ok := registry.Reporter(name)
+		if !ok {
+			return fmt.Errorf("unknown reporter %q", name)
+		}
+		f, err := os.Create(path)
+		if err != nil {
+			return fmt.Errorf("create %s report %q: %w", name, path, err)
+		}
+		if err := r.Report(rep, f); err != nil {
+			f.Close()
+			return fmt.Errorf("writing %s report %q: %w", name, path, err)
+		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("close %s report %q: %w", name, path, err)
+		}
+	}
+	return nil
 }
