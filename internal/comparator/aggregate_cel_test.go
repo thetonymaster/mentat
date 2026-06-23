@@ -157,46 +157,48 @@ func TestAggregateCEL_Detail(t *testing.T) {
 		{RunID: "b", Failed: true, FailureKind: core.FailureKindResolve},
 		{RunID: "c", Output: core.Output{Status: 200}},
 	}
-	// rate(r, !r.failed) = 2/3 ≈ 0.667; assertion >= 0.8 -> FAIL, but Detail still set.
-	v, err := c.Aggregate(context.Background(), evs, AggregateCELExpectation{Expr: `rate(r, !r.failed) >= 0.8`})
-	if err != nil {
-		t.Fatalf("aggregate: %v", err)
+	tests := []struct {
+		name          string
+		expr          string
+		wantPass      bool
+		wantDetailNil bool
+		wantMacro     string
+		wantOp        string
+		wantExpected  float64
+	}{
+		// rate(r, !r.failed) = 2/3 ≈ 0.667; assertion >= 0.8 -> FAIL, but Detail still set.
+		{"failing canonical carries detail", `rate(r, !r.failed) >= 0.8`, false, false, "rate", ">=", 0.8},
+		// Passing canonical assertion also carries Detail.
+		{"passing canonical carries detail", `rate(r, !r.failed) >= 0.5`, true, false, "rate", ">=", 0.5},
+		// Non-canonical -> Detail nil.
+		{"non-canonical -> nil detail", `count(r, r.failed) == 0 && count(r, !r.failed) == 3`, false, true, "", "", 0},
 	}
-	if v.Pass {
-		t.Fatalf("want fail")
-	}
-	if v.Detail == nil {
-		t.Fatalf("want Detail populated on fail")
-	}
-	if v.Detail.Macro != "rate" || v.Detail.Op != ">=" || v.Detail.Expected != 0.8 {
-		t.Errorf("detail = %+v", v.Detail)
-	}
-	if v.Detail.Expr != `rate(r, !r.failed) >= 0.8` {
-		t.Errorf("expr = %q", v.Detail.Expr)
-	}
-
-	// Passing canonical assertion also carries Detail.
-	v2, err := c.Aggregate(context.Background(), evs, AggregateCELExpectation{Expr: `rate(r, !r.failed) >= 0.5`})
-	if err != nil {
-		t.Fatalf("aggregate: %v", err)
-	}
-	if !v2.Pass || v2.Detail == nil {
-		t.Fatalf("want pass with Detail, got pass=%v detail=%v", v2.Pass, v2.Detail)
-	}
-	if v2.Detail.Macro != "rate" || v2.Detail.Op != ">=" || v2.Detail.Expected != 0.5 {
-		t.Errorf("pass detail = %+v", v2.Detail)
-	}
-	if v2.Detail.Expr != `rate(r, !r.failed) >= 0.5` {
-		t.Errorf("pass expr = %q", v2.Detail.Expr)
-	}
-
-	// Non-canonical -> Detail nil.
-	v3, err := c.Aggregate(context.Background(), evs, AggregateCELExpectation{Expr: `count(r, r.failed) == 0 && count(r, !r.failed) == 3`})
-	if err != nil {
-		t.Fatalf("aggregate: %v", err)
-	}
-	if v3.Detail != nil {
-		t.Errorf("want nil Detail for compound, got %+v", v3.Detail)
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			v, err := c.Aggregate(context.Background(), evs, AggregateCELExpectation{Expr: tt.expr})
+			if err != nil {
+				t.Fatalf("aggregate: %v", err)
+			}
+			if tt.wantDetailNil {
+				if v.Detail != nil {
+					t.Errorf("want nil Detail, got %+v", v.Detail)
+				}
+				return
+			}
+			if v.Pass != tt.wantPass {
+				t.Fatalf("Pass = %v, want %v (reasons %v)", v.Pass, tt.wantPass, v.Reasons)
+			}
+			if v.Detail == nil {
+				t.Fatalf("want Detail populated")
+			}
+			if v.Detail.Macro != tt.wantMacro || v.Detail.Op != tt.wantOp || v.Detail.Expected != tt.wantExpected {
+				t.Errorf("detail = %+v", v.Detail)
+			}
+			if v.Detail.Expr != tt.expr {
+				t.Errorf("expr = %q, want %q", v.Detail.Expr, tt.expr)
+			}
+		})
 	}
 }
 
@@ -205,25 +207,46 @@ func TestAggregateReason(t *testing.T) {
 		{RunID: "aaa", Output: core.Output{Status: 200}},
 		{RunID: "bbb", Failed: true, FailureKind: core.FailureKindResolve},
 	}
-	t.Run("canonical -> computed-vs-expected + value column", func(t *testing.T) {
-		d := &core.AggregateDetail{
-			Expr: `rate(r, !r.failed) >= 0.8`, Macro: "rate", Op: ">=",
-			Computed: 0.5, Expected: 0.8, PerRun: []float64{1, 0},
-		}
-		got := aggregateReason(d.Expr, evs, d)
-		if !strings.Contains(got, "rate = 0.50, want >= 0.80") {
-			t.Errorf("missing computed-vs-expected line:\n%s", got)
-		}
-		if !strings.Contains(got, "value") {
-			t.Errorf("missing value column header:\n%s", got)
-		}
-	})
-	t.Run("nil detail -> legacy message", func(t *testing.T) {
-		got := aggregateReason(`count(r, r.failed) == 0 && true`, evs, nil)
-		if !strings.Contains(got, "aggregate false:") || strings.Contains(got, "want") {
-			t.Errorf("legacy message wrong:\n%s", got)
-		}
-	})
+	tests := []struct {
+		name        string
+		expr        string
+		detail      *core.AggregateDetail
+		wantContain []string
+		wantAbsent  []string
+	}{
+		{
+			name: "canonical -> computed-vs-expected + value column",
+			expr: `rate(r, !r.failed) >= 0.8`,
+			detail: &core.AggregateDetail{
+				Expr: `rate(r, !r.failed) >= 0.8`, Macro: "rate", Op: ">=",
+				Computed: 0.5, Expected: 0.8, PerRun: []float64{1, 0},
+			},
+			wantContain: []string{"rate = 0.50, want >= 0.80", "value"},
+		},
+		{
+			name:        "nil detail -> legacy message",
+			expr:        `count(r, r.failed) == 0 && true`,
+			detail:      nil,
+			wantContain: []string{"aggregate false:"},
+			wantAbsent:  []string{"want"},
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			got := aggregateReason(tt.expr, evs, tt.detail)
+			for _, sub := range tt.wantContain {
+				if !strings.Contains(got, sub) {
+					t.Errorf("missing %q:\n%s", sub, got)
+				}
+			}
+			for _, sub := range tt.wantAbsent {
+				if strings.Contains(got, sub) {
+					t.Errorf("unexpected %q present:\n%s", sub, got)
+				}
+			}
+		})
+	}
 }
 
 func TestAggregateToolBindingError(t *testing.T) {

@@ -1,6 +1,7 @@
 package cel
 
 import (
+	"math"
 	"testing"
 
 	"github.com/google/cel-go/common/ast"
@@ -30,7 +31,7 @@ func TestAggregateProgram_Detail(t *testing.T) {
 		if d.Macro != "rate" || d.Op != ">=" {
 			t.Errorf("macro/op = %q/%q", d.Macro, d.Op)
 		}
-		if d.Computed != 2.0/3.0 || d.Expected != 0.8 {
+		if !almostEqual(d.Computed, 2.0/3.0) || !almostEqual(d.Expected, 0.8) {
 			t.Errorf("computed/expected = %v/%v", d.Computed, d.Expected)
 		}
 		// rate: !r.failed -> 1.0 for not-failed, 0.0 for failed
@@ -53,7 +54,7 @@ func TestAggregateProgram_Detail(t *testing.T) {
 			t.Errorf("macro/op = %q/%q", d.Macro, d.Op)
 		}
 		// count(r, r.failed): only run[1] has failed=true -> computed=1, expected=1
-		if d.Computed != 1.0 || d.Expected != 1.0 {
+		if !almostEqual(d.Computed, 1.0) || !almostEqual(d.Expected, 1.0) {
 			t.Errorf("computed/expected = %v/%v", d.Computed, d.Expected)
 		}
 		// per-run: 1.0 for r.failed=true, 0.0 for r.failed=false
@@ -77,7 +78,7 @@ func TestAggregateProgram_Detail(t *testing.T) {
 		}
 		// mean(0.01, 0.05, 0.02) = 0.08/3
 		wantComputed := (0.01 + 0.05 + 0.02) / 3.0
-		if d.Computed != wantComputed || d.Expected != 0.05 {
+		if !almostEqual(d.Computed, wantComputed) || !almostEqual(d.Expected, 0.05) {
 			t.Errorf("computed/expected = %v/%v", d.Computed, d.Expected)
 		}
 		// per-run: the raw cost values
@@ -121,11 +122,16 @@ func equalFloats(a, b []float64) bool {
 		return false
 	}
 	for i := range a {
-		if a[i] != b[i] {
+		if !almostEqual(a[i], b[i]) {
 			return false
 		}
 	}
 	return true
+}
+
+func almostEqual(a, b float64) bool {
+	const eps = 1e-9
+	return math.Abs(a-b) <= eps
 }
 
 func mustCompile(t *testing.T, expr string) *ast.AST {
