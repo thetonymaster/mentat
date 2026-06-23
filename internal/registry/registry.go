@@ -11,6 +11,7 @@ var (
 	aggregateComparators = map[string]core.AggregateComparator{}
 	drivers              = map[string]core.Driver{}
 	matchers             = map[string]core.Matcher{}
+	reporters            = map[string]core.Reporter{}
 )
 
 // StoreFactory builds a TraceStore from config. Stores are stateful (endpoints,
@@ -62,3 +63,9 @@ func RegisterMatcher(name string, m core.Matcher) { matchers[name] = m }
 
 // Matcher resolves a registered Matcher by name.
 func Matcher(name string) (core.Matcher, bool) { m, ok := matchers[name]; return m, ok }
+
+// RegisterReporter registers a Reporter under the given name.
+func RegisterReporter(name string, r core.Reporter) { reporters[name] = r }
+
+// Reporter resolves a registered Reporter by name.
+func Reporter(name string) (core.Reporter, bool) { r, ok := reporters[name]; return r, ok }

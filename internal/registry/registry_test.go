@@ -6,7 +6,9 @@ import (
 
 	"github.com/thetonymaster/mentat/internal/config"
 	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/core/mocks"
 	"github.com/thetonymaster/mentat/internal/store"
+	"go.uber.org/mock/gomock"
 )
 
 type fakeCmp struct{}
@@ -31,12 +33,14 @@ func resetRegistries(t *testing.T) {
 	aggregateComparators = map[string]core.AggregateComparator{}
 	drivers = map[string]core.Driver{}
 	matchers = map[string]core.Matcher{}
+	reporters = map[string]core.Reporter{}
 	stores = map[string]StoreFactory{}
 	t.Cleanup(func() {
 		comparators = map[string]core.Comparator{}
 		aggregateComparators = map[string]core.AggregateComparator{}
 		drivers = map[string]core.Driver{}
 		matchers = map[string]core.Matcher{}
+		reporters = map[string]core.Reporter{}
 		stores = map[string]StoreFactory{}
 	})
 }
@@ -209,5 +213,16 @@ func TestStoreRegistry(t *testing.T) {
 				t.Fatalf("factory returned %p, want %p", got, want)
 			}
 		})
+	}
+}
+
+func TestReporterRegistry(t *testing.T) {
+	resetRegistries(t)
+	RegisterReporter("fake", mocks.NewMockReporter(gomock.NewController(t)))
+	if _, ok := Reporter("fake"); !ok {
+		t.Fatal("registered reporter not found")
+	}
+	if _, ok := Reporter("nope"); ok {
+		t.Fatal("unknown reporter unexpectedly found")
 	}
 }
