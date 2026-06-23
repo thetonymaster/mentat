@@ -244,6 +244,36 @@ func TestToolsInOrderEmptyCell(t *testing.T) {
 	}
 }
 
+// TestShapeStepSelectorErrorsWrapped: shape step handlers must wrap ParseSelector
+// failures with which selector failed (subject/parent) and the raw value, per the
+// %w error-wrapping convention — not return the bare parser error.
+func TestShapeStepSelectorErrorsWrapped(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		call   func(w *world) error
+		errSub string
+	}{
+		{"exists subject", func(w *world) error { return w.shapeExists("noequals") }, `parse shape subject selector "noequals"`},
+		{"childOf subject", func(w *world) error { return w.shapeChildOf("badchild", "k=v") }, `parse shape subject selector "badchild"`},
+		{"childOf parent", func(w *world) error { return w.shapeChildOf("k=v", "badparent") }, `parse shape parent selector "badparent"`},
+		{"fanout parent", func(w *world) error { return w.shapeFanoutAtLeast("badparent", 2, "k=v") }, `parse shape parent selector "badparent"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			w := &world{} // no engine needed — parse error fires before check()
+			err := tt.call(w)
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tt.errSub)
+			}
+			if !strings.Contains(err.Error(), tt.errSub) {
+				t.Fatalf("expected error containing %q, got: %v", tt.errSub, err)
+			}
+		})
+	}
+}
+
 // TestCELStep exercises the inline + docstring "the run satisfies" grammar
 // end-to-end through a godog suite: a true expression passes the suite; a false
 // one fails it and surfaces the §9 value snapshot. happyTrace has tools

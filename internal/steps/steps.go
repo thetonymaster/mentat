@@ -286,8 +286,19 @@ func (w *world) checkRuns(expr string) error {
 	return nil
 }
 
+// parseShapeSelector wraps ParseSelector failures with which selector failed
+// (role: "subject" or "parent") and the raw value, per the %w error-wrapping
+// convention — so a malformed shape step reports actionable, consistent diagnostics.
+func parseShapeSelector(role, raw string) (comparator.Selector, error) {
+	sel, err := comparator.ParseSelector(raw)
+	if err != nil {
+		return nil, fmt.Errorf("parse shape %s selector %q: %w", role, raw, err)
+	}
+	return sel, nil
+}
+
 func (w *world) shapeExists(s string) error {
-	sel, err := comparator.ParseSelector(s)
+	sel, err := parseShapeSelector("subject", s)
 	if err != nil {
 		return err
 	}
@@ -295,7 +306,7 @@ func (w *world) shapeExists(s string) error {
 }
 
 func (w *world) shapeAbsent(s string) error {
-	sel, err := comparator.ParseSelector(s)
+	sel, err := parseShapeSelector("subject", s)
 	if err != nil {
 		return err
 	}
@@ -303,7 +314,7 @@ func (w *world) shapeAbsent(s string) error {
 }
 
 func (w *world) shapeAtLeast(n int, s string) error {
-	sel, err := comparator.ParseSelector(s)
+	sel, err := parseShapeSelector("subject", s)
 	if err != nil {
 		return err
 	}
@@ -311,7 +322,7 @@ func (w *world) shapeAtLeast(n int, s string) error {
 }
 
 func (w *world) shapeExactly(n int, s string) error {
-	sel, err := comparator.ParseSelector(s)
+	sel, err := parseShapeSelector("subject", s)
 	if err != nil {
 		return err
 	}
@@ -319,11 +330,11 @@ func (w *world) shapeExactly(n int, s string) error {
 }
 
 func (w *world) shapeChildOf(child, parent string) error {
-	cs, err := comparator.ParseSelector(child)
+	cs, err := parseShapeSelector("subject", child)
 	if err != nil {
 		return err
 	}
-	ps, err := comparator.ParseSelector(parent)
+	ps, err := parseShapeSelector("parent", parent)
 	if err != nil {
 		return err
 	}
@@ -331,11 +342,11 @@ func (w *world) shapeChildOf(child, parent string) error {
 }
 
 func (w *world) shapeDescendantOf(child, parent string) error {
-	cs, err := comparator.ParseSelector(child)
+	cs, err := parseShapeSelector("subject", child)
 	if err != nil {
 		return err
 	}
-	ps, err := comparator.ParseSelector(parent)
+	ps, err := parseShapeSelector("parent", parent)
 	if err != nil {
 		return err
 	}
@@ -343,11 +354,11 @@ func (w *world) shapeDescendantOf(child, parent string) error {
 }
 
 func (w *world) shapeFanoutAtLeast(parent string, n int, child string) error {
-	ps, err := comparator.ParseSelector(parent)
+	ps, err := parseShapeSelector("parent", parent)
 	if err != nil {
 		return err
 	}
-	cs, err := comparator.ParseSelector(child)
+	cs, err := parseShapeSelector("subject", child)
 	if err != nil {
 		return err
 	}
@@ -355,11 +366,11 @@ func (w *world) shapeFanoutAtLeast(parent string, n int, child string) error {
 }
 
 func (w *world) shapeFanoutExactly(parent string, n int, child string) error {
-	ps, err := comparator.ParseSelector(parent)
+	ps, err := parseShapeSelector("parent", parent)
 	if err != nil {
 		return err
 	}
-	cs, err := comparator.ParseSelector(child)
+	cs, err := parseShapeSelector("subject", child)
 	if err != nil {
 		return err
 	}
