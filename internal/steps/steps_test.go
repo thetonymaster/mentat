@@ -18,6 +18,7 @@ import (
 	"github.com/thetonymaster/mentat/internal/correlate"
 	"github.com/thetonymaster/mentat/internal/engine"
 	"github.com/thetonymaster/mentat/internal/genai"
+	"github.com/thetonymaster/mentat/internal/report"
 	"github.com/thetonymaster/mentat/internal/trace"
 )
 
@@ -770,6 +771,54 @@ func TestSingleRunStepRejectedInMultirunScenario(t *testing.T) {
 	}
 	if !strings.Contains(outStr, "the runs satisfy") {
 		t.Fatalf("expected error to mention \"the runs satisfy\", got:\n%s", outStr)
+	}
+}
+
+// TestInitializer_CollectsResults verifies that InitializerWithCollector wires an
+// After hook that appends one ScenarioResult per passing scenario to the Collector.
+// Mirrors the harness pattern from TestFeatureExercisesGrammarAgainstFakeEngine.
+func TestInitializer_CollectsResults(t *testing.T) {
+	col := report.NewCollector()
+
+	cfg := config.Config{
+		OTLPEndpoint: "x",
+		Targets:      map[string]config.Target{"bot": {Adapter: "shell", Command: []string{"sh", "-c", "echo hi"}, MaxConcurrency: 1}},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "r"}}, nil).AnyTimes()
+	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(happyTrace(), nil).AnyTimes()
+	cor := correlate.New(func() string { return "r" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+	eng, err := engine.Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("engine.Build: %v", err)
+	}
+
+	feature := `Feature: collect
+  Scenario: passing scenario
+    Given the agent target "bot"
+    When I run scenario "happy"
+    Then the result contains "hi"
+`
+	var out bytes.Buffer
+	suite := godog.TestSuite{
+		ScenarioInitializer: InitializerWithCollector(eng, col),
+		Options: &godog.Options{
+			Format:          "pretty",
+			Output:          &out,
+			FeatureContents: []godog.Feature{{Name: "collect", Contents: []byte(feature)}},
+		},
+	}
+	if status := suite.Run(); status != 0 {
+		t.Fatalf("expected passing suite, status=%d\n%s", status, out.String())
+	}
+
+	rep := col.Report(time.Unix(0, 0), 0)
+	if rep.Total != 1 {
+		t.Fatalf("collector got %d scenarios, want 1", rep.Total)
+	}
+	if !rep.Scenarios[0].Pass {
+		t.Fatalf("scenario[0].Pass=false, want true")
 	}
 }
 

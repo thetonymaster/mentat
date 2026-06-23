@@ -4,7 +4,9 @@ package core
 
 import (
 	"context"
+	"io"
 	"strings"
+	"time"
 
 	"github.com/thetonymaster/mentat/internal/trace"
 )
@@ -155,3 +157,40 @@ type Matcher interface {
 
 // ExtractAnswer applies the project-wide convention: stdout is the result.
 func ExtractAnswer(stdout string) string { return strings.TrimSpace(stdout) }
+
+// RunReport is the whole-run artifact a Reporter renders. Pure data.
+type RunReport struct {
+	Scenarios []ScenarioResult
+	Total     int
+	Passed    int
+	Failed    int
+	TotalCost float64
+	StartedAt time.Time
+	Duration  time.Duration
+}
+
+// ScenarioResult is one scenario's outcome, derived from its Evidence + Verdict.
+type ScenarioResult struct {
+	Name      string
+	Tags      []string
+	Pass      bool
+	Reasons   []string
+	Cost      float64
+	Sequence  []string
+	Runs      []RunRecord
+	Aggregate *AggregateDetail
+}
+
+// RunRecord is one run within a scenario (one element per @runs iteration).
+type RunRecord struct {
+	RunID       string
+	Passed      bool
+	FailureKind string
+	LatencyMS   int64
+	Cost        float64
+}
+
+// Reporter renders a whole RunReport to a writer. Stateless; registered as an instance.
+type Reporter interface {
+	Report(rep RunReport, w io.Writer) error
+}

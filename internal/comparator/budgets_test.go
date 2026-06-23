@@ -473,6 +473,33 @@ func TestCostSumDerivesFromTokens(t *testing.T) {
 	}
 }
 
+func TestCostOrZero(t *testing.T) {
+	tests := []struct {
+		name    string
+		trace   *trace.Trace
+		pricing core.Pricing
+		want    float64
+		wantErr bool
+	}{
+		{"nil trace -> 0", nil, nil, 0, false},
+		{"no cost, no pricing -> 0", tokenTrace(100, 50), nil, 0, false},
+		{"emitted cost", costTrace(0.0030), nil, 0.0030, false},
+		{"malformed cost -> err", rawAttrTrace(genai.CostUSD, "abc"), nil, 0, true},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := CostOrZero(tt.trace, tt.pricing)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 // TestCostSumSplitSpanAmbiguous verifies that when a token-bearing span has
 // no per-span model but the trace contains two or more distinct models,
 // costSum returns a hard error naming "multiple distinct models".

@@ -11,6 +11,7 @@ package mocks
 
 import (
 	context "context"
+	io "io"
 	reflect "reflect"
 
 	core "github.com/thetonymaster/mentat/internal/core"
@@ -335,4 +336,42 @@ func (m *MockMatcher) Name() string {
 func (mr *MockMatcherMockRecorder) Name() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Name", reflect.TypeOf((*MockMatcher)(nil).Name))
+}
+
+// MockReporter is a mock of Reporter interface.
+type MockReporter struct {
+	ctrl     *gomock.Controller
+	recorder *MockReporterMockRecorder
+	isgomock struct{}
+}
+
+// MockReporterMockRecorder is the mock recorder for MockReporter.
+type MockReporterMockRecorder struct {
+	mock *MockReporter
+}
+
+// NewMockReporter creates a new mock instance.
+func NewMockReporter(ctrl *gomock.Controller) *MockReporter {
+	mock := &MockReporter{ctrl: ctrl}
+	mock.recorder = &MockReporterMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockReporter) EXPECT() *MockReporterMockRecorder {
+	return m.recorder
+}
+
+// Report mocks base method.
+func (m *MockReporter) Report(rep core.RunReport, w io.Writer) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Report", rep, w)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Report indicates an expected call of Report.
+func (mr *MockReporterMockRecorder) Report(rep, w any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Report", reflect.TypeOf((*MockReporter)(nil).Report), rep, w)
 }

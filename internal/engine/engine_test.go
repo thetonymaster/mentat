@@ -622,6 +622,20 @@ func TestDriveNSerialStructuralError(t *testing.T) {
 	}
 }
 
+func TestEngine_Pricing(t *testing.T) {
+	cfg := config.Config{Pricing: config.Pricing{"m": {InputPerMTok: 1, OutputPerMTok: 2}}}
+	eng, err := Build(cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if eng.Pricing()["m"].InputPerMTok != 1 {
+		t.Errorf("pricing not exposed: %+v", eng.Pricing())
+	}
+	if eng.Pricing()["m"].OutputPerMTok != 2 {
+		t.Errorf("OutputPerMTok not exposed: %+v", eng.Pricing())
+	}
+}
+
 func TestDriveHTTPTarget(t *testing.T) {
 	var gotScenario, gotBaggage string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

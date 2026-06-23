@@ -179,6 +179,46 @@ func TestServiceSequenceExported(t *testing.T) {
 	}
 }
 
+func TestToolSequence_Exported(t *testing.T) {
+	tests := []struct {
+		name    string
+		tr      *trace.Trace
+		want    []string
+		wantErr bool
+	}{
+		{
+			name: "happy path returns tool names in order",
+			tr:   toolTrace("search", "fetch"),
+			want: []string{"search", "fetch"},
+		},
+		{
+			name:    "execute_tool span missing tool name returns error",
+			tr:      toolTraceMissingName(),
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ToolSequence(tt.tr)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("got[%d]=%q want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestSequenceServiceKind(t *testing.T) {
 	tests := []struct {
 		name     string

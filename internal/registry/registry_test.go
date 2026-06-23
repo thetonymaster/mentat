@@ -6,7 +6,9 @@ import (
 
 	"github.com/thetonymaster/mentat/internal/config"
 	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/core/mocks"
 	"github.com/thetonymaster/mentat/internal/store"
+	"go.uber.org/mock/gomock"
 )
 
 type fakeCmp struct{}
@@ -31,12 +33,14 @@ func resetRegistries(t *testing.T) {
 	aggregateComparators = map[string]core.AggregateComparator{}
 	drivers = map[string]core.Driver{}
 	matchers = map[string]core.Matcher{}
+	reporters = map[string]core.Reporter{}
 	stores = map[string]StoreFactory{}
 	t.Cleanup(func() {
 		comparators = map[string]core.Comparator{}
 		aggregateComparators = map[string]core.AggregateComparator{}
 		drivers = map[string]core.Driver{}
 		matchers = map[string]core.Matcher{}
+		reporters = map[string]core.Reporter{}
 		stores = map[string]StoreFactory{}
 	})
 }
@@ -207,6 +211,29 @@ func TestStoreRegistry(t *testing.T) {
 			}
 			if got != want {
 				t.Fatalf("factory returned %p, want %p", got, want)
+			}
+		})
+	}
+}
+
+func TestReporterRegistry(t *testing.T) {
+	resetRegistries(t)
+	tests := []struct {
+		name    string
+		regName string
+		lookup  string
+		wantOK  bool
+	}{
+		{name: "found", regName: "fake", lookup: "fake", wantOK: true},
+		{name: "not-found", regName: "fake", lookup: "nope", wantOK: false},
+	}
+	RegisterReporter("fake", mocks.NewMockReporter(gomock.NewController(t)))
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			_, ok := Reporter(tt.lookup)
+			if ok != tt.wantOK {
+				t.Fatalf("Reporter(%q) ok=%v, want %v", tt.lookup, ok, tt.wantOK)
 			}
 		})
 	}

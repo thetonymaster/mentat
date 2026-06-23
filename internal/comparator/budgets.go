@@ -106,14 +106,9 @@ func tokenSum(t *trace.Trace) (int, error) {
 	return total, nil
 }
 
-// costSum returns the total gen_ai cost in USD across all spans, applying the
-// per-span precedence in spec §4.3: an emitted gen_ai.usage.cost_usd always wins;
-// otherwise a token-bearing span (an LLM call) derives cost from its tokens and
-// the per-model pricing table; spans with neither cost nor tokens contribute 0.
-// Absent cost across all spans is a hard error (the cel comparator inherits this
-// via the shared function — §5). A malformed/out-of-range value is a hard error.
-// When the pricing table is empty, derivation is skipped and the legacy
-// emitted-cost-only behaviour applies verbatim.
+// deriveCost walks the spans applying the §4.3 precedence and reports whether any
+// cost signal was seen. seen=false means no span carried emitted cost or derivable
+// tokens — the caller decides whether that is an error (budgets) or a 0 (reporter).
 //
 // Model resolution order for a token-bearing span that carries no emitted cost:
 //  1. If the span has its own non-empty gen_ai.request.model → use it (per-span wins).
@@ -122,10 +117,7 @@ func tokenSum(t *trace.Trace) (int, error) {
 //     invoke_agent span carries tokens but no model).
 //  3. If the trace has two or more distinct models → hard error (ambiguous; invariant 4).
 //  4. If no model is found anywhere → the existing "not in pricing table" error fires.
-func costSum(t *trace.Trace, pricing core.Pricing) (float64, error) {
-	cost := 0.0
-	seen := false
-
+func deriveCost(t *trace.Trace, pricing core.Pricing) (cost float64, seen bool, err error) {
 	// Pre-compute the trace-level model fallback once, only when derivation is possible.
 	var fallbackModel string
 	var ambiguous bool
@@ -136,12 +128,12 @@ func costSum(t *trace.Trace, pricing core.Pricing) (float64, error) {
 	for i, s := range t.Spans {
 		raw := s.Attr(genai.CostUSD)
 		if raw != "" {
-			c, err := strconv.ParseFloat(raw, 64)
-			if err != nil {
-				return 0, fmt.Errorf("budgets: span[%d] (%q) invalid %s=%q: %w", i, s.Name, genai.CostUSD, raw, err)
+			c, parseErr := strconv.ParseFloat(raw, 64)
+			if parseErr != nil {
+				return 0, false, fmt.Errorf("budgets: span[%d] (%q) invalid %s=%q: %w", i, s.Name, genai.CostUSD, raw, parseErr)
 			}
 			if c < 0 || math.IsNaN(c) || math.IsInf(c, 0) {
-				return 0, fmt.Errorf("budgets: span[%d] (%q) %s=%q out of range: must be a finite value >= 0", i, s.Name, genai.CostUSD, raw)
+				return 0, false, fmt.Errorf("budgets: span[%d] (%q) %s=%q out of range: must be a finite value >= 0", i, s.Name, genai.CostUSD, raw)
 			}
 			cost += c
 			seen = true
@@ -152,13 +144,13 @@ func costSum(t *trace.Trace, pricing core.Pricing) (float64, error) {
 		if len(pricing) == 0 {
 			continue
 		}
-		in, inOK, err := tokenAttr(s, genai.InTokens)
-		if err != nil {
-			return 0, fmt.Errorf("budgets: span[%d] (%q) %w", i, s.Name, err)
+		in, inOK, inErr := tokenAttr(s, genai.InTokens)
+		if inErr != nil {
+			return 0, false, fmt.Errorf("budgets: span[%d] (%q) %w", i, s.Name, inErr)
 		}
-		out, outOK, err := tokenAttr(s, genai.OutTokens)
-		if err != nil {
-			return 0, fmt.Errorf("budgets: span[%d] (%q) %w", i, s.Name, err)
+		out, outOK, outErr := tokenAttr(s, genai.OutTokens)
+		if outErr != nil {
+			return 0, false, fmt.Errorf("budgets: span[%d] (%q) %w", i, s.Name, outErr)
 		}
 		if !inOK && !outOK {
 			continue // not an LLM call (e.g. a tool/service span) — contributes 0
@@ -167,19 +159,48 @@ func costSum(t *trace.Trace, pricing core.Pricing) (float64, error) {
 		model := s.Attr(genai.RequestModel)
 		if model == "" {
 			if ambiguous {
-				return 0, fmt.Errorf("budgets: span[%d] (%q): cannot derive cost: span carries no %s and the trace has multiple distinct models", i, s.Name, genai.RequestModel)
+				return 0, false, fmt.Errorf("budgets: span[%d] (%q): cannot derive cost: span carries no %s and the trace has multiple distinct models", i, s.Name, genai.RequestModel)
 			}
 			model = fallbackModel
 		}
 		rate, ok := pricing[model]
 		if model == "" || !ok {
-			return 0, fmt.Errorf("budgets: span[%d] (%q): cannot derive cost: model %q not in pricing table", i, s.Name, model)
+			return 0, false, fmt.Errorf("budgets: span[%d] (%q): cannot derive cost: model %q not in pricing table", i, s.Name, model)
 		}
 		cost += float64(in)/1e6*rate.InputPerMTok + float64(out)/1e6*rate.OutputPerMTok
 		seen = true
 	}
+	return cost, seen, nil
+}
+
+// costSum returns the total gen_ai cost in USD across all spans, applying the
+// per-span precedence in spec §4.3: an emitted gen_ai.usage.cost_usd always wins;
+// otherwise a token-bearing span (an LLM call) derives cost from its tokens and
+// the per-model pricing table; spans with neither cost nor tokens contribute 0.
+// Absent cost across all spans is a hard error (the cel comparator inherits this
+// via the shared function — §5). A malformed/out-of-range value is a hard error.
+// When the pricing table is empty, derivation is skipped and the legacy
+// emitted-cost-only behaviour applies verbatim.
+func costSum(t *trace.Trace, pricing core.Pricing) (float64, error) {
+	cost, seen, err := deriveCost(t, pricing)
+	if err != nil {
+		return 0, err
+	}
 	if !seen {
 		return 0, fmt.Errorf("budgets: cost not available (no %s attribute); add a pricing table or drop the cost assertion", genai.CostUSD)
+	}
+	return cost, nil
+}
+
+// CostOrZero is the reporter-facing cost: absent cost (incl. a nil trace) yields 0;
+// malformed/ambiguous/out-of-range values still error (no silent fallback on corruption).
+func CostOrZero(t *trace.Trace, pricing core.Pricing) (float64, error) {
+	if t == nil {
+		return 0, nil
+	}
+	cost, _, err := deriveCost(t, pricing)
+	if err != nil {
+		return 0, err
 	}
 	return cost, nil
 }

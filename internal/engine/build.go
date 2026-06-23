@@ -6,6 +6,7 @@ import (
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/driver"
 	"github.com/thetonymaster/mentat/internal/registry"
+	"github.com/thetonymaster/mentat/internal/report"
 )
 
 // Build is the single composition root: it registers built-in drivers and
@@ -26,6 +27,7 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator) (*Engine,
 	registry.RegisterComparator("cel", comparator.NewCEL(pricing))
 	registry.RegisterAggregateComparator("aggregate-cel", comparator.NewAggregateCEL(pricing))
 	comparator.RegisterBuiltinMatchers()
+	report.RegisterBuiltins()
 
 	sems := map[string]chan struct{}{}
 	for name, t := range cfg.Targets {
@@ -35,7 +37,7 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator) (*Engine,
 		}
 		sems[name] = make(chan struct{}, n)
 	}
-	return &Engine{cfg: cfg, cor: cor, st: st, sems: sems}, nil
+	return &Engine{cfg: cfg, cor: cor, st: st, sems: sems, pricing: pricing}, nil
 }
 
 // toPricing converts the YAML pricing table into the transport-free core.Pricing
