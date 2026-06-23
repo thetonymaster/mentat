@@ -148,6 +148,65 @@ func noResultAttrTrace() *trace.Trace {
 	return &trace.Trace{Roots: []*trace.Span{s}, Spans: []*trace.Span{s}}
 }
 
+func TestResultSpanSourceQuantifiers(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		exp      ResultExpectation
+		wantPass bool
+		wantErr  bool
+	}{
+		{
+			name:     "every: all search results contain 'result' passes",
+			exp:      ResultExpectation{Matcher: "contains", Want: "result", Source: toolSource("search", QuantEvery, 0)},
+			wantPass: true,
+		},
+		{
+			name:     "every: one search result lacks 'first' fails",
+			exp:      ResultExpectation{Matcher: "contains", Want: "first", Source: toolSource("search", QuantEvery, 0)},
+			wantPass: false,
+		},
+		{
+			name:     "any: at least one search result contains 'second' passes",
+			exp:      ResultExpectation{Matcher: "contains", Want: "second", Source: toolSource("search", QuantAny, 0)},
+			wantPass: true,
+		},
+		{
+			name:     "any: no search result contains 'zzz' fails",
+			exp:      ResultExpectation{Matcher: "contains", Want: "zzz", Source: toolSource("search", QuantAny, 0)},
+			wantPass: false,
+		},
+		{
+			name:    "every: zero matches is error (tool never called)",
+			exp:     ResultExpectation{Matcher: "contains", Want: "x", Source: toolSource("delete", QuantEvery, 0)},
+			wantErr: true,
+		},
+		{
+			name:    "any: zero matches is error (tool never called)",
+			exp:     ResultExpectation{Matcher: "contains", Want: "x", Source: toolSource("delete", QuantAny, 0)},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := NewResult().Compare(context.Background(), core.Evidence{Trace: resultTrace()}, tt.exp)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			if got.Pass != tt.wantPass {
+				t.Errorf("Pass=%v wantPass=%v reasons=%v", got.Pass, tt.wantPass, got.Reasons)
+			}
+			if !got.Pass && len(got.Reasons) == 0 {
+				t.Error("failing verdict must carry at least one Reason naming the span")
+			}
+		})
+	}
+}
+
 func TestResultSpanSourceOrdinals(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
