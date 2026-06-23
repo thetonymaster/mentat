@@ -2,6 +2,7 @@ package comparator
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/thetonymaster/mentat/internal/core"
@@ -75,6 +76,75 @@ func TestShapeCompareErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			if _, err := NewShape().Compare(context.Background(), tt.ev, tt.exp); err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+		})
+	}
+}
+
+// treeTrace: root → mid → leaf, plus a sibling "other" under root, in a SECOND root
+// "root2 → orphan". Exercises direct-child, descendant, and cross-root (forest) cases.
+func treeTrace() *trace.Trace {
+	a := func(op string) map[string]string { return map[string]string{"gen_ai.operation.name": op} }
+	root := &trace.Span{ID: "root", Name: "invoke_agent", Attrs: a("invoke_agent")}
+	mid := &trace.Span{ID: "mid", ParentID: "root", Name: "chat", Attrs: a("chat")}
+	leaf := &trace.Span{ID: "leaf", ParentID: "mid", Name: "execute_tool search",
+		Attrs: map[string]string{"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "search"}}
+	other := &trace.Span{ID: "other", ParentID: "root", Name: "execute_tool fetch",
+		Attrs: map[string]string{"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "fetch"}}
+	root2 := &trace.Span{ID: "root2", Name: "invoke_agent", Attrs: a("invoke_agent")}
+	orphan := &trace.Span{ID: "orphan", ParentID: "root2", Name: "execute_tool pay",
+		Attrs: map[string]string{"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "pay"}}
+	return &trace.Trace{
+		Roots: []*trace.Span{root, root2},
+		Spans: []*trace.Span{root, mid, leaf, other, root2, orphan},
+	}
+}
+
+func TestShapeContainment(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		exp      ShapeExpectation
+		wantPass bool
+	}{
+		{"direct child holds", ShapeExpectation{Kind: "containment", Relation: "child",
+			Subject: sel(t, "gen_ai.tool.name=search"), Parent: sel(t, "gen_ai.operation.name=chat")}, true},
+		{"direct child fails for grandchild", ShapeExpectation{Kind: "containment", Relation: "child",
+			Subject: sel(t, "gen_ai.tool.name=search"), Parent: sel(t, "gen_ai.operation.name=invoke_agent")}, false},
+		{"descendant holds (grandchild)", ShapeExpectation{Kind: "containment", Relation: "descendant",
+			Subject: sel(t, "gen_ai.tool.name=search"), Parent: sel(t, "gen_ai.operation.name=invoke_agent")}, true},
+		{"descendant fails when unrelated", ShapeExpectation{Kind: "containment", Relation: "descendant",
+			Subject: sel(t, "gen_ai.tool.name=search"), Parent: sel(t, "gen_ai.tool.name=fetch")}, false},
+		{"cross-root child fails (different roots)", ShapeExpectation{Kind: "containment", Relation: "child",
+			Subject: sel(t, "gen_ai.tool.name=pay"), Parent: sel(t, "gen_ai.operation.name=chat")}, false},
+		{"no matching parent fails", ShapeExpectation{Kind: "containment", Relation: "child",
+			Subject: sel(t, "gen_ai.tool.name=search"), Parent: sel(t, "gen_ai.tool.name=nonexistent")}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			v, err := NewShape().Compare(context.Background(), core.Evidence{Trace: treeTrace()}, tt.exp)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if v.Pass != tt.wantPass {
+				t.Errorf("Pass=%v want %v; reasons=%v", v.Pass, tt.wantPass, v.Reasons)
+			}
+		})
+	}
+}
+
+func TestShapeContainmentValidation(t *testing.T) {
+	t.Parallel()
+	tests := []ShapeExpectation{
+		{Kind: "containment", Subject: sel(t, "a=b"), Relation: "child"},                        // empty Parent
+		{Kind: "containment", Subject: sel(t, "a=b"), Parent: sel(t, "c=d"), Relation: "uncle"}, // bad Relation
+	}
+	for i, exp := range tests {
+		t.Run(fmt.Sprintf("case%d", i), func(t *testing.T) {
+			t.Parallel()
+			if _, err := NewShape().Compare(context.Background(), core.Evidence{Trace: treeTrace()}, exp); err == nil {
 				t.Fatalf("expected error, got nil")
 			}
 		})
