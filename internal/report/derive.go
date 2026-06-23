@@ -42,7 +42,7 @@ func Derive(name string, tags []string, v core.Verdict, evs []core.Evidence, pri
 	if len(evs) > 0 && evs[0].Trace != nil {
 		seq, err := sequence(evs[0].Trace)
 		if err != nil {
-			return core.ScenarioResult{}, fmt.Errorf("report.Derive: sequence: %w", err)
+			return core.ScenarioResult{}, fmt.Errorf("report.Derive: sequence for run %q: %w", evs[0].RunID, err)
 		}
 		sr.Sequence = seq
 	}
