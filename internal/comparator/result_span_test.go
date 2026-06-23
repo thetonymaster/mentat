@@ -2,6 +2,7 @@ package comparator
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -265,5 +266,23 @@ func TestResultSpanSourceOrdinals(t *testing.T) {
 				t.Errorf("Pass=%v wantPass=%v reasons=%v", got.Pass, tt.wantPass, got.Reasons)
 			}
 		})
+	}
+}
+
+// TestResultSpanSourceMatcherErrorWrapped proves that when the dispatched matcher
+// itself errors (here: an invalid regex pattern), resolveSpanSource wraps it with
+// span/attr context — the matcher seam's own error has no idea it was run against a
+// span attribute, so the comparator must name the span, attribute, and matcher.
+func TestResultSpanSourceMatcherErrorWrapped(t *testing.T) {
+	t.Parallel()
+	_, err := NewResult().Compare(context.Background(), core.Evidence{Trace: resultTrace()},
+		ResultExpectation{Matcher: "regex", Want: "(((", Source: toolSource("summarize", QuantOne, 0)})
+	if err == nil {
+		t.Fatal("expected an error from the invalid regex pattern via a span source")
+	}
+	for _, want := range []string{"matcher", "regex", "summarize", genai.ToolResult} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q (matcher error must carry span/attr context)", err.Error(), want)
+		}
 	}
 }

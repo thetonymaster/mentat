@@ -117,7 +117,7 @@ func (s SpanSource) evaluate(ctx context.Context, m core.Matcher, ev core.Eviden
 		derived.Output = core.Output{Answer: val, Body: []byte(val)}
 		v, err := m.Match(ctx, derived, want, "answer")
 		if err != nil {
-			return core.Verdict{}, err
+			return core.Verdict{}, fmt.Errorf("result: matcher %q failed on span %q attr %q: %w", m.Name(), sp.Name, s.Attr, err)
 		}
 		results = append(results, spanVerdict{v, sp})
 	}
