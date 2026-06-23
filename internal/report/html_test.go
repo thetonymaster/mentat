@@ -20,7 +20,7 @@ func TestHTMLReporter(t *testing.T) {
 		t.Fatalf("report: %v", err)
 	}
 	out := buf.String()
-	for _, want := range []string{"<html", "flaky", "rate = 0.50, want >= 0.80", "abc", "0.0125"} {
+	for _, want := range []string{"<html", "flaky", "rate = 0.50, want &gt;= 0.80", "abc", "0.0125"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("html missing %q", want)
 		}

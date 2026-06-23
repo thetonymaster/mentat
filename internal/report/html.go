@@ -29,35 +29,8 @@ td,th{border:1px solid #ccc;padding:.25rem .5rem}.fail{color:#b00}.pass{color:#0
 
 type htmlReporter struct{}
 
-// htmlScenario mirrors core.ScenarioResult for template rendering, with Reasons
-// typed as []template.HTML so comparator reason strings (which may contain
-// characters like ">") are not HTML-escaped.
-type htmlScenario struct {
-	core.ScenarioResult
-	Reasons []template.HTML
-}
-
-// htmlReport is the template data type: identical to core.RunReport except
-// Scenarios is replaced with []htmlScenario so reason strings render verbatim.
-type htmlReport struct {
-	core.RunReport
-	Scenarios []htmlScenario
-}
-
 func (htmlReporter) Report(rep core.RunReport, w io.Writer) error {
-	scenarios := make([]htmlScenario, len(rep.Scenarios))
-	for i, s := range rep.Scenarios {
-		reasons := make([]template.HTML, len(s.Reasons))
-		for j, r := range s.Reasons {
-			reasons[j] = template.HTML(r) //nolint:gosec // reasons are internal comparator strings, not user HTML
-		}
-		scenarios[i] = htmlScenario{
-			ScenarioResult: s,
-			Reasons:        reasons,
-		}
-	}
-	data := htmlReport{RunReport: rep, Scenarios: scenarios}
-	if err := htmlTmpl.Execute(w, data); err != nil {
+	if err := htmlTmpl.Execute(w, rep); err != nil {
 		return fmt.Errorf("report: executing html template: %w", err)
 	}
 	return nil
