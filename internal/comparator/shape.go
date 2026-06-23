@@ -82,6 +82,14 @@ func (shape) Compare(_ context.Context, ev core.Evidence, e core.Expectation) (c
 			return core.Verdict{}, fmt.Errorf("shape: containment Relation must be \"child\" or \"descendant\", got %q", exp.Relation)
 		}
 		return shapeContainment(ev.Trace, exp), nil
+	case "fanout":
+		if len(exp.Parent) == 0 {
+			return core.Verdict{}, fmt.Errorf("shape: fanout requires a Parent selector")
+		}
+		if exp.Count == nil {
+			return core.Verdict{}, fmt.Errorf("shape: fanout requires a Count")
+		}
+		return shapeFanout(ev.Trace, exp), nil
 	default:
 		return core.Verdict{}, fmt.Errorf("shape: unknown Kind %q", exp.Kind)
 	}
@@ -139,6 +147,29 @@ func isAncestor(byID map[string]*trace.Span, ancestorID string, child *trace.Spa
 		cur = byID[cur.ParentID]
 	}
 	return false
+}
+
+func shapeFanout(tr *trace.Trace, exp ShapeExpectation) core.Verdict {
+	parents := matchingSpans(tr, exp.Parent)
+	best := 0
+	for _, p := range parents {
+		cnt := 0
+		for _, s := range tr.Spans {
+			if s.ParentID == p.ID && exp.Subject.matchSpan(s) {
+				cnt++
+			}
+		}
+		if exp.Count.ok(cnt) {
+			return core.Verdict{Pass: true}
+		}
+		if cnt > best {
+			best = cnt
+		}
+	}
+	return core.Verdict{Pass: false, Reasons: []string{
+		fmt.Sprintf("expected a span matching %s with %s children matching %s; best matching parent had %d",
+			exp.Parent, exp.Count.describe(), exp.Subject, best),
+	}}
 }
 
 func shapeContainment(tr *trace.Trace, exp ShapeExpectation) core.Verdict {

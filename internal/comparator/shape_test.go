@@ -150,3 +150,72 @@ func TestShapeContainmentValidation(t *testing.T) {
 		})
 	}
 }
+
+// fanoutTrace: chatA has 3 search children; chatB has 1 search child. Used to prove
+// the existential-over-parent reading (any one matching parent satisfying Count passes).
+func fanoutTrace() *trace.Trace {
+	tool := func(id, parent, name string) *trace.Span {
+		return &trace.Span{ID: id, ParentID: parent, Name: "execute_tool " + name,
+			Attrs: map[string]string{"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": name}}
+	}
+	chat := func(id string) *trace.Span {
+		return &trace.Span{ID: id, Name: "chat", Attrs: map[string]string{"gen_ai.operation.name": "chat"}}
+	}
+	chatA, chatB := chat("chatA"), chat("chatB")
+	return &trace.Trace{
+		Roots: []*trace.Span{chatA, chatB},
+		Spans: []*trace.Span{
+			chatA, chatB,
+			tool("a1", "chatA", "search"), tool("a2", "chatA", "search"), tool("a3", "chatA", "search"),
+			tool("b1", "chatB", "search"),
+		},
+	}
+}
+
+func TestShapeFanout(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		exp      ShapeExpectation
+		wantPass bool
+	}{
+		{"at least 3 passes (chatA)", ShapeExpectation{Kind: "fanout", Relation: "child",
+			Parent: sel(t, "gen_ai.operation.name=chat"), Subject: sel(t, "gen_ai.tool.name=search"), Count: &Count{">=", 3}}, true},
+		{"at least 4 fails (max is 3)", ShapeExpectation{Kind: "fanout", Relation: "child",
+			Parent: sel(t, "gen_ai.operation.name=chat"), Subject: sel(t, "gen_ai.tool.name=search"), Count: &Count{">=", 4}}, false},
+		{"exactly 3 passes (chatA)", ShapeExpectation{Kind: "fanout", Relation: "child",
+			Parent: sel(t, "gen_ai.operation.name=chat"), Subject: sel(t, "gen_ai.tool.name=search"), Count: &Count{"==", 3}}, true},
+		{"exactly 2 fails (no parent has exactly 2)", ShapeExpectation{Kind: "fanout", Relation: "child",
+			Parent: sel(t, "gen_ai.operation.name=chat"), Subject: sel(t, "gen_ai.tool.name=search"), Count: &Count{"==", 2}}, false},
+		{"no matching parent fails", ShapeExpectation{Kind: "fanout", Relation: "child",
+			Parent: sel(t, "gen_ai.operation.name=nope"), Subject: sel(t, "gen_ai.tool.name=search"), Count: &Count{">=", 1}}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			v, err := NewShape().Compare(context.Background(), core.Evidence{Trace: fanoutTrace()}, tt.exp)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if v.Pass != tt.wantPass {
+				t.Errorf("Pass=%v want %v; reasons=%v", v.Pass, tt.wantPass, v.Reasons)
+			}
+		})
+	}
+}
+
+func TestShapeFanoutValidation(t *testing.T) {
+	t.Parallel()
+	tests := []ShapeExpectation{
+		{Kind: "fanout", Subject: sel(t, "a=b"), Count: &Count{">=", 1}}, // empty Parent
+		{Kind: "fanout", Subject: sel(t, "a=b"), Parent: sel(t, "c=d")},  // nil Count
+	}
+	for i, exp := range tests {
+		t.Run(fmt.Sprintf("case%d", i), func(t *testing.T) {
+			t.Parallel()
+			if _, err := NewShape().Compare(context.Background(), core.Evidence{Trace: fanoutTrace()}, exp); err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+		})
+	}
+}
