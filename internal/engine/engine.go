@@ -5,24 +5,33 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/thetonymaster/mentat/internal/comparator"
 	"github.com/thetonymaster/mentat/internal/config"
 	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/expectations"
 	"github.com/thetonymaster/mentat/internal/registry"
 )
 
 // Engine wires configuration, a trace store, and a correlator into the
 // Drive/Comparator lifecycle. Build is the only way to construct it.
 type Engine struct {
-	cfg     config.Config
-	cor     core.Correlator
-	st      core.TraceStore
-	sems    map[string]chan struct{} // per-target concurrency gate
-	pinned  string                   // when set, Drive resolves this run id instead of driving
-	pricing core.Pricing
+	cfg      config.Config
+	cor      core.Correlator
+	st       core.TraceStore
+	sems     map[string]chan struct{} // per-target concurrency gate
+	pinned   string                   // when set, Drive resolves this run id instead of driving
+	pricing  core.Pricing
+	patterns expectations.Patterns
 }
 
 // Pricing returns the per-model cost table wired at Build (may be nil).
 func (e *Engine) Pricing() core.Pricing { return e.pricing }
+
+// ShapePattern resolves a named sidecar shape pattern loaded at Build. The bool is false
+// for an unknown name; the step layer pre-checks names in sc.Before so this is a safety net.
+func (e *Engine) ShapePattern(name string) ([]comparator.ShapeExpectation, bool) {
+	return e.patterns.Get(name)
+}
 
 // PinRun makes subsequent Drive calls resolve runID from the store instead of
 // running the SUT — used by `mentatctl agent replay` to re-evaluate a stored run.

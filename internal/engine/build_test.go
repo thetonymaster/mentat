@@ -1,10 +1,55 @@
 package engine
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/thetonymaster/mentat/internal/config"
 )
+
+func TestBuildLoadsShapePatterns(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "p.yaml"),
+		[]byte("name: p1\nclauses:\n  - exists: \"gen_ai.tool.name=search\"\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cfg := config.Config{OTLPEndpoint: "x", Expectations: dir}
+	eng, err := Build(cfg, nil, nil) // Build does not call st/cor; nil is safe
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	clauses, ok := eng.ShapePattern("p1")
+	if !ok || len(clauses) != 1 {
+		t.Fatalf("ShapePattern(p1) = (%v, %v), want 1 clause", clauses, ok)
+	}
+	if _, ok := eng.ShapePattern("missing"); ok {
+		t.Errorf("ShapePattern(missing) = true, want false")
+	}
+}
+
+func TestBuildNoExpectationsDir(t *testing.T) {
+	cfg := config.Config{OTLPEndpoint: "x"} // Expectations == "" → zero patterns, no error
+	eng, err := Build(cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if _, ok := eng.ShapePattern("anything"); ok {
+		t.Errorf("ShapePattern = true on empty engine, want false")
+	}
+}
+
+func TestBuildRejectsMalformedPattern(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "bad.yaml"),
+		[]byte("name: bad\nclauses:\n  - child: \"a=b\"\n"), 0o644); err != nil { // child without of
+		t.Fatalf("write: %v", err)
+	}
+	cfg := config.Config{OTLPEndpoint: "x", Expectations: dir}
+	if _, err := Build(cfg, nil, nil); err == nil {
+		t.Fatalf("Build() = nil error, want error for malformed pattern")
+	}
+}
 
 func TestToPricing(t *testing.T) {
 	t.Run("empty maps to nil", func(t *testing.T) {

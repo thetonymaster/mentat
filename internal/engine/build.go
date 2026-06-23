@@ -5,6 +5,7 @@ import (
 	"github.com/thetonymaster/mentat/internal/config"
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/driver"
+	"github.com/thetonymaster/mentat/internal/expectations"
 	"github.com/thetonymaster/mentat/internal/registry"
 	"github.com/thetonymaster/mentat/internal/report"
 )
@@ -30,6 +31,11 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator) (*Engine,
 	comparator.RegisterBuiltinMatchers()
 	report.RegisterBuiltins()
 
+	pats, err := expectations.Load(cfg.Expectations)
+	if err != nil {
+		return nil, err
+	}
+
 	sems := map[string]chan struct{}{}
 	for name, t := range cfg.Targets {
 		n := t.MaxConcurrency
@@ -38,7 +44,7 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator) (*Engine,
 		}
 		sems[name] = make(chan struct{}, n)
 	}
-	return &Engine{cfg: cfg, cor: cor, st: st, sems: sems, pricing: pricing}, nil
+	return &Engine{cfg: cfg, cor: cor, st: st, sems: sems, pricing: pricing, patterns: pats}, nil
 }
 
 // toPricing converts the YAML pricing table into the transport-free core.Pricing
