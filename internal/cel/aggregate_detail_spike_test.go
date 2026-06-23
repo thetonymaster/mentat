@@ -62,10 +62,3 @@ func TestSpike_SubProgramAndMacroRecovery(t *testing.T) {
 		t.Fatalf("want 2 macro args, got %d", got)
 	}
 }
-
-func callFn(e ast.Expr) string {
-	if e != nil && e.Kind() == ast.CallKind {
-		return e.AsCall().FunctionName()
-	}
-	return ""
-}

@@ -485,6 +485,10 @@ func TestCostOrZero(t *testing.T) {
 		{"no cost, no pricing -> 0", tokenTrace(100, 50), nil, 0, false},
 		{"emitted cost", costTrace(0.0030), nil, 0.0030, false},
 		{"malformed cost -> err", rawAttrTrace(genai.CostUSD, "abc"), nil, 0, true},
+		// Populated pricing + a token-bearing span whose model is absent from the
+		// table → CostOrZero surfaces deriveCost's hard error (no silent 0). The
+		// reporter must not paper over an unpriced model.
+		{"populated pricing, unpriced model -> err", derivableTrace(1_000_000, 0, "unpriced"), core.Pricing{"m": {InputPerMTok: 10, OutputPerMTok: 20}}, 0, true},
 	}
 	for _, tt := range tests {
 		tt := tt

@@ -221,13 +221,17 @@ func TestAggregateReason(t *testing.T) {
 				Expr: `rate(r, !r.failed) >= 0.8`, Macro: "rate", Op: ">=",
 				Computed: 0.5, Expected: 0.8, PerRun: []float64{1, 0},
 			},
-			wantContain: []string{"rate = 0.50, want >= 0.80", "value"},
+			// A value entry per run: both run ids appear, and the failed run carries
+			// its kind alongside its per-run value column.
+			wantContain: []string{"rate = 0.50, want >= 0.80", "value", "aaa", "bbb", "resolve"},
 		},
 		{
-			name:        "nil detail -> legacy message",
-			expr:        `count(r, r.failed) == 0 && true`,
-			detail:      nil,
-			wantContain: []string{"aggregate false:"},
+			name:   "nil detail -> legacy message",
+			expr:   `count(r, r.failed) == 0 && true`,
+			detail: nil,
+			// The non-canonical branch embeds the raw expression verbatim (no
+			// computed-vs-expected) so the reader can still see what was asserted.
+			wantContain: []string{"aggregate false:", "count(r, r.failed) == 0 && true"},
 			wantAbsent:  []string{"want"},
 		},
 	}
