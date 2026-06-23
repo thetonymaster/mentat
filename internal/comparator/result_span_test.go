@@ -147,3 +147,64 @@ func noResultAttrTrace() *trace.Trace {
 	}}
 	return &trace.Trace{Roots: []*trace.Span{s}, Spans: []*trace.Span{s}}
 }
+
+func TestResultSpanSourceOrdinals(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		exp      ResultExpectation
+		wantPass bool
+		wantErr  bool
+	}{
+		{
+			name:     "first call picks earliest start (first-result)",
+			exp:      ResultExpectation{Matcher: "exact", Want: "first-result", Source: toolSource("search", QuantFirst, 0)},
+			wantPass: true,
+		},
+		{
+			name:     "last call picks latest start (second-result)",
+			exp:      ResultExpectation{Matcher: "exact", Want: "second-result", Source: toolSource("search", QuantLast, 0)},
+			wantPass: true,
+		},
+		{
+			name:     "2nd call picks index 2 (second-result)",
+			exp:      ResultExpectation{Matcher: "exact", Want: "second-result", Source: toolSource("search", QuantNth, 2)},
+			wantPass: true,
+		},
+		{
+			name:     "1st call picks index 1 (first-result)",
+			exp:      ResultExpectation{Matcher: "exact", Want: "first-result", Source: toolSource("search", QuantNth, 1)},
+			wantPass: true,
+		},
+		{
+			name:     "first call mismatch fails (not an error)",
+			exp:      ResultExpectation{Matcher: "exact", Want: "second-result", Source: toolSource("search", QuantFirst, 0)},
+			wantPass: false,
+		},
+		{
+			name:    "3rd call out of range is error (only 2 matched)",
+			exp:     ResultExpectation{Matcher: "exact", Want: "x", Source: toolSource("search", QuantNth, 3)},
+			wantErr: true,
+		},
+		{
+			name:    "0th call out of range is error",
+			exp:     ResultExpectation{Matcher: "exact", Want: "x", Source: toolSource("search", QuantNth, 0)},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := NewResult().Compare(context.Background(), core.Evidence{Trace: resultTrace()}, tt.exp)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			if got.Pass != tt.wantPass {
+				t.Errorf("Pass=%v wantPass=%v reasons=%v", got.Pass, tt.wantPass, got.Reasons)
+			}
+		})
+	}
+}
