@@ -9,7 +9,11 @@ import (
 )
 
 // Derive projects a scenario's Verdict + per-run Evidence into a ScenarioResult.
-// Cost and sequence are derived from the Evidence forest (Evidence-only, invariant #1).
+// Cost (per run, plus the scenario total) is derived from every run's Evidence
+// forest (Evidence-only, invariant #1). The tool/service Sequence is derived from
+// the representative run — evs[0] when it has a non-nil Trace — so callers must pass
+// evs in run order (run[0] first); for @runs(N) scenarios only the first run's
+// sequence is reported.
 func Derive(name string, tags []string, v core.Verdict, evs []core.Evidence, pricing core.Pricing) (core.ScenarioResult, error) {
 	sr := core.ScenarioResult{
 		Name:      name,
