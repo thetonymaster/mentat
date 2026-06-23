@@ -78,6 +78,9 @@ func (shape) Compare(_ context.Context, ev core.Evidence, e core.Expectation) (c
 	case "absent":
 		return shapeAbsent(ev.Trace, exp), nil
 	case "containment":
+		if err := validateShapeTraceIDs(ev.Trace); err != nil {
+			return core.Verdict{}, fmt.Errorf("shape: containment requires valid span IDs: %w", err)
+		}
 		if len(exp.Parent) == 0 {
 			return core.Verdict{}, fmt.Errorf("shape: containment requires a Parent selector")
 		}
@@ -86,6 +89,9 @@ func (shape) Compare(_ context.Context, ev core.Evidence, e core.Expectation) (c
 		}
 		return shapeContainment(ev.Trace, exp), nil
 	case "fanout":
+		if err := validateShapeTraceIDs(ev.Trace); err != nil {
+			return core.Verdict{}, fmt.Errorf("shape: fanout requires valid span IDs: %w", err)
+		}
 		if len(exp.Parent) == 0 {
 			return core.Verdict{}, fmt.Errorf("shape: fanout requires a Parent selector")
 		}
@@ -130,6 +136,24 @@ func shapeAbsent(tr *trace.Trace, exp ShapeExpectation) core.Verdict {
 	return core.Verdict{Pass: false, Reasons: []string{
 		fmt.Sprintf("forbidden span matching %s was present (%d occurrence(s))", exp.Subject, n),
 	}}
+}
+
+// validateShapeTraceIDs guards the ID-based structural checks (containment, fanout):
+// an empty ID would let "" == "" false-match a root's empty ParentID, and a duplicate
+// ID would make byIDIndex silently overwrite and corrupt ancestry walks. Per the
+// no-silent-fallbacks rule, a degenerate trace is a hard error, not a guessed verdict.
+func validateShapeTraceIDs(tr *trace.Trace) error {
+	seen := make(map[string]struct{}, len(tr.Spans))
+	for i, s := range tr.Spans {
+		if s.ID == "" {
+			return fmt.Errorf("span[%d] (%q) has empty ID", i, s.Name)
+		}
+		if _, dup := seen[s.ID]; dup {
+			return fmt.Errorf("duplicate span ID %q", s.ID)
+		}
+		seen[s.ID] = struct{}{}
+	}
+	return nil
 }
 
 // byIDIndex maps span ID → span for ancestry walks. In a Tempo-sourced trace IDs are

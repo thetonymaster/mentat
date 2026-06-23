@@ -59,6 +59,22 @@ func TestShapeExistence(t *testing.T) {
 	}
 }
 
+// emptyIDTrace has a span with an empty ID — invalid for structural (ID-based)
+// checks, where "" == "" would false-match a root's empty ParentID.
+func emptyIDTrace() *trace.Trace {
+	a := &trace.Span{ID: "", Name: "x", Attrs: map[string]string{"k": "v"}}
+	b := &trace.Span{ID: "b", Name: "y", Attrs: map[string]string{"k": "v"}}
+	return &trace.Trace{Roots: []*trace.Span{b}, Spans: []*trace.Span{a, b}}
+}
+
+// dupIDTrace has two spans sharing an ID — byIDIndex would silently overwrite and
+// ancestry walks would be corrupted.
+func dupIDTrace() *trace.Trace {
+	a := &trace.Span{ID: "dup", Name: "x", Attrs: map[string]string{"k": "v"}}
+	b := &trace.Span{ID: "dup", Name: "y", Attrs: map[string]string{"k": "v"}}
+	return &trace.Trace{Roots: []*trace.Span{a, b}, Spans: []*trace.Span{a, b}}
+}
+
 func TestShapeCompareErrors(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -73,6 +89,10 @@ func TestShapeCompareErrors(t *testing.T) {
 		{"unknown kind", core.Evidence{Trace: flatTrace()}, ShapeExpectation{Kind: "bogus", Subject: sel(t, "a=b")}, "unknown Kind"},
 		{"unknown count op", core.Evidence{Trace: flatTrace()}, ShapeExpectation{Kind: "exists", Subject: sel(t, "a=b"), Count: &Count{Op: "<", N: 1}}, "unknown count op"},
 		{"negative count N", core.Evidence{Trace: flatTrace()}, ShapeExpectation{Kind: "exists", Subject: sel(t, "a=b"), Count: &Count{Op: ">=", N: -1}}, "count N must be >= 0"},
+		{"containment empty span ID errors", core.Evidence{Trace: emptyIDTrace()}, ShapeExpectation{Kind: "containment", Relation: "child", Subject: sel(t, "k=v"), Parent: sel(t, "k=v")}, "empty ID"},
+		{"containment duplicate span ID errors", core.Evidence{Trace: dupIDTrace()}, ShapeExpectation{Kind: "containment", Relation: "child", Subject: sel(t, "k=v"), Parent: sel(t, "k=v")}, "duplicate span ID"},
+		{"fanout empty span ID errors", core.Evidence{Trace: emptyIDTrace()}, ShapeExpectation{Kind: "fanout", Subject: sel(t, "k=v"), Parent: sel(t, "k=v"), Count: &Count{Op: ">=", N: 1}}, "empty ID"},
+		{"fanout duplicate span ID errors", core.Evidence{Trace: dupIDTrace()}, ShapeExpectation{Kind: "fanout", Subject: sel(t, "k=v"), Parent: sel(t, "k=v"), Count: &Count{Op: ">=", N: 1}}, "duplicate span ID"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
