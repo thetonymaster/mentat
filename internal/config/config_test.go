@@ -205,6 +205,30 @@ func TestLoadRejectsInvalidPricing(t *testing.T) {
 	}
 }
 
+func TestLoadExpectationsDefault(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		yaml string
+		want string
+	}{
+		{"defaults when absent", "store: tempo\n", "expectations"},
+		{"explicit value preserved", "store: tempo\nexpectations: ./exp\n", "./exp"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c, err := Load([]byte(tt.yaml))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if c.Expectations != tt.want {
+				t.Errorf("Expectations = %q, want %q", c.Expectations, tt.want)
+			}
+		})
+	}
+}
+
 func TestLoadHTTPTarget(t *testing.T) {
 	tests := []struct {
 		name        string
