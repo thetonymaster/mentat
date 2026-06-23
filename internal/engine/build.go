@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"fmt"
+
 	"github.com/thetonymaster/mentat/internal/comparator"
 	"github.com/thetonymaster/mentat/internal/config"
 	"github.com/thetonymaster/mentat/internal/core"
@@ -33,7 +35,7 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator) (*Engine,
 
 	pats, err := expectations.Load(cfg.Expectations)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load expectations from %q: %w", cfg.Expectations, err)
 	}
 
 	sems := map[string]chan struct{}{}

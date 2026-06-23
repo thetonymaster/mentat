@@ -3,6 +3,7 @@ package engine
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/thetonymaster/mentat/internal/config"
@@ -46,8 +47,14 @@ func TestBuildRejectsMalformedPattern(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	cfg := config.Config{OTLPEndpoint: "x", Expectations: dir}
-	if _, err := Build(cfg, nil, nil); err == nil {
+	_, err := Build(cfg, nil, nil)
+	if err == nil {
 		t.Fatalf("Build() = nil error, want error for malformed pattern")
+	}
+	// The load failure must be wrapped with context naming the directory,
+	// not propagated raw (CLAUDE.md error-wrapping convention).
+	if !strings.Contains(err.Error(), "load expectations from") || !strings.Contains(err.Error(), dir) {
+		t.Errorf("Build() error = %q, want it wrapped with %q and dir %q", err, "load expectations from", dir)
 	}
 }
 
