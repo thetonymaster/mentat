@@ -1385,6 +1385,34 @@ func TestFeatureGoesRedOnBadShape(t *testing.T) {
 	}
 }
 
+// TestSpanResultGoesRedOnBadResult proves the result comparator goes red when a
+// tool's span result does not match — the L3 contract for the span-attribute source.
+func TestSpanResultGoesRedOnBadResult(t *testing.T) {
+	eng := buildEng(t, spanResultTrace())
+	feature := `Feature: bad-span-result
+  Scenario: last search result mismatch
+    Given the agent target "svc"
+    When I run scenario "happy"
+    Then the result of the last call to tool "search" contains "NONEXISTENT"
+`
+	var out bytes.Buffer
+	suite := godog.TestSuite{
+		ScenarioInitializer: Initializer(eng),
+		Options: &godog.Options{
+			Format:          "pretty",
+			Output:          &out,
+			FeatureContents: []godog.Feature{{Name: "bad-span-result", Contents: []byte(feature)}},
+		},
+	}
+	status := suite.Run()
+	if status == 0 {
+		t.Fatalf("expected suite to fail (non-zero), but it passed\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "result contains") {
+		t.Fatalf("expected output to contain 'result contains', got:\n%s", out.String())
+	}
+}
+
 // TestStepMethods exercises each step method that the happy-scenario godog run
 // does not reach, using a crafted Evidence so comparators have the data they need.
 func TestStepMethods(t *testing.T) {
