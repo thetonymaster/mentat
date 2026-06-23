@@ -2,7 +2,7 @@ package comparator
 
 import (
 	"context"
-	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/thetonymaster/mentat/internal/core"
@@ -62,21 +62,26 @@ func TestShapeExistence(t *testing.T) {
 func TestShapeCompareErrors(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name string
-		ev   core.Evidence
-		exp  core.Expectation
+		name    string
+		ev      core.Evidence
+		exp     core.Expectation
+		wantErr string
 	}{
-		{"wrong expectation type", core.Evidence{Trace: flatTrace()}, SequenceExpectation{}},
-		{"nil trace", core.Evidence{}, ShapeExpectation{Kind: "exists", Subject: sel(t, "a=b")}},
-		{"empty subject", core.Evidence{Trace: flatTrace()}, ShapeExpectation{Kind: "exists"}},
-		{"unknown kind", core.Evidence{Trace: flatTrace()}, ShapeExpectation{Kind: "bogus", Subject: sel(t, "a=b")}},
-		{"unknown count op", core.Evidence{Trace: flatTrace()}, ShapeExpectation{Kind: "exists", Subject: sel(t, "a=b"), Count: &Count{Op: "<", N: 1}}},
+		{"wrong expectation type", core.Evidence{Trace: flatTrace()}, SequenceExpectation{}, "expectation must be ShapeExpectation"},
+		{"nil trace", core.Evidence{}, ShapeExpectation{Kind: "exists", Subject: sel(t, "a=b")}, "Evidence.Trace is nil"},
+		{"empty subject", core.Evidence{Trace: flatTrace()}, ShapeExpectation{Kind: "exists"}, "Subject selector is empty"},
+		{"unknown kind", core.Evidence{Trace: flatTrace()}, ShapeExpectation{Kind: "bogus", Subject: sel(t, "a=b")}, "unknown Kind"},
+		{"unknown count op", core.Evidence{Trace: flatTrace()}, ShapeExpectation{Kind: "exists", Subject: sel(t, "a=b"), Count: &Count{Op: "<", N: 1}}, "unknown count op"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := NewShape().Compare(context.Background(), tt.ev, tt.exp); err == nil {
-				t.Fatalf("expected error, got nil")
+			_, err := NewShape().Compare(context.Background(), tt.ev, tt.exp)
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error %q does not contain %q", err.Error(), tt.wantErr)
 			}
 		})
 	}
@@ -137,15 +142,31 @@ func TestShapeContainment(t *testing.T) {
 
 func TestShapeContainmentValidation(t *testing.T) {
 	t.Parallel()
-	tests := []ShapeExpectation{
-		{Kind: "containment", Subject: sel(t, "a=b"), Relation: "child"},                        // empty Parent
-		{Kind: "containment", Subject: sel(t, "a=b"), Parent: sel(t, "c=d"), Relation: "uncle"}, // bad Relation
+	tests := []struct {
+		name    string
+		exp     ShapeExpectation
+		wantErr string
+	}{
+		{
+			name:    "empty Parent",
+			exp:     ShapeExpectation{Kind: "containment", Subject: sel(t, "a=b"), Relation: "child"},
+			wantErr: "containment requires a Parent selector",
+		},
+		{
+			name:    "bad Relation",
+			exp:     ShapeExpectation{Kind: "containment", Subject: sel(t, "a=b"), Parent: sel(t, "c=d"), Relation: "uncle"},
+			wantErr: "containment Relation must be",
+		},
 	}
-	for i, exp := range tests {
-		t.Run(fmt.Sprintf("case%d", i), func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := NewShape().Compare(context.Background(), core.Evidence{Trace: treeTrace()}, exp); err == nil {
-				t.Fatalf("expected error, got nil")
+			_, err := NewShape().Compare(context.Background(), core.Evidence{Trace: treeTrace()}, tt.exp)
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error %q does not contain %q", err.Error(), tt.wantErr)
 			}
 		})
 	}
@@ -206,15 +227,31 @@ func TestShapeFanout(t *testing.T) {
 
 func TestShapeFanoutValidation(t *testing.T) {
 	t.Parallel()
-	tests := []ShapeExpectation{
-		{Kind: "fanout", Subject: sel(t, "a=b"), Count: &Count{">=", 1}}, // empty Parent
-		{Kind: "fanout", Subject: sel(t, "a=b"), Parent: sel(t, "c=d")},  // nil Count
+	tests := []struct {
+		name    string
+		exp     ShapeExpectation
+		wantErr string
+	}{
+		{
+			name:    "empty Parent",
+			exp:     ShapeExpectation{Kind: "fanout", Subject: sel(t, "a=b"), Count: &Count{">=", 1}},
+			wantErr: "fanout requires a Parent selector",
+		},
+		{
+			name:    "nil Count",
+			exp:     ShapeExpectation{Kind: "fanout", Subject: sel(t, "a=b"), Parent: sel(t, "c=d")},
+			wantErr: "fanout requires a Count",
+		},
 	}
-	for i, exp := range tests {
-		t.Run(fmt.Sprintf("case%d", i), func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := NewShape().Compare(context.Background(), core.Evidence{Trace: fanoutTrace()}, exp); err == nil {
-				t.Fatalf("expected error, got nil")
+			_, err := NewShape().Compare(context.Background(), core.Evidence{Trace: fanoutTrace()}, tt.exp)
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error %q does not contain %q", err.Error(), tt.wantErr)
 			}
 		})
 	}
