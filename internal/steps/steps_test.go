@@ -14,6 +14,7 @@ import (
 
 	"github.com/cucumber/godog"
 	messages "github.com/cucumber/messages/go/v21"
+	"github.com/thetonymaster/mentat/internal/comparator"
 	"github.com/thetonymaster/mentat/internal/config"
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/core/mocks"
@@ -1032,6 +1033,160 @@ clauses:
 		t.Fatalf("expected \"unknown shape pattern\" in output, got:\n%s", out)
 	}
 	// ctrl's t.Cleanup asserts Query/GetByID were never called → pre-check fired before drive.
+}
+
+// spanResultTrace: two "search" calls with distinct results + start times and one
+// "summarize" — drives the tool-form grammar through a godog suite.
+func spanResultTrace() *trace.Trace {
+	t0 := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
+	mk := func(id, tool, res string, start time.Time) *trace.Span {
+		return &trace.Span{ID: id, Name: "execute_tool " + tool, Start: start,
+			Attrs: map[string]string{genai.Op: genai.OpExecuteTool, genai.ToolName: tool, genai.ToolResult: res}}
+	}
+	root := &trace.Span{Name: "invoke_agent", Attrs: map[string]string{
+		genai.Op: genai.OpInvokeAgent, genai.InTokens: "100", genai.OutTokens: "50"}}
+	s1 := mk("s1", "search", "first-result", t0)
+	s2 := mk("s2", "search", "second-result", t0.Add(time.Second))
+	s3 := mk("s3", "summarize", "the summary", t0.Add(2*time.Second))
+	return &trace.Trace{Roots: []*trace.Span{root}, Spans: []*trace.Span{root, s1, s2, s3}}
+}
+
+func TestResultToolStep(t *testing.T) {
+	tests := []struct {
+		name     string
+		feature  string
+		wantPass bool
+	}{
+		{
+			name: "bare tool form (single match) passes",
+			feature: `Feature: result-tool
+  Scenario: summarize result
+    Given the agent target "svc"
+    When I run scenario "happy"
+    Then the result of tool "summarize" contains "summary"
+`,
+			wantPass: true,
+		},
+		{
+			name: "first call ordinal passes",
+			feature: `Feature: result-tool
+  Scenario: first search
+    Given the agent target "svc"
+    When I run scenario "happy"
+    Then the result of the first call to tool "search" equals "first-result"
+`,
+			wantPass: true,
+		},
+		{
+			name: "last call ordinal passes",
+			feature: `Feature: result-tool
+  Scenario: last search
+    Given the agent target "svc"
+    When I run scenario "happy"
+    Then the result of the last call to tool "search" equals "second-result"
+`,
+			wantPass: true,
+		},
+		{
+			name: "every call quantifier passes",
+			feature: `Feature: result-tool
+  Scenario: every search
+    Given the agent target "svc"
+    When I run scenario "happy"
+    Then the result of every call to tool "search" contains "result"
+`,
+			wantPass: true,
+		},
+		{
+			name: "any call quantifier passes",
+			feature: `Feature: result-tool
+  Scenario: any search
+    Given the agent target "svc"
+    When I run scenario "happy"
+    Then the result of any call to tool "search" contains "second"
+`,
+			wantPass: true,
+		},
+		{
+			name: "docstring json-contains passes",
+			feature: `Feature: result-tool
+  Scenario: summarize json
+    Given the agent target "svc"
+    When I run scenario "happy"
+    Then the result of tool "summarize" json-contains:
+      """
+      "the summary"
+      """
+`,
+			wantPass: false, // "the summary" is a plain string, not JSON-subset of itself-as-string; see note
+		},
+		{
+			name: "ambiguous bare tool form fails the suite",
+			feature: `Feature: result-tool
+  Scenario: ambiguous search
+    Given the agent target "svc"
+    When I run scenario "happy"
+    Then the result of tool "search" contains "result"
+`,
+			wantPass: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := buildEng(t, spanResultTrace())
+			var out bytes.Buffer
+			suite := godog.TestSuite{
+				ScenarioInitializer: Initializer(eng),
+				Options: &godog.Options{
+					Format:          "pretty",
+					Output:          &out,
+					FeatureContents: []godog.Feature{{Name: tt.name, Contents: []byte(tt.feature)}},
+				},
+			}
+			status := suite.Run()
+			if tt.wantPass && status != 0 {
+				t.Fatalf("expected passing suite, status=%d\n%s", status, out.String())
+			}
+			if !tt.wantPass && status == 0 {
+				t.Fatalf("expected failing suite, got 0\n%s", out.String())
+			}
+		})
+	}
+}
+
+func TestParseSpanSpec(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		slot    string
+		wantQ   comparator.Quant
+		wantIdx int
+		wantErr bool
+	}{
+		{"", comparator.QuantOne, 0, false},
+		{"the first call", comparator.QuantFirst, 0, false},
+		{"the last call", comparator.QuantLast, 0, false},
+		{"the 2nd call", comparator.QuantNth, 2, false},
+		{"the 1st", comparator.QuantNth, 1, false},
+		{"every call", comparator.QuantEvery, 0, false},
+		{"any span", comparator.QuantAny, 0, false},
+		{"the 0th call", 0, 0, true},
+		{"sideways call", 0, 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.slot, func(t *testing.T) {
+			t.Parallel()
+			q, idx, err := parseSpanSpec(tt.slot)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			if q != tt.wantQ || idx != tt.wantIdx {
+				t.Errorf("got (q=%d idx=%d), want (q=%d idx=%d)", q, idx, tt.wantQ, tt.wantIdx)
+			}
+		})
+	}
 }
 
 // shapeTrace: invoke_agent(root) → chat → {search, search, summarize(ERROR)}. IDs are
