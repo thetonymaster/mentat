@@ -15,6 +15,7 @@ type Config struct {
 	Poll         PollSpec          `yaml:"poll"`
 	Targets      map[string]Target `yaml:"targets"`
 	Pricing      Pricing           `yaml:"pricing"`
+	Expectations string            `yaml:"expectations"`
 }
 
 type Endpoint struct {
@@ -61,6 +62,9 @@ func Load(data []byte) (Config, error) {
 	}
 	if c.Store == "" {
 		c.Store = "tempo"
+	}
+	if c.Expectations == "" {
+		c.Expectations = "expectations"
 	}
 	for name, t := range c.Targets {
 		def, ok := defaultConcurrency[t.Adapter]

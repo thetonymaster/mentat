@@ -1,0 +1,5 @@
+name: bad-expectation
+description: meta - structurally impossible; invoke_agent root cannot be a child of a tool span
+clauses:
+  - child: "gen_ai.operation.name=invoke_agent"
+    of: "gen_ai.tool.name=search"

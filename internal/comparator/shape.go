@@ -49,6 +49,14 @@ type ShapeExpectation struct {
 	Count    *Count   // exists & fanout cardinality; nil ⇒ "at least 1"
 }
 
+// ShapePatternExpectation is a named bundle of shape clauses evaluated as a conjunction.
+// Each clause is a fully-formed ShapeExpectation (produced by the expectations loader, or
+// constructed directly in tests). Compare aggregates every failing clause into one Verdict.
+type ShapePatternExpectation struct {
+	Name    string
+	Clauses []ShapeExpectation
+}
+
 type shape struct{}
 
 // NewShape returns the structural ("shape") comparator. It reads Evidence.Trace only.
@@ -56,13 +64,23 @@ func NewShape() core.Comparator { return shape{} }
 func (shape) Name() string      { return "shape" }
 
 func (shape) Compare(_ context.Context, ev core.Evidence, e core.Expectation) (core.Verdict, error) {
-	exp, ok := e.(ShapeExpectation)
-	if !ok {
-		return core.Verdict{}, fmt.Errorf("shape: expectation must be ShapeExpectation, got %T", e)
-	}
 	if ev.Trace == nil {
 		return core.Verdict{}, fmt.Errorf("shape: Evidence.Trace is nil")
 	}
+	switch exp := e.(type) {
+	case ShapeExpectation:
+		return evalClause(ev.Trace, exp)
+	case ShapePatternExpectation:
+		return evalPattern(ev.Trace, exp)
+	default:
+		return core.Verdict{}, fmt.Errorf("shape: expectation must be ShapeExpectation or ShapePatternExpectation, got %T", e)
+	}
+}
+
+// evalClause validates and evaluates one structural assertion. This is the former body of
+// Compare, verbatim, except it takes the *trace.Trace directly (the nil check now lives in
+// Compare) — preserving the shipped inline behaviour exactly.
+func evalClause(tr *trace.Trace, exp ShapeExpectation) (core.Verdict, error) {
 	if len(exp.Subject) == 0 {
 		return core.Verdict{}, fmt.Errorf("shape: Subject selector is empty")
 	}
@@ -74,11 +92,11 @@ func (shape) Compare(_ context.Context, ev core.Evidence, e core.Expectation) (c
 	}
 	switch exp.Kind {
 	case "exists":
-		return shapeExists(ev.Trace, exp), nil
+		return shapeExists(tr, exp), nil
 	case "absent":
-		return shapeAbsent(ev.Trace, exp), nil
+		return shapeAbsent(tr, exp), nil
 	case "containment":
-		if err := validateShapeTraceIDs(ev.Trace); err != nil {
+		if err := validateShapeTraceIDs(tr); err != nil {
 			return core.Verdict{}, fmt.Errorf("shape: containment requires valid span IDs: %w", err)
 		}
 		if len(exp.Parent) == 0 {
@@ -87,9 +105,9 @@ func (shape) Compare(_ context.Context, ev core.Evidence, e core.Expectation) (c
 		if exp.Relation != "child" && exp.Relation != "descendant" {
 			return core.Verdict{}, fmt.Errorf("shape: containment Relation must be \"child\" or \"descendant\", got %q", exp.Relation)
 		}
-		return shapeContainment(ev.Trace, exp), nil
+		return shapeContainment(tr, exp), nil
 	case "fanout":
-		if err := validateShapeTraceIDs(ev.Trace); err != nil {
+		if err := validateShapeTraceIDs(tr); err != nil {
 			return core.Verdict{}, fmt.Errorf("shape: fanout requires valid span IDs: %w", err)
 		}
 		if len(exp.Parent) == 0 {
@@ -101,10 +119,36 @@ func (shape) Compare(_ context.Context, ev core.Evidence, e core.Expectation) (c
 		if exp.Relation != "" && exp.Relation != "child" {
 			return core.Verdict{}, fmt.Errorf("shape: fanout supports only direct children (v1); Relation %q not allowed", exp.Relation)
 		}
-		return shapeFanout(ev.Trace, exp), nil
+		return shapeFanout(tr, exp), nil
 	default:
 		return core.Verdict{}, fmt.Errorf("shape: unknown Kind %q", exp.Kind)
 	}
+}
+
+// evalPattern evaluates every clause and aggregates the reasons of all that fail. A clause
+// that errors (malformed) aborts with a hard error (author bug); a clause that fails its
+// behaviour contributes one Reasons element, prefixed with the pattern name, 1-based clause
+// index, and kind. The existing step `check` joins Reasons with "; " behind "shape failed: ".
+func evalPattern(tr *trace.Trace, exp ShapePatternExpectation) (core.Verdict, error) {
+	if len(exp.Clauses) == 0 {
+		return core.Verdict{}, fmt.Errorf("shape: pattern %q has no clauses", exp.Name)
+	}
+	var reasons []string
+	for i, c := range exp.Clauses {
+		v, err := evalClause(tr, c)
+		if err != nil {
+			return core.Verdict{}, fmt.Errorf("shape: pattern %q clause %d: %w", exp.Name, i+1, err)
+		}
+		if !v.Pass {
+			for _, r := range v.Reasons {
+				reasons = append(reasons, fmt.Sprintf("pattern %q clause %d (%s): %s", exp.Name, i+1, c.Kind, r))
+			}
+		}
+	}
+	if len(reasons) > 0 {
+		return core.Verdict{Pass: false, Reasons: reasons}, nil
+	}
+	return core.Verdict{Pass: true}, nil
 }
 
 // matchingSpans returns every span in the forest satisfying sel.

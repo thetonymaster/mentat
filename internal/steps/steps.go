@@ -22,6 +22,7 @@ var (
 	reRunsSatisfiesInline = regexp.MustCompile(`^the runs satisfy "([^"]*)"$`)
 	reRunsSatisfiesDoc    = regexp.MustCompile(`^the runs satisfy:$`)
 	reRunsTag             = regexp.MustCompile(`^@runs\((\d+)(?:,(parallel))?\)$`)
+	reMatchesShape        = regexp.MustCompile(`^the run matches shape "([^"]*)"$`)
 )
 
 type world struct {
@@ -78,6 +79,8 @@ func InitializerWithCollector(eng *engine.Engine, col *report.Collector) func(*g
 		sc.Step(`^a span matching "([^"]*)" has at least (\d+) children matching "([^"]*)"$`, w.shapeFanoutAtLeast)
 		sc.Step(`^a span matching "([^"]*)" has exactly (\d+) children matching "([^"]*)"$`, w.shapeFanoutExactly)
 
+		sc.Step(`^the run matches shape "([^"]*)"$`, w.matchesShape)
+
 		// §7: compile every CEL expression in the scenario before any step runs,
 		// so a malformed expectation fails before an expensive SUT is driven.
 		sc.Before(func(ctx context.Context, scenario *godog.Scenario) (context.Context, error) {
@@ -87,6 +90,9 @@ func InitializerWithCollector(eng *engine.Engine, col *report.Collector) func(*g
 			}
 			w.n, w.parallel = n, parallel
 			if err := w.precompileScenario(scenario.Steps); err != nil {
+				return ctx, err
+			}
+			if err := w.precheckShapePatterns(scenario.Steps); err != nil {
 				return ctx, err
 			}
 			return ctx, nil
@@ -375,6 +381,29 @@ func (w *world) shapeFanoutExactly(parent string, n int, child string) error {
 		return err
 	}
 	return w.check("shape", comparator.ShapeExpectation{Kind: "fanout", Subject: cs, Parent: ps, Relation: "child", Count: &comparator.Count{Op: "==", N: n}})
+}
+
+func (w *world) matchesShape(name string) error {
+	clauses, ok := w.eng.ShapePattern(name)
+	if !ok {
+		return fmt.Errorf("unknown shape pattern %q (no such pattern under the expectations dir)", name)
+	}
+	return w.check("shape", comparator.ShapePatternExpectation{Name: name, Clauses: clauses})
+}
+
+// precheckShapePatterns fails a scenario at init if it references a shape pattern that was
+// not loaded — before the SUT is driven, mirroring precompileScenario for CEL (§7).
+func (w *world) precheckShapePatterns(steps []*messages.PickleStep) error {
+	for _, st := range steps {
+		m := reMatchesShape.FindStringSubmatch(st.Text)
+		if m == nil {
+			continue
+		}
+		if _, ok := w.eng.ShapePattern(m[1]); !ok {
+			return fmt.Errorf("scenario-init: unknown shape pattern %q (no such pattern under the expectations dir)", m[1])
+		}
+	}
+	return nil
 }
 
 // precompileScenario compiles every "the run satisfies" and "the runs satisfy"
