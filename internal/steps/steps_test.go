@@ -873,6 +873,101 @@ func TestInitializer_CollectsFailingAggregateDetail(t *testing.T) {
 	}
 }
 
+// shapeTrace: invoke_agent(root) → chat → {search, search, summarize(ERROR)}. IDs are
+// set explicitly so shape's containment/fan-out matching works (LoadFixture omits IDs).
+func shapeTrace() *trace.Trace {
+	root := &trace.Span{ID: "root", Name: "invoke_agent", Attrs: map[string]string{genai.Op: genai.OpInvokeAgent}}
+	chat := &trace.Span{ID: "chat", ParentID: "root", Name: "chat", Attrs: map[string]string{genai.Op: genai.OpChat}}
+	mk := func(id, tool, status string) *trace.Span {
+		return &trace.Span{ID: id, ParentID: "chat", Name: "execute_tool " + tool, Status: status,
+			Attrs: map[string]string{genai.Op: genai.OpExecuteTool, genai.ToolName: tool}}
+	}
+	s1, s2, sum := mk("t1", "search", "OK"), mk("t2", "search", "OK"), mk("t3", "summarize", "ERROR")
+	return &trace.Trace{Roots: []*trace.Span{root}, Spans: []*trace.Span{root, chat, s1, s2, sum}}
+}
+
+func TestFeatureExercisesShapeGrammar(t *testing.T) {
+	cfg := config.Config{
+		OTLPEndpoint: "x",
+		Targets:      map[string]config.Target{"bot": {Adapter: "shell", Command: []string{"sh", "-c", "echo hi"}, MaxConcurrency: 1}},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "r"}}, nil).AnyTimes()
+	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(shapeTrace(), nil).AnyTimes()
+	cor := correlate.New(func() string { return "r" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+	eng, err := engine.Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("engine.Build: %v", err)
+	}
+
+	feature := `Feature: shape grammar
+  Scenario: structural assertions hold
+    Given the agent target "bot"
+    When I run scenario "happy"
+    Then a span matching "gen_ai.tool.name=search" exists
+    And no span matching "gen_ai.tool.name=delete" exists
+    And at least 2 spans match "gen_ai.tool.name=search"
+    And exactly 1 span matches "gen_ai.tool.name=summarize"
+    And a span matching "gen_ai.tool.name=search" is a child of a span matching "gen_ai.operation.name=chat"
+    And a span matching "gen_ai.tool.name=search" is a descendant of a span matching "gen_ai.operation.name=invoke_agent"
+    And a span matching "gen_ai.operation.name=chat" has at least 2 children matching "gen_ai.tool.name=search"
+    And a span matching "span.status=ERROR" exists
+`
+	var out bytes.Buffer
+	suite := godog.TestSuite{
+		ScenarioInitializer: Initializer(eng),
+		Options: &godog.Options{
+			Format:          "pretty",
+			Output:          &out,
+			FeatureContents: []godog.Feature{{Name: "shape", Contents: []byte(feature)}},
+		},
+	}
+	if status := suite.Run(); status != 0 {
+		t.Fatalf("expected passing suite, status=%d\n%s", status, out.String())
+	}
+}
+
+// TestFeatureGoesRedOnBadShape: invoke_agent is a root, so asserting it is a child of a
+// tool span must fail — the hermetic complement to the binary L3 meta-test (Task 6).
+func TestFeatureGoesRedOnBadShape(t *testing.T) {
+	cfg := config.Config{
+		OTLPEndpoint: "x",
+		Targets:      map[string]config.Target{"bot": {Adapter: "shell", Command: []string{"sh", "-c", "echo hi"}, MaxConcurrency: 1}},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "r"}}, nil).AnyTimes()
+	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(shapeTrace(), nil).AnyTimes()
+	cor := correlate.New(func() string { return "r" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+	eng, err := engine.Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("engine.Build: %v", err)
+	}
+
+	feature := `Feature: bad-shape
+  Scenario: impossible containment
+    Given the agent target "bot"
+    When I run scenario "any"
+    Then a span matching "gen_ai.operation.name=invoke_agent" is a child of a span matching "gen_ai.tool.name=search"
+`
+	var out bytes.Buffer
+	suite := godog.TestSuite{
+		ScenarioInitializer: Initializer(eng),
+		Options: &godog.Options{
+			Format:          "pretty",
+			Output:          &out,
+			FeatureContents: []godog.Feature{{Name: "bad-shape", Contents: []byte(feature)}},
+		},
+	}
+	if status := suite.Run(); status == 0 {
+		t.Fatalf("expected suite to fail (non-zero), but it passed\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "shape failed") {
+		t.Fatalf("expected output to contain \"shape failed\", got:\n%s", out.String())
+	}
+}
+
 // TestStepMethods exercises each step method that the happy-scenario godog run
 // does not reach, using a crafted Evidence so comparators have the data they need.
 func TestStepMethods(t *testing.T) {
