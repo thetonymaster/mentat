@@ -13,3 +13,15 @@ __pycache__/
 
 # Local
 .env
+
+# SpecKit — local tooling only (the constitution under .specify/memory/ stays tracked)
+/.claude/skills/speckit-*/
+/.specify/extensions/
+/.specify/extensions.yml
+/.specify/integrations/
+/.specify/integration.json
+/.specify/init-options.json
+/.specify/scripts/
+/.specify/templates/
+/.specify/workflows/
+/.specify/feature.json
