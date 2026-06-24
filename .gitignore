@@ -22,6 +22,7 @@ __pycache__/
 /.specify/integration.json
 /.specify/init-options.json
 /.specify/scripts/
-/.specify/templates/
+/.specify/templates/*
+!/.specify/templates/tasks-template.md
 /.specify/workflows/
 /.specify/feature.json
