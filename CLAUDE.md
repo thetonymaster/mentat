@@ -114,3 +114,8 @@ from Tempo, and run **comparators** that assert how it behaved and what it produ
 - `/traces` — query the local Tempo (the `deploy/` stack) by `test.run.id`, render
   `gen_ai.*` span forests and tool-call sequences. See `.claude/skills/traces`.
 - `/coverage` — run `go test` with coverage and enforce the 80% floor.
+
+<!-- SPECKIT START -->
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read the current plan
+<!-- SPECKIT END -->
