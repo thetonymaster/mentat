@@ -14,15 +14,7 @@ __pycache__/
 # Local
 .env
 
-# SpecKit — local tooling only (the constitution under .specify/memory/ stays tracked)
-/.claude/skills/speckit-*/
-/.specify/extensions/
-/.specify/extensions.yml
-/.specify/integrations/
-/.specify/integration.json
-/.specify/init-options.json
-/.specify/scripts/
-/.specify/templates/*
-!/.specify/templates/tasks-template.md
-/.specify/workflows/
+# SpecKit — tooling (skills, scripts, templates, extensions, workflows, integration
+# manifests) is TRACKED so it is present in every git worktree, not just the original
+# checkout. Only transient per-feature working state stays ignored.
 /.specify/feature.json
