@@ -55,6 +55,7 @@ func InitializerWithCollector(eng *engine.Engine, col *report.Collector) func(*g
 		sc.Step(`^I run the agent with prompt "([^"]*)"$`, w.runPrompt)
 		sc.Step(`^the agent calls tools in order:$`, w.toolsInOrder)
 		sc.Step(`^the tool "([^"]+)" is never called$`, w.toolNeverCalled)
+		sc.Step(`^the tool "([^"]+)" is called at most (\d+) times$`, w.toolCalledAtMost)
 		sc.Step(`^total tokens are under (\d+)$`, w.tokensUnder)
 		sc.Step(`^total cost is under ([0-9.]+) USD$`, w.costUnder)
 		sc.Step(`^total latency is under (\d+) ms$`, w.latencyUnder)
@@ -194,6 +195,10 @@ func (w *world) toolsInOrder(tbl *godog.Table) error {
 
 func (w *world) toolNeverCalled(name string) error {
 	return w.check("sequence", comparator.SequenceExpectation{Forbidden: []string{name}})
+}
+
+func (w *world) toolCalledAtMost(name string, n int) error {
+	return w.check("retries", comparator.RetriesExpectation{Tool: name, Max: n})
 }
 
 func (w *world) tokensUnder(n int) error {
