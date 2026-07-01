@@ -16,6 +16,19 @@ type Config struct {
 	Targets      map[string]Target `yaml:"targets"`
 	Pricing      Pricing           `yaml:"pricing"`
 	Expectations string            `yaml:"expectations"`
+	Judge        JudgeConfig       `yaml:"judge"`
+}
+
+// JudgeConfig configures the semantic (LLM-judge) result matcher. The whole block
+// is optional — a project that never writes `the result means` never needs it; the
+// defaults applied in Load make an omitted block valid.
+type JudgeConfig struct {
+	Backend string `yaml:"backend"` // default "claude"
+	Model   string `yaml:"model"`   // default "claude-opus-4-8"
+	Votes   int    `yaml:"votes"`   // default 1; best-of-N majority (odd N required)
+	// Temperature is applied only on models that accept it (Sonnet 4.6 / Haiku 4.5);
+	// omitted on Opus-tier. Optional knob, default 0.
+	Temperature float64 `yaml:"temperature"`
 }
 
 type Endpoint struct {
@@ -95,7 +108,37 @@ func Load(data []byte) (Config, error) {
 	if err := validatePricing(c.Pricing); err != nil {
 		return Config{}, err
 	}
+	if c.Judge.Backend == "" {
+		c.Judge.Backend = "claude"
+	}
+	if c.Judge.Model == "" {
+		c.Judge.Model = "claude-opus-4-8"
+	}
+	if c.Judge.Votes == 0 {
+		c.Judge.Votes = 1
+	}
+	if err := validateJudge(c.Judge); err != nil {
+		return Config{}, err
+	}
 	return c, nil
+}
+
+// validateJudge rejects a judge block that cannot yield a defined verdict: a vote
+// count below 1, or an even count above 1 (best-of-N majority is undefined on a
+// tie, so reject at load rather than only at runtime), or a temperature that is
+// negative or non-finite. This mirrors validatePricing — fail fast with a wrapped
+// error naming the offending value, never a silent fallback.
+func validateJudge(j JudgeConfig) error {
+	if j.Votes < 1 {
+		return fmt.Errorf("judge.votes must be >= 1, got %d", j.Votes)
+	}
+	if j.Votes > 1 && j.Votes%2 == 0 {
+		return fmt.Errorf("judge.votes must be odd, got %d (majority is undefined on an even-N tie)", j.Votes)
+	}
+	if j.Temperature < 0 || math.IsNaN(j.Temperature) || math.IsInf(j.Temperature, 0) {
+		return fmt.Errorf("judge.temperature must be finite and >= 0, got %v", j.Temperature)
+	}
+	return nil
 }
 
 // validatePricing rejects pricing entries that would silently skew the cost a

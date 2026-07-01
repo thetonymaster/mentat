@@ -155,6 +155,27 @@ type Matcher interface {
 	Match(ctx context.Context, ev Evidence, want, target string) (Verdict, error)
 }
 
+// Judge renders a single semantic verdict over two strings. It is a seam: the
+// default backend calls Claude, but it is swappable and gomock-able. It receives
+// NO Evidence / TraceStore / Driver — only the candidate and the expected meaning.
+type Judge interface {
+	Judge(ctx context.Context, req JudgeRequest) (JudgeVerdict, error)
+}
+
+// JudgeRequest is the matter to be judged. Plain strings keep the Judge transport-
+// and Evidence-free (Constitution I): the matcher extracts Candidate from
+// Evidence.Output and Expected from the expectation.
+type JudgeRequest struct {
+	Candidate string // the run's result content (Evidence.Output.Answer)
+	Expected  string // the author's expected meaning (from `the result means "..."`)
+}
+
+// JudgeVerdict is the structured answer — exactly match + reason (no confidence in v1).
+type JudgeVerdict struct {
+	Match  bool
+	Reason string // human-readable rationale; flows into Verdict.Reasons on a fail (FR-008)
+}
+
 // ExtractAnswer applies the project-wide convention: stdout is the result.
 func ExtractAnswer(stdout string) string { return strings.TrimSpace(stdout) }
 

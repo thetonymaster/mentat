@@ -118,4 +118,5 @@ from Tempo, and run **comparators** that assert how it behaved and what it produ
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
+at specs/001-semantic-judge/plan.md
 <!-- SPECKIT END -->

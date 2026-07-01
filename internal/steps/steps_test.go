@@ -21,6 +21,7 @@ import (
 	"github.com/thetonymaster/mentat/internal/correlate"
 	"github.com/thetonymaster/mentat/internal/engine"
 	"github.com/thetonymaster/mentat/internal/genai"
+	"github.com/thetonymaster/mentat/internal/registry"
 	"github.com/thetonymaster/mentat/internal/report"
 	"github.com/thetonymaster/mentat/internal/trace"
 )
@@ -1568,5 +1569,87 @@ func TestStepMethods(t *testing.T) {
 				t.Fatalf("got err=%v, wantErr=%v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestResultMeansStep proves the inline and docstring `the result means` steps
+// build ResultExpectation{Matcher:"semantic"} with the captured meaning as Want
+// and dispatch through the result comparator to the registered "semantic"
+// matcher — identical routing to the other result steps. Serial: engine.Build +
+// RegisterMatcher mutate package-level registry maps and each subtest drives a
+// gomock controller, so no t.Parallel().
+func TestResultMeansStep(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(w *world) error
+		want string
+	}{
+		{
+			name: "inline form",
+			call: func(w *world) error { return w.resultMeans("the answer confirms the booking") },
+			want: "the answer confirms the booking",
+		},
+		{
+			name: "docstring form",
+			call: func(w *world) error {
+				return w.resultMeansDoc(&godog.DocString{Content: "the answer\nspans multiple lines"})
+			},
+			want: "the answer\nspans multiple lines",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+
+			eng := buildEng(t, happyTrace())
+			// engine.Build (inside buildEng) re-registers the real Claude-backed
+			// "semantic" matcher into the global registry, clobbering any stand-in.
+			// Register the mock AFTER Build so it wins at dispatch time.
+			mockMatcher := mocks.NewMockMatcher(ctrl)
+			// The result comparator resolves the matcher by name and invokes only
+			// Match(ctx, ev, want, target); it never calls Name(). Asserting the
+			// captured meaning arrives as `want` is the whole point of this test.
+			mockMatcher.EXPECT().
+				Match(gomock.Any(), gomock.Any(), tt.want, gomock.Any()).
+				Return(core.Verdict{Pass: true}, nil)
+			registry.RegisterMatcher("semantic", mockMatcher)
+
+			w := &world{eng: eng}
+			w.ev = core.Evidence{Output: core.Output{Answer: "done"}}
+
+			if err := tt.call(w); err != nil {
+				t.Fatalf("step returned error: %v", err)
+			}
+			// ctrl's t.Cleanup asserts Match was called exactly once with tt.want,
+			// proving the step routed through w.check("result", ...) with
+			// Matcher:"semantic" and the captured meaning as Want.
+		})
+	}
+}
+
+// TestResultMeansDocNil mirrors the other docstring result steps: a nil docstring
+// is a descriptive error, not a panic or a silent pass.
+func TestResultMeansDocNil(t *testing.T) {
+	w := &world{}
+	if err := w.resultMeansDoc(nil); err == nil {
+		t.Fatal("want error for nil docstring, got nil")
+	}
+}
+
+// TestResultMeansRejectedInMultirunScenario proves the existing world.check
+// @runs(N>1) guard hard-errors for the single-run `the result means` step,
+// directing the author to "the runs satisfy" — the same error every other
+// single-run result step produces under @runs(N>1).
+func TestResultMeansRejectedInMultirunScenario(t *testing.T) {
+	w := &world{n: 2}
+	err := w.resultMeans("the answer is correct")
+	if err == nil {
+		t.Fatal("want @runs(2) guard error for single-run step, got nil")
+	}
+	if !strings.Contains(err.Error(), "@runs(2)") {
+		t.Fatalf("expected error to mention @runs(2), got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "the runs satisfy") {
+		t.Fatalf(`expected error to mention "the runs satisfy", got: %v`, err)
 	}
 }
