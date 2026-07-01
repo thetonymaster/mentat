@@ -37,7 +37,11 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator) (*Engine,
 	// Wire the LLM-judge seam and the "semantic" result matcher. The judge
 	// backend defaults to "claude" when unset (the documented default, resolved
 	// here) so zero-value/struct-literal cfgs keep building; only a non-empty,
-	// unregistered backend is the FR-005 hard error. Votes < 1 collapses to 1.
+	// unregistered backend is the FR-005 hard error. Build is an ingestion
+	// boundary (callable directly with a raw config.Config, bypassing
+	// config.Load's validateJudge), so votes are validated the same way here:
+	// unset (0) defaults to 1, but a negative or even value is a loud error
+	// rather than a silently-coerced guess (Constitution IV, no silent fallbacks).
 	judge.RegisterBuiltins()
 	backend := cfg.Judge.Backend
 	if backend == "" {
@@ -52,8 +56,11 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator) (*Engine,
 		return nil, fmt.Errorf("build judge %q: %w", backend, err)
 	}
 	votes := cfg.Judge.Votes
-	if votes < 1 {
+	if votes == 0 {
 		votes = 1
+	}
+	if votes < 1 || votes%2 == 0 {
+		return nil, fmt.Errorf("judge.votes must be a positive odd integer, got %d", votes)
 	}
 	registry.RegisterMatcher("semantic", comparator.NewSemantic(j, votes))
 

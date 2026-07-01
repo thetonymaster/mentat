@@ -25,6 +25,7 @@ func e2eModel() string {
 // a paraphrase-but-correct candidate matches; a contradictory candidate does not and
 // carries a reason. Requires ANTHROPIC_API_KEY; skipped otherwise.
 func TestClaudeJudge_Live(t *testing.T) {
+	t.Parallel()
 	if os.Getenv(apiKeyEnv) == "" {
 		t.Skipf("%s unset; skipping live judge test", apiKeyEnv)
 	}
@@ -56,6 +57,7 @@ func TestClaudeJudge_Live(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/thetonymaster/mentat/internal/core"
 )
 
@@ -43,13 +45,30 @@ func (m semanticMatcher) Match(ctx context.Context, ev core.Evidence, want, _ st
 	}
 
 	req := core.JudgeRequest{Candidate: ev.Output.Answer, Expected: want}
+
+	// Run the best-of-N votes concurrently: for a network-backed judge this keeps
+	// per-check latency at ~one round-trip instead of N. Results land in an
+	// index-ordered slice so the "first no-match reason" below is deterministically
+	// the lowest-index no-match vote — independent of goroutine completion order.
+	results := make([]core.JudgeVerdict, votes)
+	g, gctx := errgroup.WithContext(ctx)
+	for i := 0; i < votes; i++ {
+		g.Go(func() error {
+			jv, err := m.judge.Judge(gctx, req)
+			if err != nil {
+				return fmt.Errorf("semantic: judge vote %d/%d: %w", i+1, votes, err)
+			}
+			results[i] = jv
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return core.Verdict{}, err
+	}
+
 	var matchCount, noMatchCount int
 	var noMatchReason string
-	for i := 0; i < votes; i++ {
-		jv, err := m.judge.Judge(ctx, req)
-		if err != nil {
-			return core.Verdict{}, fmt.Errorf("semantic: judge vote %d/%d: %w", i+1, votes, err)
-		}
+	for _, jv := range results {
 		if jv.Match {
 			matchCount++
 			continue

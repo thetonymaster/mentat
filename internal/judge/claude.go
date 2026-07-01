@@ -76,7 +76,6 @@ func (j *claudeJudge) Judge(ctx context.Context, req core.JudgeRequest) (core.Ju
 		return core.JudgeVerdict{}, fmt.Errorf("judge.temperature=%v is set but model %q does not accept a temperature parameter (Opus-tier/Fable reject it); remove judge.temperature or use a Sonnet/Haiku model", j.temperature, j.model)
 	}
 
-	disabled := anthropic.NewThinkingConfigDisabledParam()
 	params := anthropic.MessageNewParams{
 		Model:     j.model,
 		MaxTokens: verdictMaxTokens,
@@ -86,9 +85,14 @@ func (j *claudeJudge) Judge(ctx context.Context, req core.JudgeRequest) (core.Ju
 		OutputConfig: anthropic.OutputConfigParam{
 			Format: anthropic.JSONOutputFormatParam{Schema: verdictSchema},
 		},
-		// Thinking disabled: with structured output the response is the verdict JSON,
-		// so reasoning tokens add only latency (research Decision 4).
-		Thinking: anthropic.ThinkingConfigParamUnion{OfDisabled: &disabled},
+	}
+	// Thinking disabled: with structured output the response is the verdict JSON, so
+	// reasoning tokens add only latency (research Decision 4). Fable/Mythos are
+	// always-on-thinking and reject an explicit thinking:disabled with HTTP 400, so
+	// send the param only on models that accept it; otherwise leave it unset.
+	if acceptsDisabledThinking(j.model) {
+		disabled := anthropic.NewThinkingConfigDisabledParam()
+		params.Thinking = anthropic.ThinkingConfigParamUnion{OfDisabled: &disabled}
 	}
 	// temperature is rejected (HTTP 400) on Opus-tier / Fable; send it only on models
 	// that accept it (research Decision 4).
@@ -147,6 +151,27 @@ var temperatureAcceptingFamilies = []string{"sonnet", "haiku"}
 // and Fable are absent and therefore reject it (research Decision 4).
 func acceptsTemperature(model string) bool {
 	for _, family := range temperatureAcceptingFamilies {
+		if strings.Contains(model, family) {
+			return true
+		}
+	}
+	return false
+}
+
+// disabledThinkingFamilies are the Claude model families that accept an explicit
+// thinking:{type:"disabled"}. Fable/Mythos are always-on-thinking and return HTTP 400
+// on it, so they are absent and thus OMIT the param — the safe direction (omitting
+// merely uses the model's default adaptive thinking, never a hard error). Matched as
+// substrings, mirroring temperatureAcceptingFamilies. Kept SEPARATE from that list
+// because Opus accepts disabled-thinking but rejects temperature.
+var disabledThinkingFamilies = []string{"opus", "sonnet", "haiku"}
+
+// acceptsDisabledThinking reports whether the model accepts thinking:{type:"disabled"}.
+// It is a deliberate allowlist: sending it to a rejecting model (Fable/Mythos) is a
+// hard HTTP 400, while omitting it merely uses that model's default adaptive thinking.
+// So an unknown/unlisted model OMITS the param by design — the safe direction.
+func acceptsDisabledThinking(model string) bool {
+	for _, family := range disabledThinkingFamilies {
 		if strings.Contains(model, family) {
 			return true
 		}

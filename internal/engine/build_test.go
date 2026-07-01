@@ -68,14 +68,15 @@ func TestBuildWiresSemanticJudge(t *testing.T) {
 	tests := []struct {
 		name            string
 		backend         string
+		votes           int
 		wantErr         bool
-		wantErrContains string
+		wantErrContains []string
 	}{
 		{
 			name:            "unknown backend is a hard error",
 			backend:         "definitely-not-a-backend",
 			wantErr:         true,
-			wantErrContains: "unknown judge backend",
+			wantErrContains: []string{"unknown judge backend", "definitely-not-a-backend"},
 		},
 		{
 			name:    "empty backend defaults to claude and wires semantic matcher",
@@ -85,21 +86,40 @@ func TestBuildWiresSemanticJudge(t *testing.T) {
 			name:    "explicit claude backend wires semantic matcher",
 			backend: "claude",
 		},
+		{
+			name:    "odd votes wires semantic matcher",
+			backend: "claude",
+			votes:   3,
+		},
+		{
+			name:            "even votes is a hard error naming judge.votes and the value",
+			backend:         "claude",
+			votes:           4,
+			wantErr:         true,
+			wantErrContains: []string{"judge.votes", "4"},
+		},
+		{
+			name:            "negative votes is a hard error naming judge.votes and the value",
+			backend:         "claude",
+			votes:           -1,
+			wantErr:         true,
+			wantErrContains: []string{"judge.votes", "-1"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := config.Config{OTLPEndpoint: "x"}
 			cfg.Judge.Backend = tt.backend
+			cfg.Judge.Votes = tt.votes
 			_, err := Build(cfg, nil, nil) // Build does not call st/cor; nil is safe
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("Build() err = %v, wantErr %v", err, tt.wantErr)
 			}
 			if tt.wantErr {
-				if !strings.Contains(err.Error(), tt.wantErrContains) {
-					t.Errorf("Build() err = %q, want substring %q", err, tt.wantErrContains)
-				}
-				if !strings.Contains(err.Error(), tt.backend) {
-					t.Errorf("Build() err = %q, want it to name the bad backend %q", err, tt.backend)
+				for _, want := range tt.wantErrContains {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("Build() err = %q, want substring %q", err, want)
+					}
 				}
 				return
 			}

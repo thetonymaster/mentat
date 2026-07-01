@@ -287,6 +287,48 @@ func TestClaudeJudge_TemperatureGating(t *testing.T) {
 	}
 }
 
+func TestClaudeJudge_ThinkingGating(t *testing.T) {
+	tests := []struct {
+		name         string
+		model        string
+		wantThinking bool // whether the request body should carry a "thinking" field
+	}{
+		{name: "opus sends thinking disabled", model: "claude-opus-4-8", wantThinking: true},
+		{name: "sonnet sends thinking disabled", model: "claude-sonnet-4-6", wantThinking: true},
+		{name: "haiku sends thinking disabled", model: "claude-haiku-4-5", wantThinking: true},
+		{name: "fable omits thinking", model: "claude-fable-5", wantThinking: false},
+		{name: "mythos omits thinking", model: "claude-mythos-5", wantThinking: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Serial by design: t.Setenv panics under t.Parallel().
+			t.Setenv("ANTHROPIC_API_KEY", "test-key")
+			var reqBody []byte
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				reqBody, _ = io.ReadAll(r.Body)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = io.WriteString(w, messageJSON("end_turn", `{"match":true,"reason":"ok"}`))
+			}))
+			t.Cleanup(srv.Close)
+
+			j := newTestJudge(t, srv.URL, tt.model, 0)
+			if _, err := j.Judge(context.Background(), core.JudgeRequest{Candidate: "c", Expected: "e"}); err != nil {
+				t.Fatalf("Judge returned error: %v", err)
+			}
+
+			hasThinking := bytes.Contains(reqBody, []byte(`"thinking"`))
+			if hasThinking != tt.wantThinking {
+				t.Fatalf("thinking present=%v want=%v; body=%s", hasThinking, tt.wantThinking, reqBody)
+			}
+			// When thinking is sent it must be the disabled config, not enabled.
+			if tt.wantThinking && !bytes.Contains(reqBody, []byte(`"disabled"`)) {
+				t.Fatalf("thinking field is not the disabled config; body=%s", reqBody)
+			}
+		})
+	}
+}
+
 func TestClaudeJudge_ContextCanceled(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-key")
 	var calls int32
