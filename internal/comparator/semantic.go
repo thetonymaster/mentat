@@ -29,6 +29,15 @@ func NewSemantic(j core.Judge, votes int) core.Matcher {
 
 func (semanticMatcher) Name() string { return "semantic" }
 
+// maxConcurrentVotes bounds the goroutine fan-out in Match. Best-of-N voting is
+// realistically small (1/3/5/7) and runs fully concurrent under this cap; a
+// pathological judge.votes would otherwise spawn that many simultaneous judge
+// round-trips per checked step and, across concurrently-running scenarios, risk
+// thundering-herd rate limits and cost spikes against the backend. Larger N still
+// runs to completion, just in bounded waves — the index-ordered results keep the
+// verdict deterministic regardless of the cap.
+const maxConcurrentVotes = 8
+
 // Match runs the judge `votes` times over (Candidate=ev.Output.Answer,
 // Expected=want) and returns the strict-majority verdict. target is unused in v1
 // (final answer only). A blank want fails fast before any judge call (FR-013);
@@ -50,8 +59,11 @@ func (m semanticMatcher) Match(ctx context.Context, ev core.Evidence, want, _ st
 	// per-check latency at ~one round-trip instead of N. Results land in an
 	// index-ordered slice so the "first no-match reason" below is deterministically
 	// the lowest-index no-match vote — independent of goroutine completion order.
+	// SetLimit bounds the fan-out (see maxConcurrentVotes); g.Go then blocks the
+	// dispatch loop once the cap is reached, pacing large N into waves.
 	results := make([]core.JudgeVerdict, votes)
 	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(maxConcurrentVotes)
 	for i := 0; i < votes; i++ {
 		g.Go(func() error {
 			jv, err := m.judge.Judge(gctx, req)
