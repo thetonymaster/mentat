@@ -338,6 +338,45 @@ func (mr *MockMatcherMockRecorder) Name() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Name", reflect.TypeOf((*MockMatcher)(nil).Name))
 }
 
+// MockJudge is a mock of Judge interface.
+type MockJudge struct {
+	ctrl     *gomock.Controller
+	recorder *MockJudgeMockRecorder
+	isgomock struct{}
+}
+
+// MockJudgeMockRecorder is the mock recorder for MockJudge.
+type MockJudgeMockRecorder struct {
+	mock *MockJudge
+}
+
+// NewMockJudge creates a new mock instance.
+func NewMockJudge(ctrl *gomock.Controller) *MockJudge {
+	mock := &MockJudge{ctrl: ctrl}
+	mock.recorder = &MockJudgeMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockJudge) EXPECT() *MockJudgeMockRecorder {
+	return m.recorder
+}
+
+// Judge mocks base method.
+func (m *MockJudge) Judge(ctx context.Context, req core.JudgeRequest) (core.JudgeVerdict, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Judge", ctx, req)
+	ret0, _ := ret[0].(core.JudgeVerdict)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Judge indicates an expected call of Judge.
+func (mr *MockJudgeMockRecorder) Judge(ctx, req any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Judge", reflect.TypeOf((*MockJudge)(nil).Judge), ctx, req)
+}
+
 // MockReporter is a mock of Reporter interface.
 type MockReporter struct {
 	ctrl     *gomock.Controller

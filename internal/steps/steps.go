@@ -63,6 +63,8 @@ func InitializerWithCollector(eng *engine.Engine, col *report.Collector) func(*g
 		sc.Step(`^the result equals "([^"]*)"$`, w.resultEquals)
 		sc.Step(`^the response status is (\d+)$`, w.responseStatus)
 		sc.Step(`^the result matches regex "([^"]*)"$`, w.resultMatchesRegex)
+		sc.Step(`^the result means "([^"]*)"$`, w.resultMeans)
+		sc.Step(`^the result means:$`, w.resultMeansDoc)
 		sc.Step(`^the services are called in order:$`, w.servicesInOrder)
 		sc.Step(`^the service "([^"]+)" is never called$`, w.serviceNeverCalled)
 		sc.Step(`^the response body json-contains:$`, w.responseBodyJSONContains)
@@ -354,6 +356,22 @@ func (w *world) resultEquals(s string) error {
 
 func (w *world) resultMatchesRegex(re string) error {
 	return w.check("result", comparator.ResultExpectation{Matcher: "regex", Want: re})
+}
+
+// resultMeans routes the inline `the result means "..."` step through the result
+// comparator's "semantic" matcher — identical path to contains/equals/regex. The
+// matcher's own empty-want guard surfaces a blank meaning as a hard error (FR-013).
+func (w *world) resultMeans(s string) error {
+	return w.check("result", comparator.ResultExpectation{Matcher: "semantic", Want: s})
+}
+
+// resultMeansDoc routes the docstring `the result means:` step through the result
+// comparator's "semantic" matcher.
+func (w *world) resultMeansDoc(doc *godog.DocString) error {
+	if doc == nil {
+		return fmt.Errorf("the result means: expected a docstring meaning, got none")
+	}
+	return w.check("result", comparator.ResultExpectation{Matcher: "semantic", Want: doc.Content})
 }
 
 func (w *world) responseStatus(code int) error {

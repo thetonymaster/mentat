@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/thetonymaster/mentat/internal/config"
+	"github.com/thetonymaster/mentat/internal/registry"
 )
 
 func TestBuildLoadsShapePatterns(t *testing.T) {
@@ -55,6 +56,57 @@ func TestBuildRejectsMalformedPattern(t *testing.T) {
 	// not propagated raw (CLAUDE.md error-wrapping convention).
 	if !strings.Contains(err.Error(), "load expectations from") || !strings.Contains(err.Error(), dir) {
 		t.Errorf("Build() error = %q, want it wrapped with %q and dir %q", err, "load expectations from", dir)
+	}
+}
+
+// TestBuildWiresSemanticJudge asserts the composition root resolves the judge
+// backend and registers the "semantic" result matcher (US3-AC1/AC2/AC3, FR-005).
+//
+// No t.Parallel(): Build mutates the registry's package-global maps; running the
+// rows concurrently would data-race those writes.
+func TestBuildWiresSemanticJudge(t *testing.T) {
+	tests := []struct {
+		name            string
+		backend         string
+		wantErr         bool
+		wantErrContains string
+	}{
+		{
+			name:            "unknown backend is a hard error",
+			backend:         "definitely-not-a-backend",
+			wantErr:         true,
+			wantErrContains: "unknown judge backend",
+		},
+		{
+			name:    "empty backend defaults to claude and wires semantic matcher",
+			backend: "",
+		},
+		{
+			name:    "explicit claude backend wires semantic matcher",
+			backend: "claude",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.Config{OTLPEndpoint: "x"}
+			cfg.Judge.Backend = tt.backend
+			_, err := Build(cfg, nil, nil) // Build does not call st/cor; nil is safe
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Build() err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				if !strings.Contains(err.Error(), tt.wantErrContains) {
+					t.Errorf("Build() err = %q, want substring %q", err, tt.wantErrContains)
+				}
+				if !strings.Contains(err.Error(), tt.backend) {
+					t.Errorf("Build() err = %q, want it to name the bad backend %q", err, tt.backend)
+				}
+				return
+			}
+			if _, ok := registry.Matcher("semantic"); !ok {
+				t.Errorf("registry.Matcher(%q) = false after Build, want it wired", "semantic")
+			}
+		})
 	}
 }
 

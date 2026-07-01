@@ -229,6 +229,160 @@ func TestLoadExpectationsDefault(t *testing.T) {
 	}
 }
 
+func TestLoadJudgeDefaults(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		yaml        string
+		wantBackend string
+		wantModel   string
+		wantVotes   int
+		wantTemp    float64
+	}{
+		{
+			name:        "block omitted entirely applies all defaults",
+			yaml:        "store: tempo\n",
+			wantBackend: "claude",
+			wantModel:   "claude-opus-4-8",
+			wantVotes:   1,
+			wantTemp:    0,
+		},
+		{
+			name:        "empty backend defaults to claude",
+			yaml:        "judge:\n  model: claude-haiku-4-5\n  votes: 3\n",
+			wantBackend: "claude",
+			wantModel:   "claude-haiku-4-5",
+			wantVotes:   3,
+			wantTemp:    0,
+		},
+		{
+			name:        "empty model defaults to claude-opus-4-8",
+			yaml:        "judge:\n  backend: claude\n  votes: 1\n",
+			wantBackend: "claude",
+			wantModel:   "claude-opus-4-8",
+			wantVotes:   1,
+			wantTemp:    0,
+		},
+		{
+			name:        "zero votes defaults to 1",
+			yaml:        "judge:\n  backend: claude\n  model: claude-opus-4-8\n",
+			wantBackend: "claude",
+			wantModel:   "claude-opus-4-8",
+			wantVotes:   1,
+			wantTemp:    0,
+		},
+		{
+			name:        "fully specified valid block round-trips",
+			yaml:        "judge:\n  backend: claude\n  model: claude-sonnet-4-6\n  votes: 5\n  temperature: 0.7\n",
+			wantBackend: "claude",
+			wantModel:   "claude-sonnet-4-6",
+			wantVotes:   5,
+			wantTemp:    0.7,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c, err := Load([]byte(tt.yaml))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if c.Judge.Backend != tt.wantBackend {
+				t.Errorf("Judge.Backend = %q, want %q", c.Judge.Backend, tt.wantBackend)
+			}
+			if c.Judge.Model != tt.wantModel {
+				t.Errorf("Judge.Model = %q, want %q", c.Judge.Model, tt.wantModel)
+			}
+			if c.Judge.Votes != tt.wantVotes {
+				t.Errorf("Judge.Votes = %d, want %d", c.Judge.Votes, tt.wantVotes)
+			}
+			if c.Judge.Temperature != tt.wantTemp {
+				t.Errorf("Judge.Temperature = %v, want %v", c.Judge.Temperature, tt.wantTemp)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsInvalidJudge(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		yaml    string
+		wantErr bool
+		errSub  string
+	}{
+		{
+			name:    "negative votes rejected",
+			yaml:    "judge:\n  votes: -1\n",
+			wantErr: true,
+			errSub:  "judge.votes must be >= 1, got -1",
+		},
+		{
+			name:    "even votes 2 rejected",
+			yaml:    "judge:\n  votes: 2\n",
+			wantErr: true,
+			errSub:  "judge.votes must be odd, got 2",
+		},
+		{
+			name:    "even votes 4 rejected",
+			yaml:    "judge:\n  votes: 4\n",
+			wantErr: true,
+			errSub:  "judge.votes must be odd, got 4",
+		},
+		{
+			name:    "odd votes 3 allowed",
+			yaml:    "judge:\n  votes: 3\n",
+			wantErr: false,
+		},
+		{
+			name:    "odd votes 5 allowed",
+			yaml:    "judge:\n  votes: 5\n",
+			wantErr: false,
+		},
+		{
+			name:    "negative temperature rejected",
+			yaml:    "judge:\n  temperature: -0.5\n",
+			wantErr: true,
+			errSub:  "judge.temperature must be finite and >= 0, got -0.5",
+		},
+		{
+			name:    "NaN temperature rejected",
+			yaml:    "judge:\n  temperature: .nan\n",
+			wantErr: true,
+			errSub:  "judge.temperature must be finite and >= 0",
+		},
+		{
+			name:    "infinite temperature rejected",
+			yaml:    "judge:\n  temperature: .inf\n",
+			wantErr: true,
+			errSub:  "judge.temperature must be finite and >= 0",
+		},
+		{
+			name:    "zero temperature allowed",
+			yaml:    "judge:\n  votes: 1\n  temperature: 0\n",
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Load([]byte(tt.yaml))
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), tt.errSub) {
+					t.Fatalf("error %q does not contain %q", err.Error(), tt.errSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+		})
+	}
+}
+
 func TestLoadHTTPTarget(t *testing.T) {
 	tests := []struct {
 		name        string

@@ -35,6 +35,7 @@ func resetRegistries(t *testing.T) {
 	matchers = map[string]core.Matcher{}
 	reporters = map[string]core.Reporter{}
 	stores = map[string]StoreFactory{}
+	judges = map[string]JudgeFactory{}
 	t.Cleanup(func() {
 		comparators = map[string]core.Comparator{}
 		aggregateComparators = map[string]core.AggregateComparator{}
@@ -42,6 +43,7 @@ func resetRegistries(t *testing.T) {
 		matchers = map[string]core.Matcher{}
 		reporters = map[string]core.Reporter{}
 		stores = map[string]StoreFactory{}
+		judges = map[string]JudgeFactory{}
 	})
 }
 
@@ -201,6 +203,40 @@ func TestStoreRegistry(t *testing.T) {
 			f, ok := Store(tt.lookup)
 			if ok != tt.wantOK {
 				t.Fatalf("Store(%q) ok=%v, want %v", tt.lookup, ok, tt.wantOK)
+			}
+			if !ok {
+				return
+			}
+			got, err := f(config.Config{})
+			if err != nil {
+				t.Fatalf("factory error: %v", err)
+			}
+			if got != want {
+				t.Fatalf("factory returned %p, want %p", got, want)
+			}
+		})
+	}
+}
+
+func TestJudgeRegistry(t *testing.T) {
+	resetRegistries(t)
+	want := mocks.NewMockJudge(gomock.NewController(t))
+	tests := []struct {
+		name    string
+		regName string
+		lookup  string
+		wantOK  bool
+	}{
+		{name: "round-trip", regName: "claude-test", lookup: "claude-test", wantOK: true},
+		{name: "miss", regName: "claude-test", lookup: "does-not-exist", wantOK: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var registered JudgeFactory = func(config.Config) (core.Judge, error) { return want, nil }
+			RegisterJudge(tt.regName, registered)
+			f, ok := Judge(tt.lookup)
+			if ok != tt.wantOK {
+				t.Fatalf("Judge(%q) ok=%v, want %v", tt.lookup, ok, tt.wantOK)
 			}
 			if !ok {
 				return

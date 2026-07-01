@@ -5,7 +5,9 @@ import (
 	"github.com/thetonymaster/mentat/internal/core"
 )
 
-// Stateless seams register instances; the stateful store seam registers factories (see StoreFactory).
+// Stateless seams register instances; stateful seams register factories: the store
+// seam (endpoints, clients — see StoreFactory) and the judge seam (model clients,
+// credentials — see JudgeFactory).
 var (
 	comparators          = map[string]core.Comparator{}
 	aggregateComparators = map[string]core.AggregateComparator{}
@@ -25,6 +27,18 @@ func RegisterStore(name string, f StoreFactory) { stores[name] = f }
 
 // Store resolves a registered TraceStore factory by name.
 func Store(name string) (StoreFactory, bool) { f, ok := stores[name]; return f, ok }
+
+// JudgeFactory builds a Judge from config. Judges are stateful (model clients,
+// credentials), so the judge seam registers factories rather than shared instances.
+type JudgeFactory func(cfg config.Config) (core.Judge, error)
+
+var judges = map[string]JudgeFactory{}
+
+// RegisterJudge registers a Judge factory under the given name.
+func RegisterJudge(name string, f JudgeFactory) { judges[name] = f }
+
+// Judge resolves a registered Judge factory by name.
+func Judge(name string) (JudgeFactory, bool) { f, ok := judges[name]; return f, ok }
 
 // RegisterComparator registers a Comparator under the given name.
 func RegisterComparator(name string, c core.Comparator) { comparators[name] = c }
