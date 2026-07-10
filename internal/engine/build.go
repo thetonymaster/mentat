@@ -30,6 +30,7 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator) (*Engine,
 	registry.RegisterComparator("result", comparator.NewResult())
 	registry.RegisterComparator("cel", comparator.NewCEL(pricing))
 	registry.RegisterComparator("shape", comparator.NewShape())
+	registry.RegisterComparator("retries", comparator.NewRetries())
 	registry.RegisterAggregateComparator("aggregate-cel", comparator.NewAggregateCEL(pricing))
 	comparator.RegisterBuiltinMatchers()
 	report.RegisterBuiltins()
