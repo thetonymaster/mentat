@@ -1,18 +1,19 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/cucumber/godog"
 	"github.com/google/uuid"
 	"github.com/thetonymaster/mentat/internal/config"
-	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/correlate"
 	"github.com/thetonymaster/mentat/internal/engine"
-	"github.com/thetonymaster/mentat/internal/registry"
 	"github.com/thetonymaster/mentat/internal/report"
 	"github.com/thetonymaster/mentat/internal/steps"
 )
@@ -64,38 +65,36 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Signal handling (feature 003, FR-006): the first SIGINT/SIGTERM cancels the
+	// suite context so in-flight work stops and every configured report is still
+	// written; a second signal restores the default handler and force-quits.
+	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-sigCtx.Done()
+		stop() // a second signal now terminates the process by default
+	}()
+
 	opts := godog.Options{
-		Format:        "pretty",
-		Paths:         paths,
-		Tags:          *tags,
-		Concurrency:   *concurrency,
-		Output:        os.Stdout,
-		StopOnFailure: *failFast,
-	}
-	var junitFile *os.File
-	if *junit != "" {
-		opts.Format = "junit"
-		f, err := os.Create(*junit)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "mentat: create junit file %q: %v\n", *junit, err)
-			os.Exit(1)
-		}
-		junitFile = f
-		opts.Output = f
+		Format:         "pretty",
+		Paths:          paths,
+		Tags:           *tags,
+		Concurrency:    *concurrency,
+		Output:         os.Stdout,
+		StopOnFailure:  *failFast,
+		DefaultContext: sigCtx,
 	}
 
 	col := report.NewCollector()
 	suite := godog.TestSuite{ScenarioInitializer: steps.InitializerWithCollector(eng, col), Options: &opts}
 	started := time.Now()
 	code := suite.Run()
-	if junitFile != nil {
-		if err := junitFile.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "mentat: close junit file %q: %v\n", *junit, err)
-			if code == 0 {
-				code = 1
-			}
-		}
-	}
+	interrupted := sigCtx.Err() != nil
+
+	// Always emit the configured reports — the scenarios that completed plus the
+	// interrupted marker — written atomically (temp+rename) so a signal arriving
+	// mid-write never leaves a truncated file. JUnit is emitted here from the
+	// collector too (not godog's format), so it carries the interrupted property.
 	targets := map[string]string{}
 	if *reportJSON != "" {
 		targets["json"] = *reportJSON
@@ -103,13 +102,22 @@ func main() {
 	if *reportHTML != "" {
 		targets["html"] = *reportHTML
 	}
+	if *junit != "" {
+		targets["junit"] = *junit
+	}
 	if len(targets) > 0 {
-		if err := emitReports(col.Report(started, time.Since(started)), targets); err != nil {
+		if err := report.EmitReports(col.Report(started, time.Since(started), interrupted), targets); err != nil {
 			fmt.Fprintln(os.Stderr, "mentat:", err)
 			if code == 0 {
 				code = 1
 			}
 		}
+	}
+
+	if interrupted {
+		// 128 + SIGINT(2) = 130, the conventional "interrupted" exit code — distinct
+		// from a plain assertion failure (1) so CI can tell cancellation from a red suite.
+		os.Exit(130)
 	}
 	os.Exit(code)
 }
@@ -133,28 +141,4 @@ func orDefault(n, def int) int {
 		return def
 	}
 	return n
-}
-
-// emitReports writes each selected report. A failure (unknown reporter, create/encode
-// error) is returned — never swallowed (invariant #4). The caller turns it into a
-// non-zero exit.
-func emitReports(rep core.RunReport, targets map[string]string) error {
-	for name, path := range targets {
-		r, ok := registry.Reporter(name)
-		if !ok {
-			return fmt.Errorf("unknown reporter %q", name)
-		}
-		f, err := os.Create(path)
-		if err != nil {
-			return fmt.Errorf("create %s report %q: %w", name, path, err)
-		}
-		if err := r.Report(rep, f); err != nil {
-			_ = f.Close() // best-effort; the Report error takes precedence
-			return fmt.Errorf("writing %s report %q: %w", name, path, err)
-		}
-		if err := f.Close(); err != nil {
-			return fmt.Errorf("close %s report %q: %w", name, path, err)
-		}
-	}
-	return nil
 }

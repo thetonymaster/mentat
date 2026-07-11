@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -82,6 +83,13 @@ func (e *Engine) driveOnce(ctx context.Context, target string, args []string) (c
 	if !ok {
 		return core.Evidence{}, fmt.Errorf("engine: no driver for adapter %q", t.Adapter)
 	}
+	// The target's resolved run budget bounds this run (feature 003). KillGrace rides
+	// the spec so the driver reaps the process tree without importing config. The run
+	// context derives its deadline from the scenario context and the budget timeout,
+	// so cancellation composes: whichever bound (scenario, budget, poll) fires first
+	// wins. A non-positive Timeout means no per-run bound (a zero-value budget from a
+	// hand-built config); "unbounded" is the explicit opt-out.
+	budget := t.Budget
 	spec := core.RunSpec{
 		Target:  target,
 		Adapter: t.Adapter,
@@ -91,31 +99,72 @@ func (e *Engine) driveOnce(ctx context.Context, target string, args []string) (c
 			Method:  t.HTTP.Method,
 			Headers: t.HTTP.Headers,
 		},
-		Env: map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": e.cfg.OTLPEndpoint},
+		Env:       map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": e.cfg.OTLPEndpoint},
+		KillGrace: budget.KillGrace,
 	}
 	runID := e.cor.Inject(ctx, &spec)
+
+	runCtx := ctx
+	if !budget.Unbounded && budget.Timeout > 0 {
+		var cancel context.CancelFunc
+		runCtx, cancel = context.WithTimeout(ctx, budget.Timeout)
+		defer cancel()
+	}
 
 	sem := e.sems[target]
 	select {
 	case sem <- struct{}{}:
-	case <-ctx.Done():
-		err := fmt.Errorf("engine: drive %q: %w", target, ctx.Err())
-		return core.Evidence{RunID: runID, Failed: true, FailureKind: core.FailureKindDriver, FailureMsg: err.Error()}, err
+	case <-runCtx.Done():
+		werr := budgetTimeout(ctx, runCtx, target, "drive", budget)
+		if werr == nil {
+			werr = fmt.Errorf("engine: drive %q: %w", target, runCtx.Err())
+		}
+		return core.Evidence{RunID: runID, Failed: true, FailureKind: core.FailureKindDriver, FailureMsg: werr.Error()}, werr
 	}
 	defer func() { <-sem }()
 
-	res, err := drv.Run(ctx, spec)
-	if err != nil {
-		werr := fmt.Errorf("engine: drive %q: %w", target, err)
+	// If the batch/scenario was cancelled while we waited for the slot, do not start
+	// the SUT — its result would be discarded (FR-008). Abort before driving.
+	if runCtx.Err() != nil {
+		werr := budgetTimeout(ctx, runCtx, target, "drive", budget)
+		if werr == nil {
+			werr = fmt.Errorf("engine: drive %q: %w", target, runCtx.Err())
+		}
 		return core.Evidence{RunID: runID, Failed: true, FailureKind: core.FailureKindDriver, FailureMsg: werr.Error()}, werr
 	}
-	tr, err := e.cor.Resolve(ctx, e.st, runID)
+
+	res, err := drv.Run(runCtx, spec)
 	if err != nil {
-		werr := fmt.Errorf("engine: resolve run %q: %w", runID, err)
+		werr := budgetTimeout(ctx, runCtx, target, "drive", budget)
+		if werr == nil {
+			werr = fmt.Errorf("engine: drive %q: %w", target, err)
+		}
+		return core.Evidence{RunID: runID, Failed: true, FailureKind: core.FailureKindDriver, FailureMsg: werr.Error()}, werr
+	}
+	tr, err := e.cor.Resolve(runCtx, e.st, runID)
+	if err != nil {
+		werr := budgetTimeout(ctx, runCtx, target, "resolve", budget)
+		if werr == nil {
+			werr = fmt.Errorf("engine: resolve run %q: %w", runID, err)
+		}
 		// Retain the real driver Output: the driver succeeded, only resolution failed.
 		return core.Evidence{RunID: runID, Output: res.Output, Failed: true, FailureKind: core.FailureKindResolve, FailureMsg: werr.Error()}, werr
 	}
 	return core.Evidence{RunID: runID, Trace: tr, Output: res.Output}, nil
+}
+
+// budgetTimeout returns the FR-007 per-run-budget-timeout error for a phase
+// (drive/resolve), or nil when the failure was NOT a budget timeout (the caller
+// then wraps the underlying cause with its usual message). A budget timeout is when
+// the derived run context passed its deadline while the parent scenario context is
+// still live — a scenario/suite cancellation would also cancel the parent, and is
+// reported as cancellation, not a run-budget timeout. DeadlineExceeded is wrapped so
+// callers can still errors.Is the returned error.
+func budgetTimeout(parent, run context.Context, target, phase string, budget config.RunBudget) error {
+	if !errors.Is(run.Err(), context.DeadlineExceeded) || parent.Err() != nil {
+		return nil
+	}
+	return fmt.Errorf("engine: %s %q: run timeout after %s (phase: %s): %w", phase, target, budget.Timeout, phase, context.DeadlineExceeded)
 }
 
 // DriveN runs the scenario n times and returns one Evidence per run. A harness
@@ -130,7 +179,7 @@ func (e *Engine) DriveN(ctx context.Context, target string, args []string, n int
 		return nil, fmt.Errorf("engine: cannot multi-run a pinned scenario (n=%d); replay is deterministic", n)
 	}
 	evs := make([]core.Evidence, n)
-	collect := func(i int) error {
+	collect := func(ctx context.Context, i int) error {
 		ev, err := e.driveOnce(ctx, target, args)
 		if err != nil && ev.RunID == "" {
 			return err // structural error: abort
@@ -143,7 +192,7 @@ func (e *Engine) DriveN(ctx context.Context, target string, args []string, n int
 			if ctx.Err() != nil {
 				return nil, fmt.Errorf("engine: DriveN %q cancelled: %w", target, ctx.Err())
 			}
-			if err := collect(i); err != nil {
+			if err := collect(ctx, i); err != nil {
 				return nil, err
 			}
 		}
@@ -152,6 +201,12 @@ func (e *Engine) DriveN(ctx context.Context, target string, args []string, n int
 	if ctx.Err() != nil {
 		return nil, fmt.Errorf("engine: DriveN %q cancelled: %w", target, ctx.Err())
 	}
+	// Wrap the batch so the first structural error cancels iterations that have not
+	// yet started driving (FR-008): driveOnce honours batchCtx at the semaphore and
+	// just before driving. Iterations already driving finish (bounded by their run
+	// budget) — the guarantee is "not yet started ⇒ never starts", not mid-flight kill.
+	batchCtx, cancelBatch := context.WithCancel(ctx)
+	defer cancelBatch()
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var structErr error
@@ -159,18 +214,30 @@ func (e *Engine) DriveN(ctx context.Context, target string, args []string, n int
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			if err := collect(i); err != nil {
+			if batchCtx.Err() != nil {
+				return // batch already doomed: never start this iteration
+			}
+			if err := collect(batchCtx, i); err != nil {
 				mu.Lock()
 				if structErr == nil {
 					structErr = err
 				}
 				mu.Unlock()
+				cancelBatch()
 			}
 		}(i)
 	}
 	wg.Wait()
 	if structErr != nil {
 		return nil, structErr
+	}
+	// Mirror the serial path: if the parent context was cancelled mid-batch (after
+	// the pre-check, while goroutines ran) with no structural error, un-started
+	// iterations left zero-value Evidence. Surface the cancellation rather than
+	// returning a silent partial success (CLAUDE.md invariant #4). Check the parent
+	// ctx, not batchCtx — a structural cancel of batchCtx already returned via structErr.
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("engine: DriveN %q cancelled: %w", target, ctx.Err())
 	}
 	return evs, nil
 }

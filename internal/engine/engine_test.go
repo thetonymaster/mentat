@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/core/mocks"
 	"github.com/thetonymaster/mentat/internal/correlate"
+	"github.com/thetonymaster/mentat/internal/registry"
 	"github.com/thetonymaster/mentat/internal/trace"
 )
 
@@ -766,5 +768,239 @@ func TestDriveHTTPTarget(t *testing.T) {
 	}
 	if !strings.Contains(gotBaggage, "test.run.id=run-http") {
 		t.Errorf("SUT saw baggage %q, missing test.run.id=run-http", gotBaggage)
+	}
+}
+
+// TestDriveOnceRunBudget pins feature 003 (US1): the engine derives a per-run
+// context.WithTimeout from the scenario context and the target's resolved budget,
+// attributes a timeout to the phase in flight (drive/resolve), and skips the
+// timeout entirely for an unbounded budget. A non-positive Timeout means "no
+// per-run bound" (a zero-value budget from a hand-built config), never an
+// instant-expiring 0-duration deadline.
+func TestDriveOnceRunBudget(t *testing.T) {
+	tr := &trace.Trace{Spans: []*trace.Span{{Name: "root"}}, Roots: []*trace.Span{{Name: "root"}}}
+	tests := []struct {
+		name         string
+		command      []string
+		budget       config.RunBudget
+		setupCor     func(ctrl *gomock.Controller) core.Correlator
+		wantErr      bool
+		wantSubs     []string
+		wantFailKind string
+	}{
+		{
+			name:    "drive-phase budget timeout names target and phase",
+			command: []string{"sleep", "1"},
+			budget:  config.RunBudget{Timeout: 50 * time.Millisecond, KillGrace: 100 * time.Millisecond},
+			setupCor: func(ctrl *gomock.Controller) core.Correlator {
+				mc := mocks.NewMockCorrelator(ctrl)
+				mc.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("run-1")
+				// Resolve must NOT be called — the drive phase times out first.
+				return mc
+			},
+			wantErr:      true,
+			wantSubs:     []string{"run timeout", "phase: drive", "sut", "50ms"},
+			wantFailKind: core.FailureKindDriver,
+		},
+		{
+			name:    "resolve-phase budget timeout attributes the resolve phase",
+			command: []string{"sh", "-c", "echo hi"},
+			budget:  config.RunBudget{Timeout: 80 * time.Millisecond, KillGrace: 100 * time.Millisecond},
+			setupCor: func(ctrl *gomock.Controller) core.Correlator {
+				mc := mocks.NewMockCorrelator(ctrl)
+				mc.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("run-1")
+				mc.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+					func(ctx context.Context, _ core.TraceStore, _ string) (*trace.Trace, error) {
+						select {
+						case <-ctx.Done():
+							return nil, ctx.Err()
+						case <-time.After(2 * time.Second):
+							return tr, nil
+						}
+					})
+				return mc
+			},
+			wantErr:      true,
+			wantSubs:     []string{"run timeout", "phase: resolve", "80ms"},
+			wantFailKind: core.FailureKindResolve,
+		},
+		{
+			name:    "unbounded budget does not apply a timeout",
+			command: []string{"sh", "-c", "echo hi"},
+			budget:  config.RunBudget{Unbounded: true, KillGrace: 100 * time.Millisecond},
+			setupCor: func(ctrl *gomock.Controller) core.Correlator {
+				mc := mocks.NewMockCorrelator(ctrl)
+				mc.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("run-1")
+				mc.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).Return(tr, nil)
+				return mc
+			},
+			wantErr: false,
+		},
+		{
+			name:    "within a generous budget the run succeeds",
+			command: []string{"sh", "-c", "echo hi"},
+			budget:  config.RunBudget{Timeout: 5 * time.Second, KillGrace: 100 * time.Millisecond},
+			setupCor: func(ctrl *gomock.Controller) core.Correlator {
+				mc := mocks.NewMockCorrelator(ctrl)
+				mc.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("run-1")
+				mc.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).Return(tr, nil)
+				return mc
+			},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.Config{
+				OTLPEndpoint: "http://localhost:4318",
+				Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+				Targets: map[string]config.Target{
+					"sut": {Adapter: "shell", Command: tt.command, MaxConcurrency: 1, Budget: tt.budget},
+				},
+			}
+			ctrl := gomock.NewController(t)
+			st := mocks.NewMockTraceStore(ctrl)
+			cor := tt.setupCor(ctrl)
+			eng, err := Build(cfg, st, cor)
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			ev, err := eng.driveOnce(context.Background(), "sut", nil)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil (ev=%+v)", ev)
+				}
+				for _, sub := range tt.wantSubs {
+					if !strings.Contains(err.Error(), sub) {
+						t.Fatalf("error %q does not contain %q", err.Error(), sub)
+					}
+				}
+				if tt.wantFailKind != "" && ev.FailureKind != tt.wantFailKind {
+					t.Fatalf("FailureKind = %q, want %q", ev.FailureKind, tt.wantFailKind)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if ev.Failed {
+				t.Fatalf("unexpected failed evidence: %+v", ev)
+			}
+		})
+	}
+}
+
+// countingDriver counts Run invocations and always errors. Paired with a correlator
+// that injects an empty run id, its error is a structural (empty-RunID) failure that
+// aborts a DriveN batch — letting the test assert how many iterations actually drove.
+type countingDriver struct{ n atomic.Int64 }
+
+func (d *countingDriver) Run(_ context.Context, _ core.RunSpec) (core.RunResult, error) {
+	d.n.Add(1)
+	return core.RunResult{}, errors.New("structural boom")
+}
+
+// TestDriveNParallelStructuralErrorCancelsSiblings pins feature 003 (US4/FR-008):
+// a structural failure in a parallel @runs(N) batch cancels iterations that have not
+// started driving, so strictly fewer than N iterations drive the SUT.
+func TestDriveNParallelStructuralErrorCancelsSiblings(t *testing.T) {
+	const n = 8
+	drv := &countingDriver{}
+	registry.ResetForTest(t) // reopen the (possibly sealed) registry to register a custom seam
+	registry.RegisterDriver("counterr", drv)
+
+	cfg := config.Config{
+		OTLPEndpoint: "x",
+		Targets: map[string]config.Target{
+			// max_concurrency 1 serializes drives, so once the first structural error
+			// cancels the batch the queued iterations must skip driving.
+			"svc": {Adapter: "counterr", Command: []string{"x"}, MaxConcurrency: 1},
+		},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	cor := mocks.NewMockCorrelator(ctrl)
+	cor.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("").AnyTimes() // empty runID → structural
+	eng, err := Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	if _, err := eng.DriveN(context.Background(), "svc", nil, n, true); err == nil {
+		t.Fatal("expected the structural error to abort the batch")
+	}
+	if got := drv.n.Load(); got >= n {
+		t.Fatalf("drove %d of %d iterations; a structural error must cancel not-yet-started iterations", got, n)
+	}
+}
+
+// cancelOnFirstDriveDriver cancels the parent context on its FIRST Run and returns
+// success. The sync.Once guard means only the first drive in a parallel batch
+// cancels; paired with a correlator that injects a NON-empty run id, its success is
+// not a structural error. A mid-batch cancellation with no structural error can then
+// surface only via DriveN's post-Wait parent-context check.
+type cancelOnFirstDriveDriver struct {
+	once   sync.Once
+	cancel context.CancelFunc
+}
+
+func (d *cancelOnFirstDriveDriver) Run(_ context.Context, _ core.RunSpec) (core.RunResult, error) {
+	d.once.Do(d.cancel)
+	return core.RunResult{Output: core.Output{Stdout: "ok"}}, nil
+}
+
+// TestDriveNParallelCancelledMidBatch pins CLAUDE.md invariant #4 (no silent
+// fallbacks) for the parallel path: when the parent context is cancelled mid-batch
+// (after the pre-check passes, while goroutines run) with NO structural error,
+// un-started iterations leave zero-value Evidence. DriveN must NOT return
+// (evs, nil) — it must surface the cancellation the same way the serial path does.
+//
+// Deterministic by MaxConcurrency:1 — exactly one goroutine acquires the semaphore
+// and drives first; it cancels the parent (propagating to batchCtx) before any
+// sibling can acquire the slot, so siblings either early-return at the batchCtx guard
+// (zero-value sample) or bail at the semaphore select (failed sample). In every
+// interleaving structErr stays nil, so only the post-Wait ctx.Err() check can catch it.
+func TestDriveNParallelCancelledMidBatch(t *testing.T) {
+	const n = 8
+	drv := &cancelOnFirstDriveDriver{}
+	registry.ResetForTest(t) // reopen the sealed registry to register a custom seam
+	registry.RegisterDriver("cancelfirst", drv)
+
+	cfg := config.Config{
+		OTLPEndpoint: "x",
+		Targets: map[string]config.Target{
+			// max_concurrency 1 serializes drives, so the first drive cancels the
+			// parent before any sibling can acquire the slot.
+			"svc": {Adapter: "cancelfirst", Command: []string{"x"}, MaxConcurrency: 1},
+		},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	tr := &trace.Trace{Spans: []*trace.Span{{Name: "root"}}, Roots: []*trace.Span{{Name: "root"}}}
+	cor := mocks.NewMockCorrelator(ctrl)
+	// Non-empty run id → a drive failure is a typed sample, never structural. Resolve
+	// returns a valid trace regardless of ctx state (the first drive resolves under the
+	// now-cancelled ctx, and the mock must not care).
+	cor.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("run-1").AnyTimes()
+	cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).Return(tr, nil).AnyTimes()
+
+	eng, err := Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	drv.cancel = cancel
+
+	_, err = eng.DriveN(ctx, "svc", nil, n, true)
+	if err == nil {
+		t.Fatal("mid-batch cancellation with no structural error must surface as an error, got nil (silent partial success)")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled in chain, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), `DriveN "svc" cancelled`) {
+		t.Fatalf("error %q does not contain %q", err.Error(), `DriveN "svc" cancelled`)
 	}
 }

@@ -950,7 +950,7 @@ func TestInitializer_CollectsResults(t *testing.T) {
 		t.Fatalf("expected passing suite, status=%d\n%s", status, out.String())
 	}
 
-	rep := col.Report(time.Unix(0, 0), 0)
+	rep := col.Report(time.Unix(0, 0), 0, false)
 	if rep.Total != 1 {
 		t.Fatalf("collector got %d scenarios, want 1", rep.Total)
 	}
@@ -989,7 +989,7 @@ func TestInitializer_DerivationDegradationKeepsVerdict(t *testing.T) {
 		t.Fatalf("scenario failed (status=%d); a derivation problem must not flip the verdict\n%s", status, out.String())
 	}
 
-	rep := col.Report(time.Unix(0, 0), 0)
+	rep := col.Report(time.Unix(0, 0), 0, false)
 	if rep.Total != 1 {
 		t.Fatalf("collector got %d scenarios, want 1", rep.Total)
 	}
@@ -1037,7 +1037,7 @@ func TestInitializer_CollectsFailingAggregateDetail(t *testing.T) {
 		t.Fatalf("expected RED on count==0 vs 2 search runs, but suite passed\n%s", out.String())
 	}
 
-	rep := col.Report(time.Unix(0, 0), 0)
+	rep := col.Report(time.Unix(0, 0), 0, false)
 	if rep.Total != 1 {
 		t.Fatalf("collector got %d scenarios, want 1", rep.Total)
 	}
@@ -1684,7 +1684,7 @@ func TestStepMethods(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			eng := buildEng(t, cr)
-			w := &world{eng: eng}
+			w := &world{eng: eng, ctx: context.Background()}
 
 			// All cases except the three that drive themselves need a pre-driven world
 			// with crafted Evidence so comparators have the data they need.
@@ -1761,6 +1761,7 @@ func TestResultMeansStep(t *testing.T) {
 			mockMatcher.EXPECT().
 				Match(gomock.Any(), gomock.Any(), tt.want, gomock.Any()).
 				Return(core.Verdict{Pass: true}, nil)
+			registry.ResetForTest(t) // reopen to override the semantic matcher after Build sealed
 			registry.RegisterMatcher("semantic", mockMatcher)
 
 			w := &world{eng: eng}
@@ -1801,4 +1802,54 @@ func TestResultMeansRejectedInMultirunScenario(t *testing.T) {
 	if !strings.Contains(err.Error(), "the runs satisfy") {
 		t.Fatalf(`expected error to mention "the runs satisfy", got: %v`, err)
 	}
+}
+
+// --- Feature 003 (US3): scenario context threading ---------------------------
+
+// ctxSpyComparator records the context it is invoked with, to prove the step
+// layer threads the scenario context into Compare rather than a fresh Background.
+type ctxSpyComparator struct{ gotCtx context.Context }
+
+func (*ctxSpyComparator) Name() string { return "ctx-spy" }
+func (s *ctxSpyComparator) Compare(ctx context.Context, _ core.Evidence, _ core.Expectation) (core.Verdict, error) {
+	s.gotCtx = ctx
+	return core.Verdict{Pass: true}, nil
+}
+
+type ctxMarkerKey struct{}
+
+// TestStepsThreadScenarioContext pins feature 003 (US3): drive and compare use the
+// world's scenario context, not a discarded context.Background().
+func TestStepsThreadScenarioContext(t *testing.T) {
+	t.Run("drive receives the scenario context", func(t *testing.T) {
+		eng := buildEng(t, happyTrace())
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel() // a cancelled scenario ctx must reach DriveN, not be replaced by Background
+		w := &world{eng: eng, ctx: ctx, target: "svc"}
+		err := w.runScenario("happy")
+		if err == nil {
+			t.Fatal("expected a cancellation error; drive discarded the scenario ctx")
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("error %v does not wrap context.Canceled", err)
+		}
+	})
+
+	t.Run("compare receives the scenario context", func(t *testing.T) {
+		spy := &ctxSpyComparator{}
+		registry.ResetForTest(t) // reopen to register a test-only comparator seam
+		registry.RegisterComparator("ctx-spy", spy)
+		eng := buildEng(t, happyTrace())
+		ctx := context.WithValue(context.Background(), ctxMarkerKey{}, "scenario-marker")
+		w := &world{eng: eng, ctx: ctx}
+		if err := w.check("ctx-spy", nil); err != nil {
+			t.Fatalf("check: %v", err)
+		}
+		if spy.gotCtx == nil {
+			t.Fatal("comparator received a nil context")
+		}
+		if got := spy.gotCtx.Value(ctxMarkerKey{}); got != "scenario-marker" {
+			t.Fatalf("comparator received %v, not the scenario context (marker=%v)", spy.gotCtx, got)
+		}
+	})
 }

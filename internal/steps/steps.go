@@ -28,8 +28,14 @@ var (
 )
 
 type world struct {
-	eng        *engine.Engine
-	col        *report.Collector
+	eng *engine.Engine
+	col *report.Collector
+	// ctx is the scenario's context, captured in sc.Before. Every scenario-scoped
+	// operation (drive, resolve, compare, aggregate, judge) runs under it so one
+	// budget/cancellation bounds them all (feature 003, FR-004). A fresh background
+	// context is banned in this file (a ctx_guard test enforces it) to prevent the
+	// audit-B2 regression of discarding the scenario context.
+	ctx        context.Context
 	target     string
 	ev         core.Evidence
 	evs        []core.Evidence
@@ -97,6 +103,10 @@ func InitializerWithCollector(eng *engine.Engine, col *report.Collector) func(*g
 		// §7: compile every CEL expression in the scenario before any step runs,
 		// so a malformed expectation fails before an expensive SUT is driven.
 		sc.Before(func(ctx context.Context, scenario *godog.Scenario) (context.Context, error) {
+			// Capture the scenario context so every step's drive/compare/judge runs
+			// under it (FR-004). godog cancels it on suite interruption, so a signal
+			// or scenario timeout reaches all scenario-scoped work.
+			w.ctx = ctx
 			n, parallel, err := parseRunsTag(scenario.Tags)
 			if err != nil {
 				return ctx, err
@@ -148,7 +158,7 @@ func (w *world) drive(args []string) error {
 	if n < 1 {
 		n = 1
 	}
-	evs, err := w.eng.DriveN(context.Background(), w.target, args, n, w.parallel)
+	evs, err := w.eng.DriveN(w.ctx, w.target, args, n, w.parallel)
 	if err != nil {
 		return err
 	}
@@ -172,7 +182,7 @@ func (w *world) check(name string, exp core.Expectation) error {
 	if !ok {
 		return fmt.Errorf("no comparator %q", name)
 	}
-	v, err := c.Compare(context.Background(), w.ev, exp)
+	v, err := c.Compare(w.ctx, w.ev, exp)
 	if err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}
@@ -453,7 +463,7 @@ func (w *world) checkRuns(expr string) error {
 	if !ok {
 		return fmt.Errorf("no aggregate comparator %q", "aggregate-cel")
 	}
-	v, err := c.Aggregate(context.Background(), w.evs, comparator.AggregateCELExpectation{Expr: expr})
+	v, err := c.Aggregate(w.ctx, w.evs, comparator.AggregateCELExpectation{Expr: expr})
 	if err != nil {
 		return fmt.Errorf("aggregate-cel: %w", err)
 	}

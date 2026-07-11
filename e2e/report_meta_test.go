@@ -78,7 +78,9 @@ func TestL3_UnwritableReportExitsNonZero(t *testing.T) {
 		t.Fatalf("expected non-zero exit for unwritable report path, but mentat passed:\n%s", out)
 	}
 	outStr := string(out)
-	const wantSubstr = "create json report"
+	// Feature 003 routes reports through report.EmitReports (atomic temp+rename), so
+	// an unwritable directory fails at temp-file creation, wrapped "writing json report".
+	const wantSubstr = "writing json report"
 	if !strings.Contains(outStr, wantSubstr) {
 		t.Fatalf("expected %q in combined output (proves unwritable path caused exit):\n%s", wantSubstr, outStr)
 	}

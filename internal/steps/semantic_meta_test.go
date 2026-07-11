@@ -42,7 +42,8 @@ func (f fakeJudge) Judge(_ context.Context, _ core.JudgeRequest) (core.JudgeVerd
 // "fake-match" (always match). Distinct names let each factory close over its own
 // fixed verdict, keeping the cases deterministic with no shared mutable state.
 // Idempotent: re-registering simply overwrites the map entry.
-func registerFakeJudges() {
+func registerFakeJudges(t *testing.T) {
+	registry.ResetForTest(t) // reopen the (possibly sealed) registry to register test backends
 	registry.RegisterJudge("fake-nomatch", func(config.Config) (core.Judge, error) {
 		return fakeJudge{match: false, reason: fakeNoMatchReason}, nil
 	})
@@ -101,7 +102,7 @@ func runMetaSemantic(t *testing.T, eng *engine.Engine) (int, string) {
 // no-match, surfacing the judge's human-readable reason (FR-008). Fully hermetic:
 // no network, no API key. Serial (registers into the global judge/matcher registries).
 func TestSemanticMetaGoesRedOnNoMatch(t *testing.T) {
-	registerFakeJudges()
+	registerFakeJudges(t)
 	eng := semanticMetaEng(t, "fake-nomatch")
 	status, out := runMetaSemantic(t, eng)
 	if status == 0 {
@@ -119,7 +120,7 @@ func TestSemanticMetaGoesRedOnNoMatch(t *testing.T) {
 // was wired and nothing hit the network. t.Setenv forbids t.Parallel(), so serial.
 func TestSemanticMetaGoesGreenOnMatch(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "") // zero-network proof: no key, yet the suite passes
-	registerFakeJudges()
+	registerFakeJudges(t)
 	eng := semanticMetaEng(t, "fake-match")
 	status, out := runMetaSemantic(t, eng)
 	if status != 0 {

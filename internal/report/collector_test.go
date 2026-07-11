@@ -13,7 +13,7 @@ func TestCollector(t *testing.T) {
 	c := NewCollector()
 	c.Append(core.ScenarioResult{Name: "a", Pass: true, Cost: 0.01})
 	c.Append(core.ScenarioResult{Name: "b", Pass: false, Cost: 0.02})
-	rep := c.Report(time.Unix(0, 0), 5*time.Second)
+	rep := c.Report(time.Unix(0, 0), 5*time.Second, false)
 	if rep.Total != 2 || rep.Passed != 1 || rep.Failed != 1 {
 		t.Errorf("totals = %+v", rep)
 	}
@@ -70,7 +70,7 @@ func TestCollector_Scenarios(t *testing.T) {
 			for _, sr := range tt.appends {
 				c.Append(sr)
 			}
-			rep := c.Report(time.Now(), time.Second)
+			rep := c.Report(time.Now(), time.Second, false)
 			if rep.Total != tt.wantTotal {
 				t.Errorf("Total = %d, want %d", rep.Total, tt.wantTotal)
 			}
@@ -102,7 +102,7 @@ func TestCollector_ConcurrentAppend(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	rep := c.Report(time.Now(), time.Second)
+	rep := c.Report(time.Now(), time.Second, false)
 	if rep.Total != n {
 		t.Errorf("concurrent Total = %d, want %d", rep.Total, n)
 	}
@@ -115,7 +115,7 @@ func TestCollector_ReportMetadata(t *testing.T) {
 	c := NewCollector()
 	started := time.Unix(1000, 0)
 	dur := 42 * time.Second
-	rep := c.Report(started, dur)
+	rep := c.Report(started, dur, false)
 	if !rep.StartedAt.Equal(started) {
 		t.Errorf("StartedAt = %v, want %v", rep.StartedAt, started)
 	}

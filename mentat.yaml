@@ -5,6 +5,14 @@ targets:
   research-agent:
     adapter: shell
     command: ["go", "run", "./tracelab/researchbot/cmd/researchbot"]
+  # A deliberately hung SUT for the feature-003 lifecycle L3 proof: it never exits
+  # and spawns a child, so its whole process tree must be bounded by run_timeout
+  # (2s) and reaped. The distinctive sleep marker (987654s) lets the e2e test pgrep
+  # for survivors.
+  hung-agent:
+    adapter: shell
+    run_timeout: 2s
+    command: ["sh", "-c", "sleep 987654 & sleep 987654"]
   checkout:
     adapter: http
     max_concurrency: 8

@@ -91,6 +91,12 @@ type RunSpec struct {
 	HTTP    HTTPSpec
 	RunID   string
 	Tags    map[string]string // test.run.id, test.scenario, test.case
+	// KillGrace is the grace period between the polite termination signal and the
+	// forceful kill of the SUT process tree, and the pipe WaitDelay (feature 003).
+	// The engine resolves it from the target's run budget and passes it here so a
+	// driver honours the lifecycle policy without importing config. Zero means the
+	// driver applies no extra grace/WaitDelay (the pre-feature-003 behaviour).
+	KillGrace time.Duration
 }
 
 // HTTPSpec is the http adapter's per-target request config (mirrors config.HTTP,
@@ -193,6 +199,10 @@ type RunReport struct {
 	TotalCost float64
 	StartedAt time.Time
 	Duration  time.Duration
+	// Interrupted marks a run that a SIGINT/SIGTERM cancelled before it ran to
+	// completion (feature 003, FR-006). The report then carries the scenarios that
+	// finished plus this explicit marker; omitted from a clean run's JSON.
+	Interrupted bool `json:"interrupted,omitempty"`
 }
 
 // ScenarioResult is one scenario's outcome, derived from its Evidence + Verdict.
