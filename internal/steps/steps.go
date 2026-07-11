@@ -116,10 +116,10 @@ func InitializerWithCollector(eng *engine.Engine, col *report.Collector) func(*g
 			if stepErr != nil {
 				v.Reasons = []string{stepErr.Error()}
 			}
-			sr, err := report.Derive(scenario.Name, tagNames(scenario.Tags), v, w.evs, w.eng.Pricing())
-			if err != nil {
-				return ctx, err
-			}
+			// report.Derive is an observer and never fails a scenario (audit A8):
+			// a derivation problem yields a DerivationNote on the entry, not an
+			// error. The verdict comes only from stepErr, so the hook returns nil.
+			sr := report.Derive(scenario.Name, tagNames(scenario.Tags), v, w.evs, w.eng.Pricing())
 			w.col.Append(sr)
 			return ctx, nil
 		})
@@ -154,6 +154,13 @@ func (w *world) drive(args []string) error {
 	}
 	w.evs = evs
 	w.ev = evs[0] // single-run comparators evaluate the first run
+	// R4 rule 2 (A2): a single-run scenario fails the moment its one run failed —
+	// even with no Then step, and even though a resolve failure retains the driver
+	// Output. Multi-run (@runs(N>1)) keeps the typed-failed-sample model so the
+	// aggregate policy decides.
+	if n == 1 && evs[0].Failed {
+		return fmt.Errorf("run %q failed: %s", evs[0].RunID, evs[0].FailureMsg)
+	}
 	return nil
 }
 

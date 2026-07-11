@@ -36,9 +36,10 @@ type Endpoint struct {
 }
 
 type PollSpec struct {
-	Interval  string `yaml:"interval"`
-	Timeout   string `yaml:"timeout"`
-	StableFor int    `yaml:"stableFor"`
+	Interval    string `yaml:"interval"`
+	Timeout     string `yaml:"timeout"`
+	StableFor   int    `yaml:"stableFor"`
+	SearchLimit int    `yaml:"searchLimit"`
 }
 
 type Target struct {
@@ -78,6 +79,11 @@ func Load(data []byte) (Config, error) {
 	}
 	if c.Expectations == "" {
 		c.Expectations = "expectations"
+	}
+	// A non-positive searchLimit (omitted or <= 0) defaults to 100 so Tempo.Query
+	// always sends an explicit, truncation-guardable page size (research R3, A4).
+	if c.Poll.SearchLimit <= 0 {
+		c.Poll.SearchLimit = 100
 	}
 	for name, t := range c.Targets {
 		def, ok := defaultConcurrency[t.Adapter]

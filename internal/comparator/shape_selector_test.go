@@ -1,6 +1,7 @@
 package comparator
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/thetonymaster/mentat/internal/trace"
@@ -13,20 +14,30 @@ func TestParseSelector(t *testing.T) {
 		in      string
 		want    Selector
 		wantErr bool
+		errSub  string // when wantErr, the error message must contain this substring
 	}{
-		{"single", "gen_ai.tool.name=search", Selector{{"gen_ai.tool.name", "search"}}, false},
-		{"conjunction", "gen_ai.operation.name=execute_tool, gen_ai.tool.name=search",
-			Selector{{"gen_ai.operation.name", "execute_tool"}, {"gen_ai.tool.name", "search"}}, false},
-		{"trims spaces", "  service.name = payment  ", Selector{{"service.name", "payment"}}, false},
-		{"value may contain =", "k=a=b", Selector{{"k", "a=b"}}, false},
-		{"reserved status", "span.status=ERROR", Selector{{"span.status", "ERROR"}}, false},
-		{"empty selector", "", nil, true},
-		{"blank selector", "   ", nil, true},
-		{"missing equals", "service.name", nil, true},
-		{"empty key", "=payment", nil, true},
-		{"empty value", "service.name=", nil, true},
-		{"empty predicate", "a=b,,c=d", nil, true},
-		{"unknown reserved key", "span.staus=ERROR", nil, true},
+		{name: "single", in: "gen_ai.tool.name=search", want: Selector{{"gen_ai.tool.name", "search"}}},
+		{name: "conjunction", in: "gen_ai.operation.name=execute_tool, gen_ai.tool.name=search",
+			want: Selector{{"gen_ai.operation.name", "execute_tool"}, {"gen_ai.tool.name", "search"}}},
+		{name: "trims spaces", in: "  service.name = payment  ", want: Selector{{"service.name", "payment"}}},
+		{name: "value may contain =", in: "k=a=b", want: Selector{{"k", "a=b"}}},
+		{name: "reserved status canonical Error parses", in: "span.status=Error", want: Selector{{"span.status", "Error"}}},
+		{name: "reserved kind canonical SERVER parses", in: "span.kind=SPAN_KIND_SERVER", want: Selector{{"span.kind", "SPAN_KIND_SERVER"}}},
+		{name: "reserved name accepts any value", in: "span.name=execute_tool search", want: Selector{{"span.name", "execute_tool search"}}},
+		{name: "empty selector", in: "", wantErr: true},
+		{name: "blank selector", in: "   ", wantErr: true},
+		{name: "missing equals", in: "service.name", wantErr: true},
+		{name: "empty key", in: "=payment", wantErr: true},
+		{name: "empty value", in: "service.name=", wantErr: true},
+		{name: "empty predicate", in: "a=b,,c=d", wantErr: true},
+		{name: "unknown reserved key", in: "span.staus=ERROR", wantErr: true},
+		// A selector value under a reserved key must be a canonical constant; an
+		// unknown value is a permanently-green selector (never matches) and so is a
+		// hard authoring error at parse time naming the offending value.
+		{name: "status wrong case is authoring error", in: "span.status=ERROR", wantErr: true, errSub: "ERROR"},
+		{name: "status bogus value is authoring error", in: "span.status=bogus", wantErr: true, errSub: "bogus"},
+		{name: "kind lowercase is authoring error", in: "span.kind=server", wantErr: true, errSub: "server"},
+		{name: "kind bogus value is authoring error", in: "span.kind=SPAN_KIND_ROBOT", wantErr: true, errSub: "SPAN_KIND_ROBOT"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -35,6 +46,9 @@ func TestParseSelector(t *testing.T) {
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("ParseSelector(%q) = %v, want error", tt.in, got)
+				}
+				if tt.errSub != "" && !strings.Contains(err.Error(), tt.errSub) {
+					t.Fatalf("ParseSelector(%q) error %q missing offending value %q", tt.in, err.Error(), tt.errSub)
 				}
 				return
 			}
@@ -56,7 +70,7 @@ func TestParseSelector(t *testing.T) {
 func TestSelectorMatchSpan(t *testing.T) {
 	t.Parallel()
 	sp := &trace.Span{
-		ID: "s1", Name: "execute_tool search", Status: "ERROR", Kind: "INTERNAL",
+		ID: "s1", Name: "execute_tool search", Status: trace.StatusError, Kind: trace.KindInternal,
 		Attrs: map[string]string{"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "search"},
 	}
 	tests := []struct {
@@ -70,9 +84,9 @@ func TestSelectorMatchSpan(t *testing.T) {
 		{"conjunction all hold", Selector{{"gen_ai.operation.name", "execute_tool"}, {"gen_ai.tool.name", "search"}}, true},
 		{"conjunction one fails", Selector{{"gen_ai.operation.name", "execute_tool"}, {"gen_ai.tool.name", "delete"}}, false},
 		{"reserved span.name", Selector{{"span.name", "execute_tool search"}}, true},
-		{"reserved span.status", Selector{{"span.status", "ERROR"}}, true},
-		{"reserved span.kind", Selector{{"span.kind", "INTERNAL"}}, true},
-		{"reserved status mismatch", Selector{{"span.status", "OK"}}, false},
+		{"reserved span.status", Selector{{"span.status", "Error"}}, true},
+		{"reserved span.kind", Selector{{"span.kind", "SPAN_KIND_INTERNAL"}}, true},
+		{"reserved status mismatch", Selector{{"span.status", "Ok"}}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

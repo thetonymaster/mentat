@@ -229,6 +229,53 @@ func TestLoadExpectationsDefault(t *testing.T) {
 	}
 }
 
+func TestLoadPollSearchLimitDefault(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		yaml string
+		want int
+	}{
+		{
+			name: "defaults to 100 when poll block omitted",
+			yaml: "store: tempo\n",
+			want: 100,
+		},
+		{
+			name: "defaults to 100 when searchLimit omitted from poll block",
+			yaml: "poll:\n  interval: 200ms\n  timeout: 30s\n  stableFor: 3\n",
+			want: 100,
+		},
+		{
+			name: "explicit searchLimit preserved",
+			yaml: "poll:\n  searchLimit: 250\n",
+			want: 250,
+		},
+		{
+			name: "non-positive searchLimit defaults to 100",
+			yaml: "poll:\n  searchLimit: 0\n",
+			want: 100,
+		},
+		{
+			name: "negative searchLimit defaults to 100",
+			yaml: "poll:\n  searchLimit: -5\n",
+			want: 100,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c, err := Load([]byte(tt.yaml))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if c.Poll.SearchLimit != tt.want {
+				t.Fatalf("Poll.SearchLimit = %d, want %d", c.Poll.SearchLimit, tt.want)
+			}
+		})
+	}
+}
+
 func TestLoadJudgeDefaults(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

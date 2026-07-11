@@ -15,16 +15,24 @@ import (
 	"github.com/thetonymaster/mentat/internal/trace"
 )
 
+// defaultSearchLimit is the page size Tempo.Query sends when none is configured.
+// It bounds the search result set so a full page can be treated as
+// possibly-truncated (research R3, A4).
+const defaultSearchLimit = 100
+
 type Tempo struct {
-	endpoint string
-	hc       *http.Client
+	endpoint    string
+	hc          *http.Client
+	searchLimit int
 }
 
-func NewTempo(endpoint string, hc *http.Client) *Tempo {
+// NewTempo builds a Tempo store. searchLimit is the /api/search page size; a
+// non-positive value is treated as defaultSearchLimit at query time.
+func NewTempo(endpoint string, hc *http.Client, searchLimit int) *Tempo {
 	if hc == nil {
 		hc = &http.Client{Timeout: 30 * time.Second}
 	}
-	return &Tempo{endpoint: strings.TrimRight(endpoint, "/"), hc: hc}
+	return &Tempo{endpoint: strings.TrimRight(endpoint, "/"), hc: hc, searchLimit: searchLimit}
 }
 
 func (t *Tempo) Caps() core.StoreCaps { return core.StoreCaps{StructuralQuery: true} }
@@ -51,6 +59,7 @@ type otlpSpan struct {
 	StartTimeUnixNano string   `json:"startTimeUnixNano"`
 	EndTimeUnixNano   string   `json:"endTimeUnixNano"`
 	Attributes        []otlpKV `json:"attributes"`
+	Kind              string   `json:"kind"`
 	Status            struct {
 		Code string `json:"code"`
 	} `json:"status"`
@@ -130,13 +139,22 @@ func (t *Tempo) GetByID(ctx context.Context, id string) (*trace.Trace, error) {
 				if err != nil {
 					return nil, fmt.Errorf("tempo: trace %s span %s: invalid endTimeUnixNano %q: %w", id, s.SpanID, s.EndTimeUnixNano, err)
 				}
+				status, err := trace.NormalizeStatus(s.Status.Code)
+				if err != nil {
+					return nil, fmt.Errorf("tempo: trace %s span %s: %w", id, s.SpanID, err)
+				}
+				kind, err := trace.NormalizeKind(s.Kind)
+				if err != nil {
+					return nil, fmt.Errorf("tempo: trace %s span %s: %w", id, s.SpanID, err)
+				}
 				sp := &trace.Span{
 					ID:       s.SpanID,
 					ParentID: s.ParentSpanID,
 					Name:     s.Name,
+					Kind:     kind,
 					Start:    start,
 					End:      end,
-					Status:   s.Status.Code,
+					Status:   status,
 					Attrs:    attrs,
 				}
 				tr.Spans = append(tr.Spans, sp)
@@ -153,9 +171,13 @@ func (t *Tempo) GetByID(ctx context.Context, id string) (*trace.Trace, error) {
 }
 
 func (t *Tempo) Query(ctx context.Context, q core.TraceQuery) ([]core.TraceRef, error) {
+	limit := t.searchLimit
+	if limit <= 0 {
+		limit = defaultSearchLimit
+	}
 	// q.Value is constrained to [A-Za-z0-9._:-]+ by correlate.Inject, so it needs no TraceQL string escaping here.
 	traceql := fmt.Sprintf(`{ .%s = "%s" }`, q.Tag, q.Value)
-	u := t.endpoint + "/api/search?q=" + url.QueryEscape(traceql)
+	u := t.endpoint + "/api/search?q=" + url.QueryEscape(traceql) + "&limit=" + strconv.Itoa(limit)
 	body, err := t.get(ctx, u)
 	if err != nil {
 		return nil, err
@@ -167,6 +189,12 @@ func (t *Tempo) Query(ctx context.Context, q core.TraceQuery) ([]core.TraceRef, 
 	}
 	if err := json.Unmarshal(body, &res); err != nil {
 		return nil, fmt.Errorf("tempo: parse search: %w", err)
+	}
+	// A full page may have been truncated by Tempo (paging support varies by
+	// version), so a count equal to the limit is treated as possibly-incomplete and
+	// hard-errored rather than silently dropping evidence (research R3, A4).
+	if len(res.Traces) == limit {
+		return nil, fmt.Errorf("tempo: search for %s=%q returned %d traces (== limit); result set may be truncated — raise poll.searchLimit", q.Tag, q.Value, len(res.Traces))
 	}
 	refs := make([]core.TraceRef, 0, len(res.Traces))
 	for _, tr := range res.Traces {

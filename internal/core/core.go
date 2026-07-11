@@ -34,10 +34,15 @@ type Evidence struct {
 	Trace  *trace.Trace
 	Output Output
 	// Failed marks a harness-level failure for this run (driver invocation or trace
-	// resolution). A failed run carries no Trace. FailureKind is "" when not failed,
-	// else "driver" or "resolve" (classified by which engine call failed, §6).
+	// resolution). A failed run carries no Trace. On a RESOLVE failure it still
+	// RETAINS the real driver Output (the driver succeeded); on a DRIVER failure the
+	// Output is zero. FailureKind is "" when not failed, else "driver" or "resolve"
+	// (classified by which engine call failed, §6).
 	Failed      bool
 	FailureKind string
+	// FailureMsg is the wrapped error text from the failing engine call; non-empty
+	// iff Failed.
+	FailureMsg string
 }
 
 type Verdict struct {
@@ -200,6 +205,13 @@ type ScenarioResult struct {
 	Sequence  []string
 	Runs      []RunRecord
 	Aggregate *AggregateDetail
+	// DerivationNote is a non-fatal, human-readable note recorded when report
+	// derivation (sequence/cost) could not be completed for this scenario — e.g. a
+	// span missing service.name. It is an observer artifact: it never changes Pass
+	// (verdicts come only from step results, audit A8) but stays visible in the JSON
+	// and HTML report so the degradation is surfaced, not swallowed. Empty when
+	// derivation was clean.
+	DerivationNote string `json:"DerivationNote,omitempty"`
 }
 
 // RunRecord is one run within a scenario (one element per @runs iteration).

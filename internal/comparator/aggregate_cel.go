@@ -79,8 +79,18 @@ func (c *aggregateCEL) Aggregate(_ context.Context, evs []core.Evidence, e core.
 		return core.Verdict{}, err
 	}
 	fields := prg.Fields()
+	boundaryRef := fields["status"] || fields["exitCode"] || fields["bodyText"] || fields["answer"]
 	records := make([]any, 0, len(evs))
 	for i, ev := range evs {
+		// R4.3 (A6): an expression referencing a boundary field over a driver-failed
+		// sample (no real Output) is a hard error — never a fabricated zero.
+		if boundaryRef && !hasRealOutput(ev) {
+			detail := ev.FailureMsg
+			if detail == "" {
+				detail = ev.FailureKind
+			}
+			return core.Verdict{}, fmt.Errorf("aggregate-cel: run %d (%s) has no boundary output (driver failed: %s); guard with r.failed or fix the run", i, ev.RunID, detail)
+		}
 		rec, err := c.record(ev, fields)
 		if err != nil {
 			return core.Verdict{}, fmt.Errorf("aggregate-cel: run %d (%s): %w", i, ev.RunID, err)
@@ -101,18 +111,30 @@ func (c *aggregateCEL) Aggregate(_ context.Context, evs []core.Evidence, e core.
 	return core.Verdict{Pass: false, Reasons: []string{aggregateReason(exp.Expr, evs, detail)}, Detail: detail}, nil
 }
 
-// record builds the per-run CEL map. Boundary fields are always present; each
-// trace-derived field is bound only when the expression references it (cost/services
-// hard-error on absent data, so binding them unconditionally would break agent runs).
+// hasRealOutput reports whether the sample carries a real driver Output: a run that
+// did not fail, or one that failed at resolve (the driver succeeded, Output retained).
+// A driver-failed sample has no real Output (R4.3, A6).
+func hasRealOutput(ev core.Evidence) bool {
+	return !ev.Failed || ev.FailureKind == core.FailureKindResolve
+}
+
+// record builds the per-run CEL map. runId/failed/failureKind are always bound so
+// r.failed guards work over any sample. Boundary fields (status/exitCode/bodyText/
+// answer) are bound only for samples with a real Output — never fabricated for a
+// driver-failed sample (the caller guards references to them). Each trace-derived
+// field is bound only when the expression references it (cost/services hard-error on
+// absent data, so binding them unconditionally would break agent runs).
 func (c *aggregateCEL) record(ev core.Evidence, fields map[string]bool) (map[string]any, error) {
 	rec := map[string]any{
 		"runId":       ev.RunID,
 		"failed":      ev.Failed,
 		"failureKind": ev.FailureKind,
-		"status":      int64(ev.Output.Status),
-		"exitCode":    int64(ev.Output.ExitCode),
-		"bodyText":    string(ev.Output.Body),
-		"answer":      ev.Output.Answer,
+	}
+	if hasRealOutput(ev) {
+		rec["status"] = int64(ev.Output.Status)
+		rec["exitCode"] = int64(ev.Output.ExitCode)
+		rec["bodyText"] = string(ev.Output.Body)
+		rec["answer"] = ev.Output.Answer
 	}
 	if ev.Failed || ev.Trace == nil {
 		return rec, nil

@@ -34,7 +34,7 @@ transport-ignorant).
 
 | Element | Change | Rules |
 |---------|--------|-------|
-| `parentIndex` | validation added | `-1` = root (only root marker). `0 ≤ i < len(spans)` and `i != self` = parent. Anything else (including omitted for span 0 self-reference cases) → load error naming span index/name and the offending value (A7). |
+| `parentIndex` | now required (`*int`) | **Required on every span** — an omitted `parentIndex` (nil) on any span → load error naming span index/name (`parentIndex is required (use -1 for root)`), never a silent child-of-span-0. `-1` = root (only root marker). `0 ≤ i < len(spans)` and `i != self` = parent; self (`== i`) and out-of-range (`< -1` or `≥ len`) → load error naming span index/name and the offending value (A7). After parentage is assigned, every span's `parentIndex` chain must terminate at a `-1` root; a chain that revisits an index → cycle load error (`parentIndex chain does not terminate at a root (cycle detected)`), so a rootless non-forest can never load. |
 | `status` | vocabulary | Canonical or OTLP spellings accepted; else load error (R1). Existing repo fixtures migrated to canonical spellings. |
 | `kind` | **new, optional** | OTLP spellings; omitted = unspecified (R2). |
 

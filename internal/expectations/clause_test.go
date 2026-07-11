@@ -57,7 +57,7 @@ func TestClauseToExpectation(t *testing.T) {
 	}{
 		{"exists no count", clauseYAML{Exists: "gen_ai.tool.name=search"}, "exists", false},
 		{"exists with count", clauseYAML{Exists: "gen_ai.tool.name=search", Count: ">=2"}, "exists", false},
-		{"absent", clauseYAML{Absent: "span.status=ERROR"}, "absent", false},
+		{"absent", clauseYAML{Absent: "span.status=Error"}, "absent", false},
 		{"child of", clauseYAML{Child: "gen_ai.tool.name=search", Of: "gen_ai.operation.name=chat"}, "containment", false},
 		{"descendant of", clauseYAML{Descendant: "gen_ai.tool.name=search", Of: "gen_ai.operation.name=invoke_agent"}, "containment", false},
 		{"fanout", clauseYAML{Fanout: fan("gen_ai.operation.name=chat", "gen_ai.tool.name=search", ">=3")}, "fanout", false},

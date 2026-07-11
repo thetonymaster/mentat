@@ -10,21 +10,31 @@ import (
 )
 
 // fixture mirrors Plan 1's tracelab capture format.
+//
+// ParentIndex is *int so an omitted field is distinguishable from index 0. It is
+// required on every span: nil (omitted) is a hard error rather than a silent
+// child-of-span-0, and -1 is the only root marker.
 type fixture struct {
 	RunScenario string `json:"runScenario"`
 	Spans       []struct {
 		Name        string            `json:"name"`
-		ParentIndex int               `json:"parentIndex"`
+		ParentIndex *int              `json:"parentIndex"`
 		Attrs       map[string]string `json:"attrs"`
 		Status      string            `json:"status"`
+		Kind        string            `json:"kind"`
 	} `json:"spans"`
 }
 
 // LoadFixture parses a captured fixture into a Trace forest.
 // Parentage is by index; we store the parent span's Name as a synthetic ParentID.
-// Span names are NOT globally unique within a fixture (happy.json repeats
-// "chat claude-x"), so this is safe only because every child's parentIndex points
-// at the unique root span. Deeper nesting would require index-based synthetic IDs.
+// parentIndex is required on every span (nil => hard error), -1 marks a root, and
+// any other value must be an in-range, non-self index. Fixtures may nest deeper
+// than one level (e.g. orderflow/payment_decline.json parents a span at index 3),
+// so after assigning parents we walk each span's parentIndex chain and reject any
+// chain that fails to terminate at a -1 root (a cycle), which would otherwise
+// yield a rootless non-forest. Span names are NOT globally unique within a
+// fixture (happy.json repeats "chat claude-x"), so the name-based ParentID stays
+// meaningful only because parentIndex — used here for validation — is unambiguous.
 func LoadFixture(data []byte) (*trace.Trace, error) {
 	var fx fixture
 	if err := json.Unmarshal(data, &fx); err != nil {
@@ -33,13 +43,47 @@ func LoadFixture(data []byte) (*trace.Trace, error) {
 	tr := &trace.Trace{}
 	spans := make([]*trace.Span, len(fx.Spans))
 	for i, fs := range fx.Spans {
-		spans[i] = &trace.Span{Name: fs.Name, Status: fs.Status, Attrs: fs.Attrs}
+		status, err := trace.NormalizeStatus(fs.Status)
+		if err != nil {
+			return nil, fmt.Errorf("filestore: span %d (%q): %w", i, fs.Name, err)
+		}
+		kind, err := trace.NormalizeKind(fs.Kind)
+		if err != nil {
+			return nil, fmt.Errorf("filestore: span %d (%q): %w", i, fs.Name, err)
+		}
+		spans[i] = &trace.Span{Name: fs.Name, Kind: kind, Status: status, Attrs: fs.Attrs}
 	}
 	for i, fs := range fx.Spans {
-		if fs.ParentIndex >= 0 && fs.ParentIndex < len(spans) {
-			spans[i].ParentID = spans[fs.ParentIndex].Name
-		} else {
+		if fs.ParentIndex == nil {
+			// An omitted parentIndex must never silently attach the span to
+			// span 0; -1 is the explicit root marker.
+			return nil, fmt.Errorf("filestore: span %d (%q): parentIndex is required (use -1 for root)", i, fs.Name)
+		}
+		pi := *fs.ParentIndex
+		switch {
+		case pi == -1:
+			// -1 is the only root marker.
 			tr.Roots = append(tr.Roots, spans[i])
+		case pi == i:
+			return nil, fmt.Errorf("filestore: span %d (%q): parentIndex %d points to itself (use -1 for root)", i, fs.Name, pi)
+		case pi < -1 || pi >= len(spans):
+			// -1 is handled above, so only < -1 and >= len(spans) reach here.
+			return nil, fmt.Errorf("filestore: span %d (%q): parentIndex %d out of range [0,%d) (use -1 for root)", i, fs.Name, pi, len(spans))
+		default:
+			spans[i].ParentID = spans[pi].Name
+		}
+	}
+	// Reachability: every parentIndex chain must terminate at a -1 root. Each
+	// ParentIndex here is non-nil and either -1 or a valid in-range non-self
+	// index (validated above), so the walk is bounded and index-safe. Revisiting
+	// an index means the chain loops and never reaches a root — a cycle.
+	for i := range fx.Spans {
+		visited := map[int]bool{i: true}
+		for j := *fx.Spans[i].ParentIndex; j != -1; j = *fx.Spans[j].ParentIndex {
+			if visited[j] {
+				return nil, fmt.Errorf("filestore: span %d (%q): parentIndex chain does not terminate at a root (cycle detected)", i, fx.Spans[i].Name)
+			}
+			visited[j] = true
 		}
 	}
 	tr.Spans = spans

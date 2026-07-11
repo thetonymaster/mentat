@@ -97,7 +97,12 @@ func (c *correlator) Resolve(ctx context.Context, store core.TraceStore, runID s
 			if len(m.Spans) == 0 {
 				return nil, fmt.Errorf("correlate: no trace for run %q within %v (0 spans seen)", runID, c.poll.Timeout)
 			}
-			return merged, nil // deadline reached but spans present — return best effort
+			// Spans present but never observed stable: the trace was still growing at
+			// the deadline. Returning it best-effort (audit A3) risks running
+			// comparators against a partial forest, so this is a hard error naming the
+			// run, the last span count, the stability progress, and the timeout
+			// (invariant §4 — no silent fallbacks).
+			return nil, fmt.Errorf("correlate: run %q unstable at deadline: %d spans, %d/%d stable iterations within %v", runID, len(m.Spans), stable, c.poll.StableFor, c.poll.Timeout)
 		}
 		select {
 		case <-ctx.Done():
