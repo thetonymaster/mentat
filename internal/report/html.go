@@ -11,9 +11,11 @@ import (
 var htmlTmpl = template.Must(template.New("report").Parse(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Mentat report</title>
 <style>body{font-family:system-ui,sans-serif;margin:2rem}table{border-collapse:collapse}
-td,th{border:1px solid #ccc;padding:.25rem .5rem}.fail{color:#b00}.pass{color:#080}</style>
+td,th{border:1px solid #ccc;padding:.25rem .5rem}.fail{color:#b00}.pass{color:#080}
+.interrupted{background:#fee;border:1px solid #b00;padding:.5rem;color:#b00;font-weight:bold}</style>
 </head><body>
 <h1>Mentat run</h1>
+{{if .Interrupted}}<p class="interrupted">⚠ suite interrupted — {{.Total}} scenario(s) completed before the signal</p>{{end}}
 <p>{{.Total}} scenarios — <span class="pass">{{.Passed}} passed</span>,
 <span class="fail">{{.Failed}} failed</span> — total cost ${{printf "%.4f" .TotalCost}}</p>
 {{range .Scenarios}}

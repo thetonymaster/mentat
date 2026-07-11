@@ -2,6 +2,8 @@ package registry
 
 import (
 	"context"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/thetonymaster/mentat/internal/config"
@@ -29,6 +31,7 @@ func (fakeDriver) Run(_ context.Context, _ core.RunSpec) (core.RunResult, error)
 // execution order.
 func resetRegistries(t *testing.T) {
 	t.Helper()
+	sealed = false
 	comparators = map[string]core.Comparator{}
 	aggregateComparators = map[string]core.AggregateComparator{}
 	drivers = map[string]core.Driver{}
@@ -37,6 +40,7 @@ func resetRegistries(t *testing.T) {
 	stores = map[string]StoreFactory{}
 	judges = map[string]JudgeFactory{}
 	t.Cleanup(func() {
+		sealed = false
 		comparators = map[string]core.Comparator{}
 		aggregateComparators = map[string]core.AggregateComparator{}
 		drivers = map[string]core.Driver{}
@@ -273,4 +277,58 @@ func TestReporterRegistry(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- Feature 003 (US4): registry sealing -------------------------------------
+
+func TestSealRejectsPostBuildRegistration(t *testing.T) {
+	resetRegistries(t)
+	RegisterComparator("pre-seal", fakeCmp{}) // allowed before the seal
+	Seal()
+	defer Reopen() // keep the registry usable for other tests in this binary
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected a panic when registering after Seal")
+		}
+		msg, _ := r.(string)
+		if !strings.Contains(msg, "sealed at the composition root") {
+			t.Fatalf("panic %q lacks the sealed-registry explanation", msg)
+		}
+	}()
+	RegisterComparator("post-seal", fakeCmp{}) // must panic
+	t.Fatal("RegisterComparator after Seal did not panic")
+}
+
+func TestResetForTestReopensRegistry(t *testing.T) {
+	resetRegistries(t)
+	Seal()
+	ResetForTest(t) // reopens for legitimate test-time registration
+	RegisterComparator("after-reset", fakeCmp{})
+	if _, ok := Comparator("after-reset"); !ok {
+		t.Fatal("comparator registered after ResetForTest was not found")
+	}
+}
+
+func TestResetForTestRequiresTestingT(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("ResetForTest(nil) must panic — it is a test-only helper")
+		}
+	}()
+	ResetForTest(nil)
+}
+
+func TestRegistryConcurrentAccessRaceClean(t *testing.T) {
+	resetRegistries(t)
+	// Concurrent readers and a writer (pre-seal) must be race-free under -race —
+	// the mutex removes the audit-B5 data-race class outright.
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); _, _ = Comparator("x") }()
+	}
+	wg.Add(1)
+	go func() { defer wg.Done(); RegisterComparator("y", fakeCmp{}) }()
+	wg.Wait()
 }

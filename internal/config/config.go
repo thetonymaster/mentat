@@ -4,9 +4,32 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+// Run-lifecycle defaults (feature 003). Generous enough not to break a slow-but-
+// healthy agent run, but a hard stop for a runaway. Both are configurable; the
+// existence of documented defaults is the requirement, the exact values are
+// tunable. Worst-case scenario wall time per run = RunTimeout + KillGrace.
+const (
+	DefaultRunTimeout = 5 * time.Minute
+	DefaultKillGrace  = 10 * time.Second
+	// unboundedValue is the explicit opt-out of the run timeout — never the silent
+	// default (Constitution IV): a run is bounded unless a human wrote this.
+	unboundedValue = "unbounded"
+)
+
+// RunBudget is the resolved lifecycle bound for one SUT run: a Timeout (meaningful
+// only when !Unbounded) plus the KillGrace between the polite signal and the
+// forceful kill. Unbounded is explicit — there is no magic zero Timeout meaning
+// "forever" (Constitution IV). KillGrace is always > 0.
+type RunBudget struct {
+	Timeout   time.Duration
+	Unbounded bool
+	KillGrace time.Duration
+}
 
 type Config struct {
 	Store        string            `yaml:"store"`
@@ -17,6 +40,12 @@ type Config struct {
 	Pricing      Pricing           `yaml:"pricing"`
 	Expectations string            `yaml:"expectations"`
 	Judge        JudgeConfig       `yaml:"judge"`
+	// RunTimeout / KillGrace are the raw suite-level lifecycle knobs. RunTimeout is
+	// a Go duration or "unbounded"; KillGrace is a Go duration > 0. Empty → default.
+	RunTimeout string `yaml:"run_timeout"`
+	KillGrace  string `yaml:"kill_grace"`
+	// Budget is the resolved suite-level run budget, populated by Load.
+	Budget RunBudget `yaml:"-"`
 }
 
 // JudgeConfig configures the semantic (LLM-judge) result matcher. The whole block
@@ -47,6 +76,11 @@ type Target struct {
 	Command        []string `yaml:"command"`
 	MaxConcurrency int      `yaml:"max_concurrency"`
 	HTTP           HTTP     `yaml:"http"`
+	// RunTimeout is the raw per-target override (Go duration or "unbounded"); empty
+	// inherits the suite value. Budget is the resolved effective budget for this
+	// target (override → suite → default), populated by Load.
+	RunTimeout string    `yaml:"run_timeout"`
+	Budget     RunBudget `yaml:"-"`
 }
 
 // HTTP is the per-target request config used when adapter is "http".
@@ -85,6 +119,19 @@ func Load(data []byte) (Config, error) {
 	if c.Poll.SearchLimit <= 0 {
 		c.Poll.SearchLimit = 100
 	}
+	// Resolve the suite-level run budget (feature 003). Defaults 5m / 10s; a
+	// per-target run_timeout (resolved in the loop below) overrides the timeout,
+	// while kill_grace is suite-wide. A typo or non-positive value fails loudly
+	// here rather than becoming a silent default (Constitution IV).
+	killGrace, err := resolveKillGrace(c.KillGrace)
+	if err != nil {
+		return Config{}, err
+	}
+	suiteTimeout, suiteUnbounded, err := resolveTimeout("run_timeout", c.RunTimeout, DefaultRunTimeout, false)
+	if err != nil {
+		return Config{}, err
+	}
+	c.Budget = RunBudget{Timeout: suiteTimeout, Unbounded: suiteUnbounded, KillGrace: killGrace}
 	for name, t := range c.Targets {
 		def, ok := defaultConcurrency[t.Adapter]
 		if !ok {
@@ -95,7 +142,6 @@ func Load(data []byte) (Config, error) {
 		}
 		if t.MaxConcurrency == 0 {
 			t.MaxConcurrency = def
-			c.Targets[name] = t
 		}
 		if t.Adapter == "http" {
 			url := strings.TrimSpace(t.HTTP.URL)
@@ -108,8 +154,13 @@ func Load(data []byte) (Config, error) {
 			}
 			t.HTTP.URL = url
 			t.HTTP.Method = method
-			c.Targets[name] = t
 		}
+		tt, tu, terr := resolveTimeout(fmt.Sprintf("target %q run_timeout", name), t.RunTimeout, suiteTimeout, suiteUnbounded)
+		if terr != nil {
+			return Config{}, terr
+		}
+		t.Budget = RunBudget{Timeout: tt, Unbounded: tu, KillGrace: killGrace}
+		c.Targets[name] = t
 	}
 	if err := validatePricing(c.Pricing); err != nil {
 		return Config{}, err
@@ -172,4 +223,44 @@ func validateRate(model, field string, v float64) error {
 		return fmt.Errorf("pricing %q: %s must be finite and >= 0, got %v", model, field, v)
 	}
 	return nil
+}
+
+// resolveTimeout parses a run_timeout raw value into (timeout, unbounded). An empty
+// raw inherits (defTimeout, defUnbounded) — the built-in default at suite level, or
+// the resolved suite value at target level. The literal "unbounded" opts out of the
+// timeout. Any other non-duration, or a non-positive duration, is a hard error
+// naming the key and value (no silent fallback — Constitution IV).
+func resolveTimeout(key, raw string, defTimeout time.Duration, defUnbounded bool) (time.Duration, bool, error) {
+	raw = strings.TrimSpace(raw)
+	switch raw {
+	case "":
+		return defTimeout, defUnbounded, nil
+	case unboundedValue:
+		return 0, true, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, false, fmt.Errorf("%s: invalid duration %q (want a Go duration like \"5m\" or %q)", key, raw, unboundedValue)
+	}
+	if d <= 0 {
+		return 0, false, fmt.Errorf("%s: must be > 0, got %q (use %q for no limit)", key, raw, unboundedValue)
+	}
+	return d, false, nil
+}
+
+// resolveKillGrace parses the suite kill_grace. Empty → DefaultKillGrace. It must be
+// a Go duration strictly greater than zero; a typo or non-positive value fails loudly.
+func resolveKillGrace(raw string) (time.Duration, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return DefaultKillGrace, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("kill_grace: invalid duration %q (want a Go duration like \"10s\")", raw)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("kill_grace: must be > 0, got %q", raw)
+	}
+	return d, nil
 }

@@ -9,8 +9,8 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 Baseline: `make ci` green; record e2e wall time (regression bound SC-006) in specs/003-run-lifecycle/baseline-note.md (go-coder)
-- [ ] T002 [P] Helper-process scaffolding: `TestHelperProcess` re-exec pattern (never-exits, grandchild-holds-pipe, ignores-SIGTERM modes) in internal/driver/helper_test.go (go-coder — test infrastructure, no behaviour yet)
+- [X] T001 Baseline: `make ci` green; record e2e wall time (regression bound SC-006) in specs/003-run-lifecycle/baseline-note.md (go-coder)
+- [X] T002 [P] Helper-process scaffolding: `TestHelperProcess` re-exec pattern (never-exits, grandchild-holds-pipe, ignores-SIGTERM modes) in internal/driver/helper_test.go (go-coder — test infrastructure, no behaviour yet)
 
 ---
 
@@ -18,9 +18,9 @@
 
 **Purpose**: budget config + core plumbing every story reads.
 
-- [ ] T003 Failing tests: `run_timeout`/`kill_grace` parsing — defaults (5m/10s), per-target override, `"unbounded"` opt-in, typo/zero-grace → parse error; resolved `Duration`+`Unbounded bool` (no magic zero) in internal/config/config_test.go (go-test-writer, red)
-- [ ] T004 Implement config fields + resolution in internal/config/config.go (go-test-writer, green)
-- [ ] T005 Add `RunSpec.KillGrace` to internal/core/core.go + `go generate ./...` mocks (go-coder)
+- [X] T003 Failing tests: `run_timeout`/`kill_grace` parsing — defaults (5m/10s), per-target override, `"unbounded"` opt-in, typo/zero-grace → parse error; resolved `Duration`+`Unbounded bool` (no magic zero) in internal/config/config_test.go (go-test-writer, red)
+- [X] T004 Implement config fields + resolution in internal/config/config.go (go-test-writer, green)
+- [X] T005 Add `RunSpec.KillGrace` to internal/core/core.go + `go generate ./...` mocks (go-coder)
 
 **Checkpoint**: budgets resolvable; stories can start in parallel.
 
@@ -32,11 +32,11 @@
 
 **Independent Test**: sleep-forever target with child, 2s budget → fails <2s+grace, `pgrep` finds no survivor.
 
-- [ ] T006 [US1] Failing helper-process tests: never-exits killed at ctx deadline with whole pgid gone after grace; grandchild-holds-pipe → `Run` returns after `WaitDelay` with captured output preserved; ignores-SIGTERM → SIGKILL escalation in internal/driver/shell_test.go (go-test-writer, red)
-- [ ] T007 [US1] Implement `Setpgid` process group, `cmd.Cancel` = SIGTERM→SIGKILL(-pgid) after grace, `WaitDelay = KillGrace` in internal/driver/shell.go (go-test-writer, green)
-- [ ] T008 [US1] Failing test: engine derives per-run `context.WithTimeout` from scenario ctx + target budget; timeout failure names target/phase/elapsed; "unbounded" skips the timeout in internal/engine/engine_test.go (go-test-writer, red)
-- [ ] T009 [US1] Implement run-budget context + phase-attributed failure wrapping in internal/engine/engine.go (go-test-writer, green)
-- [ ] T010 [US1] Failing e2e: hung-SUT meta feature (`features/meta/hung_sut.feature`, `run_timeout: 2s`) → red within budget+grace, no surviving pgid member, in e2e/hung_sut_meta_test.go (mentatBin, t.Parallel) (go-test-writer, red→green with T007/T009)
+- [X] T006 [US1] Failing helper-process tests: never-exits killed at ctx deadline with whole pgid gone after grace; grandchild-holds-pipe → `Run` returns after `WaitDelay` with captured output preserved; ignores-SIGTERM → SIGKILL escalation in internal/driver/shell_test.go (go-test-writer, red)
+- [X] T007 [US1] Implement `Setpgid` process group, `cmd.Cancel` = SIGTERM→SIGKILL(-pgid) after grace, `WaitDelay = KillGrace` in internal/driver/shell.go (go-test-writer, green)
+- [X] T008 [US1] Failing test: engine derives per-run `context.WithTimeout` from scenario ctx + target budget; timeout failure names target/phase/elapsed; "unbounded" skips the timeout in internal/engine/engine_test.go (go-test-writer, red)
+- [X] T009 [US1] Implement run-budget context + phase-attributed failure wrapping in internal/engine/engine.go (go-test-writer, green)
+- [X] T010 [US1] Failing e2e: hung-SUT meta feature (`features/meta/hung_sut.feature`, `run_timeout: 2s`) → red within budget+grace, no surviving pgid member, in e2e/hung_sut_meta_test.go (mentatBin, t.Parallel) (go-test-writer, red→green with T007/T009)
 
 **Checkpoint**: hangs impossible; MVP shippable.
 
@@ -48,10 +48,10 @@
 
 **Independent Test**: SIGTERM mid-suite → reports exist with completed results + interrupted marker, exit 130, no orphan.
 
-- [ ] T011 [P] [US2] Failing tests: collector/report `Interrupted` marker rendered in JSON field, HTML banner, JUnit property; temp+rename atomic emission in internal/report/collector_test.go, internal/report/report_test.go (go-test-writer, red)
-- [ ] T012 [US2] Implement marker + atomic writes in internal/report/collector.go, internal/report/json.go, internal/report/html.go, internal/report/junit-path in cmd/mentat/main.go (go-test-writer, green)
-- [ ] T013 [US2] Failing test: `signal.NotifyContext` wiring — suite ctx cancelled on SIGTERM, reports still emitted, exit 130, second signal force-exits; child-process test driving a built `mentat` binary in cmd/mentat/signal_test.go (go-test-writer, red)
-- [ ] T014 [US2] Implement signal handling + always-emit reports + exit codes in cmd/mentat/main.go (go-test-writer, green)
+- [X] T011 [P] [US2] Failing tests: collector/report `Interrupted` marker rendered in JSON field, HTML banner, JUnit property; temp+rename atomic emission in internal/report/collector_test.go, internal/report/report_test.go (go-test-writer, red)
+- [X] T012 [US2] Implement marker + atomic writes in internal/report/collector.go, internal/report/json.go, internal/report/html.go, internal/report/junit-path in cmd/mentat/main.go (go-test-writer, green)
+- [X] T013 [US2] Failing test: `signal.NotifyContext` wiring — suite ctx cancelled on SIGTERM, reports still emitted, exit 130, second signal force-exits; child-process test driving a built `mentat` binary in cmd/mentat/signal_test.go (go-test-writer, red)
+- [X] T014 [US2] Implement signal handling + always-emit reports + exit codes in cmd/mentat/main.go (go-test-writer, green)
 
 **Checkpoint**: CI cancellation is safe.
 
@@ -63,11 +63,11 @@
 
 **Independent Test**: scenario timeout < SUT runtime → phase-attributed failure; judge stall cancelled.
 
-- [ ] T015 [US3] Failing tests: `world` carries scenario ctx from `sc.Before`; Drive/Compare/Aggregate receive it (mock observes deadline); judge-phase timeout attributed in internal/steps/steps_test.go (go-test-writer, red)
-- [ ] T016 [US3] Convert step defs to context-aware signatures; delete every `context.Background()` in internal/steps/steps.go (go-test-writer, green)
-- [ ] T017 [US3] Failing test: `ctl.ReplayFeature` caller cancellation reaches the steps (previously dead path) in internal/ctl/replay_test.go (go-test-writer, red)
-- [ ] T018 [US3] Verify/fix ctx flow through DefaultContext in internal/ctl/replay.go (go-test-writer, green)
-- [ ] T019 [US3] Guard test: grep-style test asserting no `context.Background()` in internal/steps (non-test files) in internal/steps/ctx_guard_test.go (go-test-writer)
+- [X] T015 [US3] Failing tests: `world` carries scenario ctx from `sc.Before`; Drive/Compare/Aggregate receive it (mock observes deadline); judge-phase timeout attributed in internal/steps/steps_test.go (go-test-writer, red)
+- [X] T016 [US3] Convert step defs to context-aware signatures; delete every `context.Background()` in internal/steps/steps.go (go-test-writer, green)
+- [X] T017 [US3] Failing test: `ctl.ReplayFeature` caller cancellation reaches the steps (previously dead path) in internal/ctl/replay_test.go (go-test-writer, red)
+- [X] T018 [US3] Verify/fix ctx flow through DefaultContext in internal/ctl/replay.go (go-test-writer, green)
+- [X] T019 [US3] Guard test: grep-style test asserting no `context.Background()` in internal/steps (non-test files) in internal/steps/ctx_guard_test.go (go-test-writer)
 
 **Checkpoint**: one budget bounds drive, resolve, assert, judge.
 
@@ -79,10 +79,10 @@
 
 **Independent Test**: parallel batch with structural failure drives <N; post-seal Register panics.
 
-- [ ] T020 [P] [US4] Failing test: parallel `@runs(N)` — structural error cancels not-yet-started iterations (drive-count < N asserted via mock) in internal/engine/engine_test.go (go-test-writer, red)
-- [ ] T021 [US4] Implement batch `context.WithCancel` + pre-drive checks in internal/engine/engine.go (go-test-writer, green)
-- [ ] T022 [P] [US4] Failing tests: `registry.Seal()` — post-seal Register panics with sealed message; mutex-guarded maps race-clean under `-race`; `ResetForTest(t)` reopens in internal/registry/registry_test.go (go-test-writer, red)
-- [ ] T023 [US4] Implement Seal/mutex/ResetForTest in internal/registry/registry.go; call Seal at end of engine.Build/BuildStore in internal/engine/build.go, internal/engine/store.go; migrate the serialized tests noted at internal/steps/steps_test.go:1087 to ResetForTest (go-test-writer, green)
+- [X] T020 [P] [US4] Failing test: parallel `@runs(N)` — structural error cancels not-yet-started iterations (drive-count < N asserted via mock) in internal/engine/engine_test.go (go-test-writer, red)
+- [X] T021 [US4] Implement batch `context.WithCancel` + pre-drive checks in internal/engine/engine.go (go-test-writer, green)
+- [X] T022 [P] [US4] Failing tests: `registry.Seal()` — post-seal Register panics with sealed message; mutex-guarded maps race-clean under `-race`; `ResetForTest(t)` reopens in internal/registry/registry_test.go (go-test-writer, red)
+- [X] T023 [US4] Implement Seal/mutex/ResetForTest in internal/registry/registry.go; call Seal at end of engine.Build/BuildStore in internal/engine/build.go, internal/engine/store.go; migrate the serialized tests noted at internal/steps/steps_test.go:1087 to ResetForTest (go-test-writer, green)
 
 **Checkpoint**: all stories green.
 
@@ -90,9 +90,9 @@
 
 ## Phase 7: Polish & Cross-Cutting
 
-- [ ] T024 [P] Coverage gate `/coverage` ≥80% touched packages (go-coder)
-- [ ] T025 [P] Full quickstart.md validation incl. `-race`; e2e wall clock within +5% of T001 baseline (go-coder)
-- [ ] T026 Sync contracts/lifecycle-config.md (defaults, exit codes, message shapes) with implementation; README/config docs for `run_timeout`/`kill_grace`/unbounded (go-coder)
+- [X] T024 [P] Coverage gate `/coverage` ≥80% touched packages (go-coder)
+- [X] T025 [P] Full quickstart.md validation incl. `-race`; e2e wall clock within +5% of T001 baseline (go-coder)
+- [X] T026 Sync contracts/lifecycle-config.md (defaults, exit codes, message shapes) with implementation; README/config docs for `run_timeout`/`kill_grace`/unbounded (go-coder)
 
 ---
 

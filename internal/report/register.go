@@ -6,4 +6,5 @@ import "github.com/thetonymaster/mentat/internal/registry"
 func RegisterBuiltins() {
 	registry.RegisterReporter("json", jsonReporter{})
 	registry.RegisterReporter("html", htmlReporter{})
+	registry.RegisterReporter("junit", junitReporter{})
 }

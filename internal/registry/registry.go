@@ -1,20 +1,69 @@
 package registry
 
 import (
+	"sync"
+	"testing"
+
 	"github.com/thetonymaster/mentat/internal/config"
 	"github.com/thetonymaster/mentat/internal/core"
 )
 
-// Stateless seams register instances; stateful seams register factories: the store
-// seam (endpoints, clients — see StoreFactory) and the judge seam (model clients,
-// credentials — see JudgeFactory).
+// The seam registries are package-global maps. A single RWMutex guards them and a
+// sealed flag (feature 003, FR-009): registration is allowed only while the
+// registry is open (during the composition root, engine.Build/BuildStore); once
+// sealed, any Register* panics loudly instead of racing a concurrent reader. The
+// mutex removes the audit-B5 data race even in the pre-seal window.
 var (
+	mu     sync.RWMutex
+	sealed bool
+
 	comparators          = map[string]core.Comparator{}
 	aggregateComparators = map[string]core.AggregateComparator{}
 	drivers              = map[string]core.Driver{}
 	matchers             = map[string]core.Matcher{}
 	reporters            = map[string]core.Reporter{}
 )
+
+const sealedMsg = "registry: Register called after engine build — registries are sealed at the composition root"
+
+// Seal closes the registry to further registration. engine.Build and BuildStore
+// call it once wiring completes, turning FR-009's build-once discipline from a
+// comment into enforced behaviour. Idempotent.
+func Seal() {
+	mu.Lock()
+	sealed = true
+	mu.Unlock()
+}
+
+// Reopen re-opens the registry so the composition root can (re)wire it. engine.Build
+// and BuildStore call it at the start so they are re-entrant (tests build many
+// engines); ResetForTest calls it too. Idempotent.
+func Reopen() {
+	mu.Lock()
+	sealed = false
+	mu.Unlock()
+}
+
+// ResetForTest re-opens the registry for a test that registers custom seams outside
+// the composition root. It requires a non-nil *testing.T so it can only be reached
+// from test code, never from a production path.
+func ResetForTest(t *testing.T) {
+	if t == nil {
+		panic("registry: ResetForTest requires a non-nil *testing.T")
+	}
+	Reopen()
+}
+
+// registerLocked is the shared write path: it panics on a sealed registry, else
+// runs set under the write lock.
+func registerLocked(set func()) {
+	mu.Lock()
+	defer mu.Unlock()
+	if sealed {
+		panic(sealedMsg)
+	}
+	set()
+}
 
 // StoreFactory builds a TraceStore from config. Stores are stateful (endpoints,
 // clients), so the store seam registers factories rather than shared instances.
@@ -23,10 +72,15 @@ type StoreFactory func(cfg config.Config) (core.TraceStore, error)
 var stores = map[string]StoreFactory{}
 
 // RegisterStore registers a TraceStore factory under the given name.
-func RegisterStore(name string, f StoreFactory) { stores[name] = f }
+func RegisterStore(name string, f StoreFactory) { registerLocked(func() { stores[name] = f }) }
 
 // Store resolves a registered TraceStore factory by name.
-func Store(name string) (StoreFactory, bool) { f, ok := stores[name]; return f, ok }
+func Store(name string) (StoreFactory, bool) {
+	mu.RLock()
+	defer mu.RUnlock()
+	f, ok := stores[name]
+	return f, ok
+}
 
 // JudgeFactory builds a Judge from config. Judges are stateful (model clients,
 // credentials), so the judge seam registers factories rather than shared instances.
@@ -35,30 +89,46 @@ type JudgeFactory func(cfg config.Config) (core.Judge, error)
 var judges = map[string]JudgeFactory{}
 
 // RegisterJudge registers a Judge factory under the given name.
-func RegisterJudge(name string, f JudgeFactory) { judges[name] = f }
+func RegisterJudge(name string, f JudgeFactory) { registerLocked(func() { judges[name] = f }) }
 
 // Judge resolves a registered Judge factory by name.
-func Judge(name string) (JudgeFactory, bool) { f, ok := judges[name]; return f, ok }
+func Judge(name string) (JudgeFactory, bool) {
+	mu.RLock()
+	defer mu.RUnlock()
+	f, ok := judges[name]
+	return f, ok
+}
 
 // RegisterComparator registers a Comparator under the given name.
-func RegisterComparator(name string, c core.Comparator) { comparators[name] = c }
+func RegisterComparator(name string, c core.Comparator) {
+	registerLocked(func() { comparators[name] = c })
+}
 
 // Comparator resolves a registered Comparator by name.
-func Comparator(name string) (core.Comparator, bool) { c, ok := comparators[name]; return c, ok }
+func Comparator(name string) (core.Comparator, bool) {
+	mu.RLock()
+	defer mu.RUnlock()
+	c, ok := comparators[name]
+	return c, ok
+}
 
 // RegisterAggregateComparator registers an AggregateComparator under the given name.
 func RegisterAggregateComparator(name string, c core.AggregateComparator) {
-	aggregateComparators[name] = c
+	registerLocked(func() { aggregateComparators[name] = c })
 }
 
 // AggregateComparator resolves a registered AggregateComparator by name.
 func AggregateComparator(name string) (core.AggregateComparator, bool) {
+	mu.RLock()
+	defer mu.RUnlock()
 	c, ok := aggregateComparators[name]
 	return c, ok
 }
 
 // Comparators returns all registered comparator names.
 func Comparators() []string {
+	mu.RLock()
+	defer mu.RUnlock()
 	names := make([]string, 0, len(comparators))
 	for n := range comparators {
 		names = append(names, n)
@@ -67,19 +137,34 @@ func Comparators() []string {
 }
 
 // RegisterDriver registers a Driver under the given scheme.
-func RegisterDriver(scheme string, d core.Driver) { drivers[scheme] = d }
+func RegisterDriver(scheme string, d core.Driver) { registerLocked(func() { drivers[scheme] = d }) }
 
 // Driver resolves a registered Driver by scheme.
-func Driver(scheme string) (core.Driver, bool) { d, ok := drivers[scheme]; return d, ok }
+func Driver(scheme string) (core.Driver, bool) {
+	mu.RLock()
+	defer mu.RUnlock()
+	d, ok := drivers[scheme]
+	return d, ok
+}
 
 // RegisterMatcher registers a result Matcher under the given name.
-func RegisterMatcher(name string, m core.Matcher) { matchers[name] = m }
+func RegisterMatcher(name string, m core.Matcher) { registerLocked(func() { matchers[name] = m }) }
 
 // Matcher resolves a registered Matcher by name.
-func Matcher(name string) (core.Matcher, bool) { m, ok := matchers[name]; return m, ok }
+func Matcher(name string) (core.Matcher, bool) {
+	mu.RLock()
+	defer mu.RUnlock()
+	m, ok := matchers[name]
+	return m, ok
+}
 
 // RegisterReporter registers a Reporter under the given name.
-func RegisterReporter(name string, r core.Reporter) { reporters[name] = r }
+func RegisterReporter(name string, r core.Reporter) { registerLocked(func() { reporters[name] = r }) }
 
 // Reporter resolves a registered Reporter by name.
-func Reporter(name string) (core.Reporter, bool) { r, ok := reporters[name]; return r, ok }
+func Reporter(name string) (core.Reporter, bool) {
+	mu.RLock()
+	defer mu.RUnlock()
+	r, ok := reporters[name]
+	return r, ok
+}

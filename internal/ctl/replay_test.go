@@ -153,3 +153,44 @@ func writeTempFeature(t *testing.T, body string) string {
 	}
 	return p
 }
+
+// TestReplayFeatureHonorsCallerCancellation pins feature 003 (US3/FR-005): a caller
+// cancelling a service-mode replay must stop it. Before the scenario context was
+// threaded through the steps (audit B2), the caller context reached DefaultContext
+// but the steps rebuilt context.Background(), so cancellation was a dead path. Here
+// resolve blocks until the caller ctx is cancelled; the replay must then fail.
+func TestReplayFeatureHonorsCallerCancellation(t *testing.T) {
+	cfg := config.Config{
+		OTLPEndpoint: "x",
+		Targets:      map[string]config.Target{"bot": {Adapter: "shell", Command: []string{"true"}, MaxConcurrency: 1}},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	cor := mocks.NewMockCorrelator(ctrl)
+	cor.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("r").AnyTimes()
+	// Resolve blocks until the scenario context is cancelled, then returns its error —
+	// only reachable if the caller's cancellation threads through to the steps.
+	cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, _ core.TraceStore, _ string) (*trace.Trace, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}).AnyTimes()
+	eng, err := engine.Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("engine.Build: %v", err)
+	}
+
+	feature := writeTempFeature(t, `Feature: replay cancel
+  Scenario: caller cancellation reaches the steps
+    Given the agent target "bot"
+    When I run scenario "ignored"
+    Then the result contains "x"
+`)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(100 * time.Millisecond); cancel() }()
+
+	var b bytes.Buffer
+	if err := ReplayFeature(ctx, eng, "r", feature, "", &b); err == nil {
+		t.Fatalf("expected a cancellation error; caller ctx did not reach the replay steps\n%s", b.String())
+	}
+}

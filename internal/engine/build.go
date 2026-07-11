@@ -17,11 +17,17 @@ import (
 // comparators into the registry, then wires and returns a ready *Engine.
 //
 // Concurrency note: the Register* calls below write into the registry's
-// package-global maps WITHOUT a mutex. This is intentional and safe because
-// Build runs exactly once at composition-root startup, before the godog suite
-// executes scenarios concurrently. All concurrent readers (Engine.Drive,
-// Engine.Comparator) only ever read those maps after Build returns.
+// package-global maps under the registry's own RWMutex (FR-009). Build reopens
+// the registry, registers every seam, then seals it — after which any stray
+// Register* outside a Build panics loudly. Concurrent readers (Engine.Drive,
+// Engine.Comparator) take the read lock, so the maps are safe to read while the
+// godog suite executes scenarios concurrently.
 func Build(cfg config.Config, st core.TraceStore, cor core.Correlator) (*Engine, error) {
+	// Build is the composition root and is re-entrant: reopen the registry so a
+	// rebuild (tests build many engines) is not blocked by a previous seal, then
+	// seal again once wiring completes (FR-009). A stray Register* after this seal —
+	// outside a Build — panics loudly.
+	registry.Reopen()
 	registry.RegisterDriver("shell", driver.NewShell())
 	registry.RegisterDriver("http", driver.NewHTTP())
 	pricing := toPricing(cfg.Pricing)
@@ -78,6 +84,7 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator) (*Engine,
 		}
 		sems[name] = make(chan struct{}, n)
 	}
+	registry.Seal() // wiring complete: post-build registration now fails loudly (FR-009)
 	return &Engine{cfg: cfg, cor: cor, st: st, sems: sems, pricing: pricing, patterns: pats}, nil
 }
 

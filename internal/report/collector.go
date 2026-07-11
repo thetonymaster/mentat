@@ -22,11 +22,13 @@ func (c *Collector) Append(sr core.ScenarioResult) {
 	c.scenarios = append(c.scenarios, sr)
 }
 
-// Report folds the accumulated scenarios into a RunReport with rollups.
-func (c *Collector) Report(started time.Time, dur time.Duration) core.RunReport {
+// Report folds the accumulated scenarios into a RunReport with rollups. interrupted
+// records whether a signal cancelled the run before completion (feature 003); it
+// surfaces as RunReport.Interrupted so every emitted format carries the marker.
+func (c *Collector) Report(started time.Time, dur time.Duration, interrupted bool) core.RunReport {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	rep := core.RunReport{StartedAt: started, Duration: dur, Total: len(c.scenarios)}
+	rep := core.RunReport{StartedAt: started, Duration: dur, Total: len(c.scenarios), Interrupted: interrupted}
 	rep.Scenarios = append(rep.Scenarios, c.scenarios...)
 	for _, sr := range c.scenarios {
 		if sr.Pass {

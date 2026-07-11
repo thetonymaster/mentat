@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadAppliesPerAdapterConcurrencyDefaults(t *testing.T) {
@@ -566,6 +567,151 @@ targets:
 			for k, v := range tt.wantHeaders {
 				if got.HTTP.Headers[k] != v {
 					t.Errorf("Headers[%q] = %q, want %q", k, got.HTTP.Headers[k], v)
+				}
+			}
+		})
+	}
+}
+
+// --- Feature 003: run lifecycle budget (run_timeout / kill_grace) ------------
+
+func TestLoadResolvesRunBudget(t *testing.T) {
+	const defTimeout = 5 * time.Minute
+	const defGrace = 10 * time.Second
+
+	tests := []struct {
+		name       string
+		yaml       string
+		wantSuite  RunBudget
+		wantTarget RunBudget // resolved budget for target "a"
+	}{
+		{
+			name: "omitted keys apply documented defaults and target inherits",
+			yaml: `
+targets:
+  a: { adapter: shell, command: ["true"] }
+`,
+			wantSuite:  RunBudget{Timeout: defTimeout, Unbounded: false, KillGrace: defGrace},
+			wantTarget: RunBudget{Timeout: defTimeout, Unbounded: false, KillGrace: defGrace},
+		},
+		{
+			name: "explicit suite values resolve and target inherits",
+			yaml: `
+run_timeout: 2m
+kill_grace: 3s
+targets:
+  a: { adapter: shell, command: ["true"] }
+`,
+			wantSuite:  RunBudget{Timeout: 2 * time.Minute, Unbounded: false, KillGrace: 3 * time.Second},
+			wantTarget: RunBudget{Timeout: 2 * time.Minute, Unbounded: false, KillGrace: 3 * time.Second},
+		},
+		{
+			name: "suite unbounded opt-in propagates to target",
+			yaml: `
+run_timeout: unbounded
+targets:
+  a: { adapter: shell, command: ["true"] }
+`,
+			wantSuite:  RunBudget{Timeout: 0, Unbounded: true, KillGrace: defGrace},
+			wantTarget: RunBudget{Timeout: 0, Unbounded: true, KillGrace: defGrace},
+		},
+		{
+			name: "per-target override wins over suite; kill_grace from suite",
+			yaml: `
+run_timeout: 5m
+kill_grace: 7s
+targets:
+  a: { adapter: shell, command: ["true"], run_timeout: 10m }
+`,
+			wantSuite:  RunBudget{Timeout: defTimeout, Unbounded: false, KillGrace: 7 * time.Second},
+			wantTarget: RunBudget{Timeout: 10 * time.Minute, Unbounded: false, KillGrace: 7 * time.Second},
+		},
+		{
+			name: "per-target unbounded override while suite is bounded",
+			yaml: `
+run_timeout: 5m
+targets:
+  a: { adapter: shell, command: ["true"], run_timeout: unbounded }
+`,
+			wantSuite:  RunBudget{Timeout: defTimeout, Unbounded: false, KillGrace: defGrace},
+			wantTarget: RunBudget{Timeout: 0, Unbounded: true, KillGrace: defGrace},
+		},
+		{
+			name: "per-target bounded override while suite is unbounded",
+			yaml: `
+run_timeout: unbounded
+targets:
+  a: { adapter: shell, command: ["true"], run_timeout: 30s }
+`,
+			wantSuite:  RunBudget{Timeout: 0, Unbounded: true, KillGrace: defGrace},
+			wantTarget: RunBudget{Timeout: 30 * time.Second, Unbounded: false, KillGrace: defGrace},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Load([]byte(tt.yaml))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.Budget != tt.wantSuite {
+				t.Fatalf("suite Budget = %+v, want %+v", cfg.Budget, tt.wantSuite)
+			}
+			got := cfg.Targets["a"].Budget
+			if got != tt.wantTarget {
+				t.Fatalf("target %q Budget = %+v, want %+v", "a", got, tt.wantTarget)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsBadLifecycleConfig(t *testing.T) {
+	tests := []struct {
+		name       string
+		yaml       string
+		wantErrSub []string // all substrings must appear
+	}{
+		{
+			name:       "suite run_timeout typo is a parse error",
+			yaml:       `run_timeout: foo`,
+			wantErrSub: []string{"run_timeout", "foo"},
+		},
+		{
+			name: "per-target run_timeout typo names the target",
+			yaml: `
+targets:
+  a: { adapter: shell, command: ["true"], run_timeout: nope }
+`,
+			wantErrSub: []string{"run_timeout", "a", "nope"},
+		},
+		{
+			name:       "zero kill_grace is rejected (must be > 0)",
+			yaml:       `kill_grace: 0s`,
+			wantErrSub: []string{"kill_grace"},
+		},
+		{
+			name:       "negative kill_grace is rejected",
+			yaml:       `kill_grace: -5s`,
+			wantErrSub: []string{"kill_grace"},
+		},
+		{
+			name:       "kill_grace typo is a parse error",
+			yaml:       `kill_grace: soon`,
+			wantErrSub: []string{"kill_grace", "soon"},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Load([]byte(tt.yaml))
+			if err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			for _, sub := range tt.wantErrSub {
+				if !strings.Contains(err.Error(), sub) {
+					t.Fatalf("error %q does not contain %q", err.Error(), sub)
 				}
 			}
 		})

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/thetonymaster/mentat/internal/core"
 )
@@ -33,10 +34,36 @@ func (shell) Run(ctx context.Context, spec core.RunSpec) (core.RunResult, error)
 	}
 	cmd.Env = env
 
+	// Run the SUT in its own process group so lifecycle control reaches the whole
+	// tree, not just the direct child (feature 003, FR-002/FR-003):
+	//   - Setpgid: pgid == the child's pid; signalling -pgid reaches every descendant.
+	//   - Cancel: on context cancellation, SIGTERM the group (polite first). The
+	//     post-Wait SIGKILL below is the forceful escalation.
+	//   - WaitDelay: bound Wait so a descendant holding the stdio pipes cannot hang
+	//     the runner, and a signal-ignoring child is force-killed after the grace.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return signalGroup(cmd, syscall.SIGTERM) }
+	if spec.KillGrace > 0 {
+		cmd.WaitDelay = spec.KillGrace
+	}
+
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	runErr := cmd.Run()
+
+	// Reap the whole process group on every exit path (normal exit, timeout, cancel).
+	// Cancel/WaitDelay only guarantee the direct child; a SIGKILL to the group ensures
+	// no descendant outlives the run beyond the grace period (FR-002). ESRCH (the group
+	// is already empty) is the normal case and is swallowed by signalGroup.
+	_ = signalGroup(cmd, syscall.SIGKILL)
+
+	// ErrWaitDelay means the child exited successfully but a descendant kept a stdio
+	// pipe open past WaitDelay; Go finalized the captured output and closed the pipes,
+	// so the run completed normally — not a failure (FR-003).
+	if errors.Is(runErr, exec.ErrWaitDelay) {
+		runErr = nil
+	}
 
 	exit := 0
 	var ee *exec.ExitError
@@ -59,6 +86,21 @@ func (shell) Run(ctx context.Context, spec core.RunSpec) (core.RunResult, error)
 		Answer:   core.ExtractAnswer(stdout.String()),
 	}
 	return core.RunResult{RunID: spec.RunID, Output: out}, nil
+}
+
+// signalGroup sends sig to the entire process group led by cmd's process (pgid ==
+// the leader's pid, established via Setpgid). A negative pid targets the group, so
+// the signal reaches every descendant that stayed in it. It is a no-op when the
+// process never started, and treats ESRCH (the group has already exited) as success
+// — that is the expected outcome on the reap path, not an error to surface.
+func signalGroup(cmd *exec.Cmd, sig syscall.Signal) error {
+	if cmd.Process == nil {
+		return nil
+	}
+	if err := syscall.Kill(-cmd.Process.Pid, sig); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	return nil
 }
 
 // resourceAttrs renders spec.Tags as the OTEL_RESOURCE_ATTRIBUTES value

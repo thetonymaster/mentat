@@ -14,6 +14,9 @@ import (
 // hard error (no silent fallback). Engine.Build keeps taking a built TraceStore
 // so hermetic tests can inject store.NewInMemStore directly.
 func BuildStore(cfg config.Config) (core.TraceStore, error) {
+	// Re-entrant like Build: reopen to register the store factories, seal once the
+	// store is resolved so post-build store registration fails loudly (FR-009).
+	registry.Reopen()
 	registry.RegisterStore("tempo", func(c config.Config) (core.TraceStore, error) {
 		return store.NewTempo(c.Tempo.Endpoint, nil, c.Poll.SearchLimit), nil
 	})
@@ -25,5 +28,6 @@ func BuildStore(cfg config.Config) (core.TraceStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("building store %q: %w", cfg.Store, err)
 	}
+	registry.Seal()
 	return st, nil
 }
