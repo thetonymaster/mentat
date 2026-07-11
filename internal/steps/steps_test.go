@@ -3,6 +3,7 @@ package steps
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -33,6 +34,15 @@ func happyTrace() *trace.Trace {
 	}
 	root := &trace.Span{Name: "invoke_agent", Attrs: map[string]string{genai.Op: genai.OpInvokeAgent, genai.InTokens: "1200", genai.OutTokens: "600"}}
 	return &trace.Trace{Roots: []*trace.Span{root}, Spans: []*trace.Span{root, mk(genai.OpExecuteTool, "search"), mk(genai.OpExecuteTool, "summarize")}}
+}
+
+// degradedTrace: a single span with no gen_ai.* tool attrs and no service.name, so
+// the report's tool/service sequence derivation is impossible. Drive still succeeds
+// and the driver output is unaffected — used to prove that a derivation problem
+// never flips a verdict (audit A8 / research R5).
+func degradedTrace() *trace.Trace {
+	span := &trace.Span{ID: "abc123", Name: "fetch", Attrs: map[string]string{}}
+	return &trace.Trace{Roots: []*trace.Span{span}, Spans: []*trace.Span{span}}
 }
 
 func TestFeatureExercisesGrammarAgainstFakeEngine(t *testing.T) {
@@ -563,6 +573,84 @@ func TestCheckRunsErrors(t *testing.T) {
 	}
 }
 
+// failingDriveEngine wires an engine whose driver succeeds (shell echo) but whose
+// correlator always fails Resolve, so a single-run drive yields a failed evs[0]
+// carrying FailureMsg — the A2 "broken run" case.
+func failingDriveEngine(t *testing.T, resolveErr error) *engine.Engine {
+	t.Helper()
+	cfg := config.Config{
+		OTLPEndpoint: "x",
+		Targets:      map[string]config.Target{"bot": {Adapter: "shell", Command: []string{"sh", "-c", "echo hi"}, MaxConcurrency: 1}},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	cor := mocks.NewMockCorrelator(ctrl)
+	cor.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("run-1").AnyTimes()
+	cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, resolveErr).AnyTimes()
+	eng, err := engine.Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("engine.Build: %v", err)
+	}
+	return eng
+}
+
+// TestSingleRunDriveFailureGoesRed is the A2 core: a broken single run can never
+// pass. Both an asserting scenario AND an assertion-free scenario (Given + When,
+// no Then) must go RED, surfacing the underlying drive failure — even though the
+// resolve-failure path RETAINS the real driver Output (which would otherwise let a
+// "the result contains" assertion pass on a broken run).
+func TestSingleRunDriveFailureGoesRed(t *testing.T) {
+	tests := []struct {
+		name     string
+		feature  string
+		contains []string
+	}{
+		{
+			name: "asserting scenario goes red on failed drive",
+			feature: `Feature: fail
+  Scenario: drive fails with an assertion present
+    Given the agent target "bot"
+    When I run scenario "x"
+    Then the result contains "hi"
+`,
+			contains: []string{"store down"},
+		},
+		{
+			name: "assertion-free scenario still goes red on failed drive",
+			feature: `Feature: fail
+  Scenario: drive fails with no Then
+    Given the agent target "bot"
+    When I run scenario "x"
+`,
+			contains: []string{"store down"},
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			eng := failingDriveEngine(t, errors.New("store down"))
+			var out bytes.Buffer
+			suite := godog.TestSuite{
+				ScenarioInitializer: Initializer(eng),
+				Options: &godog.Options{
+					Format:          "pretty",
+					Output:          &out,
+					Strict:          true,
+					FeatureContents: []godog.Feature{{Name: tt.name, Contents: []byte(tt.feature)}},
+				},
+			}
+			if status := suite.Run(); status == 0 {
+				t.Fatalf("expected RED on a failed drive, but suite passed\n%s", out.String())
+			}
+			for _, sub := range tt.contains {
+				if !strings.Contains(out.String(), sub) {
+					t.Fatalf("expected %q in suite output, got:\n%s", sub, out.String())
+				}
+			}
+		})
+	}
+}
+
 // TestParseRunsTag tests the @runs tag parser including error paths.
 func TestParseRunsTag(t *testing.T) {
 	tests := []struct {
@@ -678,7 +766,7 @@ func TestRunsSatisfiesStep(t *testing.T) {
 }
 
 // badDistEngine returns an engine whose store yields a trace WITH "search" on a
-// fraction of runs and WITHOUT it on the rest, deterministically by call count.
+// fraction of runs and WITHOUT it on the rest, deterministically by run id.
 func badDistEngine(t *testing.T, withSearch, total int) *engine.Engine {
 	t.Helper()
 	cfg := config.Config{
@@ -698,20 +786,35 @@ func badDistEngine(t *testing.T, withSearch, total int) *engine.Engine {
 	}
 	ctrl := gomock.NewController(t)
 	st := mocks.NewMockTraceStore(ctrl)
-	// calls counts GetByID invocations; each run makes exactly 1 GetByID when the
-	// polling timeout fires immediately (Timeout: time.Nanosecond forces a single
-	// poll per run — if spans>0 the correlator returns best-effort at deadline).
-	var calls int
-	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "t"}}, nil).AnyTimes()
-	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, _ string) (*trace.Trace, error) {
-		calls++
-		if calls <= withSearch {
-			return withTrace, nil
-		}
-		return withoutTrace, nil
-	}).Times(total)
+	// Distribution is keyed by RUN ID, not GetByID call count. A successful Resolve
+	// now needs ≥2 polls per run (StableFor:1 requires the span count to repeat once),
+	// so GetByID is invoked more than once per run and a call-count split no longer
+	// maps 1:1 to runs. Query returns the run id AS the trace id so GetByID can
+	// identify the run; GetByID returns a constant trace per run across polls, so the
+	// span count is stable and Resolve succeeds — the deadline/best-effort path (now a
+	// hard error, audit A3) is never taken.
+	st.EXPECT().Query(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, q core.TraceQuery) ([]core.TraceRef, error) {
+			return []core.TraceRef{{TraceID: q.Value}}, nil
+		}).AnyTimes()
+	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, id string) (*trace.Trace, error) {
+			// id is the run id "run-K"; runs run-1..run-withSearch carry "search".
+			var k int
+			if _, err := fmt.Sscanf(id, "run-%d", &k); err != nil {
+				// Fail loudly rather than silently defaulting to withoutTrace:
+				// an id that does not match "run-K" means the test's own wiring
+				// drifted, not a real not-found (no silent fallbacks).
+				return nil, fmt.Errorf("badDistEngine mock: unexpected trace id %q: %w", id, err)
+			}
+			if k >= 1 && k <= withSearch {
+				return withTrace, nil
+			}
+			return withoutTrace, nil
+		}).AnyTimes()
 	var n int
-	cor := correlate.New(func() string { n++; return fmt.Sprintf("run-%d", n) }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Nanosecond})
+	cor := correlate.New(func() string { n++; return fmt.Sprintf("run-%d", n) },
+		correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
 	eng, err := engine.Build(cfg, st, cor)
 	if err != nil {
 		t.Fatalf("engine.Build: %v", err)
@@ -853,6 +956,52 @@ func TestInitializer_CollectsResults(t *testing.T) {
 	}
 	if !rep.Scenarios[0].Pass {
 		t.Fatalf("scenario[0].Pass=false, want true")
+	}
+}
+
+// TestInitializer_DerivationDegradationKeepsVerdict is the audit-A8 regression guard
+// (research R5): a scenario whose report derivation is impossible — here a span
+// missing service.name so no tool/service sequence can be built — must STAY passing
+// because the report is an observer, while the resulting ScenarioResult still
+// surfaces a DerivationNote. Before the fix the After hook propagated report.Derive's
+// error to godog, flipping the verdict to fail.
+func TestInitializer_DerivationDegradationKeepsVerdict(t *testing.T) {
+	col := report.NewCollector()
+	eng := runsEngine(t, degradedTrace())
+
+	feature := `Feature: degraded-derivation
+  Scenario: passing scenario with underivable sequence
+    Given the agent target "bot"
+    When I run scenario "x"
+    Then the result contains "hi"
+`
+	var out bytes.Buffer
+	suite := godog.TestSuite{
+		ScenarioInitializer: InitializerWithCollector(eng, col),
+		Options: &godog.Options{
+			Format:          "pretty",
+			Output:          &out,
+			Strict:          true,
+			FeatureContents: []godog.Feature{{Name: "degraded-derivation", Contents: []byte(feature)}},
+		},
+	}
+	if status := suite.Run(); status != 0 {
+		t.Fatalf("scenario failed (status=%d); a derivation problem must not flip the verdict\n%s", status, out.String())
+	}
+
+	rep := col.Report(time.Unix(0, 0), 0)
+	if rep.Total != 1 {
+		t.Fatalf("collector got %d scenarios, want 1", rep.Total)
+	}
+	sr := rep.Scenarios[0]
+	if !sr.Pass {
+		t.Errorf("scenario Pass=false, want true (verdict unchanged by derivation)")
+	}
+	if sr.DerivationNote == "" {
+		t.Fatalf("DerivationNote empty, want a note naming the missing service.name")
+	}
+	if !strings.Contains(sr.DerivationNote, "service.name") {
+		t.Errorf("DerivationNote = %q, want it to name service.name", sr.DerivationNote)
 	}
 }
 
@@ -1304,7 +1453,7 @@ func shapeTrace() *trace.Trace {
 		return &trace.Span{ID: id, ParentID: "chat", Name: "execute_tool " + tool, Status: status,
 			Attrs: map[string]string{genai.Op: genai.OpExecuteTool, genai.ToolName: tool}}
 	}
-	s1, s2, sum := mk("t1", "search", "OK"), mk("t2", "search", "OK"), mk("t3", "summarize", "ERROR")
+	s1, s2, sum := mk("t1", "search", trace.StatusOk), mk("t2", "search", trace.StatusOk), mk("t3", "summarize", trace.StatusError)
 	return &trace.Trace{Roots: []*trace.Span{root}, Spans: []*trace.Span{root, chat, s1, s2, sum}}
 }
 
@@ -1334,7 +1483,7 @@ func TestFeatureExercisesShapeGrammar(t *testing.T) {
     And a span matching "gen_ai.tool.name=search" is a child of a span matching "gen_ai.operation.name=chat"
     And a span matching "gen_ai.tool.name=search" is a descendant of a span matching "gen_ai.operation.name=invoke_agent"
     And a span matching "gen_ai.operation.name=chat" has at least 2 children matching "gen_ai.tool.name=search"
-    And a span matching "span.status=ERROR" exists
+    And a span matching "span.status=Error" exists
 `
 	var out bytes.Buffer
 	suite := godog.TestSuite{

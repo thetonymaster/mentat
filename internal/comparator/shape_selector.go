@@ -53,9 +53,40 @@ func ParseSelector(s string) (Selector, error) {
 		if strings.HasPrefix(k, "span.") && !reservedKey(k) {
 			return nil, fmt.Errorf("shape: unknown reserved key %q (want span.name, span.status, or span.kind)", k)
 		}
+		if err := validateReservedValue(s, k, v); err != nil {
+			return nil, err
+		}
 		sel = append(sel, Pred{Key: k, Value: v})
 	}
 	return sel, nil
+}
+
+// validateReservedValue enforces the canonical vocabulary for reserved-key
+// predicate values at parse time. span.status must be one of the canonical status
+// constants (trace.Status*) and span.kind one of the OTLP span-kind spellings
+// (trace.Kind*); an unknown value can never match a store-normalized span — a
+// permanently-green selector — so it is a hard authoring error naming the whole
+// selector and the offending value (R1/R2, constitution IV). span.name and every
+// non-reserved (attribute) key accept any value.
+func validateReservedValue(s, key, val string) error {
+	switch key {
+	case "span.status":
+		switch val {
+		case trace.StatusUnset, trace.StatusOk, trace.StatusError:
+			return nil
+		default:
+			return fmt.Errorf("shape: selector %q: unknown span.status value %q (want Unset, Ok, or Error)", s, val)
+		}
+	case "span.kind":
+		switch val {
+		case trace.KindInternal, trace.KindServer, trace.KindClient, trace.KindProducer, trace.KindConsumer:
+			return nil
+		default:
+			return fmt.Errorf("shape: selector %q: unknown span.kind value %q (want SPAN_KIND_INTERNAL, SPAN_KIND_SERVER, SPAN_KIND_CLIENT, SPAN_KIND_PRODUCER, or SPAN_KIND_CONSUMER)", s, val)
+		}
+	default:
+		return nil
+	}
 }
 
 // spanValue resolves a selector key against a span: reserved span.* keys read the

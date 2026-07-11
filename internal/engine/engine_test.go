@@ -383,6 +383,87 @@ func TestDriveRunError(t *testing.T) {
 	}
 }
 
+// TestDriveOnceFailureEvidence pins the A2/A6 contract on the Evidence a failed
+// driveOnce returns: FailureMsg carries the wrapped engine error on every failure
+// path, and a resolve failure RETAINS the real driver Output (the driver did
+// succeed) — it is no longer dropped.
+func TestDriveOnceFailureEvidence(t *testing.T) {
+	tests := []struct {
+		name            string
+		mode            string // "resolve" | "driver"
+		command         []string
+		wantFailureKind string
+		wantAnswer      string // real driver Output retained iff resolve failure
+		wantMsgSub      string
+	}{
+		{
+			name:            "resolve failure retains real driver output and carries msg",
+			mode:            "resolve",
+			command:         []string{"sh", "-c", "echo hi"},
+			wantFailureKind: core.FailureKindResolve,
+			wantAnswer:      "hi",
+			wantMsgSub:      "resolve",
+		},
+		{
+			name:            "driver failure carries wrapped driver error msg",
+			mode:            "driver",
+			command:         []string{"/nonexistent/mentat-no-such-binary"},
+			wantFailureKind: core.FailureKindDriver,
+			wantAnswer:      "",
+			wantMsgSub:      "engine: drive",
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.Config{
+				OTLPEndpoint: "http://localhost:4318",
+				Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+				Targets: map[string]config.Target{
+					"sut": {Adapter: "shell", Command: tt.command, MaxConcurrency: 1},
+				},
+			}
+			ctrl := gomock.NewController(t)
+			st := mocks.NewMockTraceStore(ctrl)
+			var cor core.Correlator
+			if tt.mode == "resolve" {
+				mc := mocks.NewMockCorrelator(ctrl)
+				mc.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("run-1")
+				mc.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, errors.New("store down"))
+				cor = mc
+			} else {
+				cor = correlate.New(func() string { return "run-x" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+			}
+			eng, err := Build(cfg, st, cor)
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			ev, err := eng.driveOnce(context.Background(), "sut", nil)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !ev.Failed {
+				t.Fatalf("ev.Failed = false, want true: %+v", ev)
+			}
+			if ev.FailureKind != tt.wantFailureKind {
+				t.Fatalf("FailureKind = %q, want %q", ev.FailureKind, tt.wantFailureKind)
+			}
+			if ev.Output.Answer != tt.wantAnswer {
+				t.Fatalf("Output.Answer = %q, want %q (real driver output must be retained on resolve failure)", ev.Output.Answer, tt.wantAnswer)
+			}
+			if ev.FailureMsg == "" {
+				t.Fatal("FailureMsg is empty; want the wrapped engine error text")
+			}
+			if ev.FailureMsg != err.Error() {
+				t.Fatalf("FailureMsg = %q, want equal to returned error %q", ev.FailureMsg, err.Error())
+			}
+			if !strings.Contains(ev.FailureMsg, tt.wantMsgSub) {
+				t.Fatalf("FailureMsg %q does not contain %q", ev.FailureMsg, tt.wantMsgSub)
+			}
+		})
+	}
+}
+
 func TestAggregateComparatorLookup(t *testing.T) {
 	cfg := config.Config{
 		OTLPEndpoint: "http://localhost:4318",

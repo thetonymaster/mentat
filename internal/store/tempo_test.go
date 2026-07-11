@@ -4,12 +4,111 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/genai"
+	"github.com/thetonymaster/mentat/internal/trace"
 )
+
+// otlpBodyWithSpanFields wraps a single span whose extra JSON fields (status
+// block, kind) are injected verbatim, so a table row can vary only those.
+func otlpBodyWithSpanFields(fields string) string {
+	return `{
+  "resourceSpans": [{
+    "resource": { "attributes": [] },
+    "scopeSpans": [{ "spans": [
+      {
+        "traceId": "tt", "spanId": "s1", "name": "span-one",
+        "startTimeUnixNano": "1000", "endTimeUnixNano": "2000",
+        "attributes": []` + fields + `
+      }
+    ]}]
+  }]
+}`
+}
+
+// TestTempoGetByIDNormalizesStatusAndKind pins the A1 fix: GetByID must map OTLP
+// status/kind spellings onto the canonical vocabulary at decode time (never a raw
+// passthrough), and hard-error on an unknown status naming the span and value.
+func TestTempoGetByIDNormalizesStatusAndKind(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		fields     string
+		wantStatus string
+		wantKind   string
+		wantErr    bool
+		wantSubs   []string
+	}{
+		{
+			name:       "STATUS_CODE_ERROR normalizes to Error",
+			fields:     `, "status": { "code": "STATUS_CODE_ERROR" }`,
+			wantStatus: trace.StatusError,
+			wantKind:   trace.KindUnspecified,
+		},
+		{
+			name:       "STATUS_CODE_OK normalizes to Ok",
+			fields:     `, "status": { "code": "STATUS_CODE_OK" }`,
+			wantStatus: trace.StatusOk,
+		},
+		{
+			name:       "STATUS_CODE_UNSET normalizes to Unset",
+			fields:     `, "status": { "code": "STATUS_CODE_UNSET" }`,
+			wantStatus: trace.StatusUnset,
+		},
+		{
+			name:       "omitted status defaults to Unset",
+			fields:     ``,
+			wantStatus: trace.StatusUnset,
+		},
+		{
+			name:       "SPAN_KIND_SERVER decoded",
+			fields:     `, "kind": "SPAN_KIND_SERVER"`,
+			wantStatus: trace.StatusUnset,
+			wantKind:   trace.KindServer,
+		},
+		{
+			name:     "unknown status spelling errors naming span and value",
+			fields:   `, "status": { "code": "STATUS_CODE_BANANA" }`,
+			wantErr:  true,
+			wantSubs: []string{"s1", "STATUS_CODE_BANANA"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(otlpBodyWithSpanFields(tt.fields)))
+			}))
+			defer srv.Close()
+
+			tr, err := NewTempo(srv.URL, srv.Client(), 0).GetByID(context.Background(), "tt")
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				for _, sub := range tt.wantSubs {
+					if !strings.Contains(err.Error(), sub) {
+						t.Fatalf("error %q does not contain %q", err.Error(), sub)
+					}
+				}
+				return
+			}
+			if len(tr.Spans) != 1 {
+				t.Fatalf("expected 1 span, got %d", len(tr.Spans))
+			}
+			if tr.Spans[0].Status != tt.wantStatus {
+				t.Fatalf("status = %q, want %q", tr.Spans[0].Status, tt.wantStatus)
+			}
+			if tr.Spans[0].Kind != tt.wantKind {
+				t.Fatalf("kind = %q, want %q", tr.Spans[0].Kind, tt.wantKind)
+			}
+		})
+	}
+}
 
 const otlpTraceJSON = `{
   "resourceSpans": [{
@@ -43,7 +142,7 @@ func TestTempoGetByIDParsesForestAndMergesResourceAttrs(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tr, err := NewTempo(srv.URL, srv.Client()).GetByID(context.Background(), "aa")
+	tr, err := NewTempo(srv.URL, srv.Client(), 0).GetByID(context.Background(), "aa")
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -70,7 +169,7 @@ func TestTempoQueryBuildsTraceQLAndReturnsRefs(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	refs, err := NewTempo(srv.URL, srv.Client()).Query(context.Background(), core.TraceQuery{Tag: "test.run.id", Value: "abc123"})
+	refs, err := NewTempo(srv.URL, srv.Client(), 0).Query(context.Background(), core.TraceQuery{Tag: "test.run.id", Value: "abc123"})
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -82,8 +181,127 @@ func TestTempoQueryBuildsTraceQLAndReturnsRefs(t *testing.T) {
 	}
 }
 
+// TestTempoQuerySendsLimitParam pins A4: every search request carries an explicit
+// &limit=<N>. A non-positive configured limit falls back to 100 at query time
+// (belt-and-suspenders so a bare-constructed store still bounds its page).
+func TestTempoQuerySendsLimitParam(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		limit     int
+		wantLimit string
+	}{
+		{name: "explicit 100", limit: 100, wantLimit: "100"},
+		{name: "explicit 50", limit: 50, wantLimit: "50"},
+		{name: "zero defaults to 100", limit: 0, wantLimit: "100"},
+		{name: "negative defaults to 100", limit: -5, wantLimit: "100"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var gotLimit string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotLimit = r.URL.Query().Get("limit")
+				_, _ = w.Write([]byte(`{"traces":[{"traceID":"aa"}]}`))
+			}))
+			defer srv.Close()
+
+			_, err := NewTempo(srv.URL, srv.Client(), tt.limit).Query(context.Background(), core.TraceQuery{Tag: "test.run.id", Value: "abc123"})
+			if err != nil {
+				t.Fatalf("Query: %v", err)
+			}
+			if gotLimit != tt.wantLimit {
+				t.Fatalf("limit param = %q, want %q", gotLimit, tt.wantLimit)
+			}
+		})
+	}
+}
+
+// tempoSearchBody renders a Tempo /api/search response with n trace refs.
+func tempoSearchBody(n int) string {
+	ids := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		ids = append(ids, `{"traceID":"t`+strconv.Itoa(i)+`"}`)
+	}
+	return `{"traces":[` + strings.Join(ids, ",") + `]}`
+}
+
+// TestTempoQueryTruncationGuard pins A4/R3: a search response returning exactly
+// `limit` traces is possibly-truncated, so Query hard-errors (naming the tag/value,
+// the count, and the poll.searchLimit knob) instead of silently dropping evidence.
+// A response below the limit returns its refs normally.
+func TestTempoQueryTruncationGuard(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		limit    int
+		nTraces  int
+		wantErr  bool
+		wantRefs int
+		wantSubs []string
+	}{
+		{
+			name:    "exactly limit traces returns truncation error",
+			limit:   3,
+			nTraces: 3,
+			wantErr: true,
+			wantSubs: []string{
+				"test.run.id", `"abc123"`, "returned 3 traces", "== limit",
+				"poll.searchLimit",
+			},
+		},
+		{
+			name:     "fewer than limit returns refs normally",
+			limit:    3,
+			nTraces:  2,
+			wantRefs: 2,
+		},
+		{
+			name:     "zero traces returns no refs and no error",
+			limit:    3,
+			nTraces:  0,
+			wantRefs: 0,
+		},
+		{
+			name:    "default limit (100) full page errors",
+			limit:   0,
+			nTraces: 100,
+			wantErr: true,
+			wantSubs: []string{
+				"returned 100 traces", "== limit", "poll.searchLimit",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			body := tempoSearchBody(tt.nTraces)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(body))
+			}))
+			defer srv.Close()
+
+			refs, err := NewTempo(srv.URL, srv.Client(), tt.limit).Query(context.Background(), core.TraceQuery{Tag: "test.run.id", Value: "abc123"})
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				for _, sub := range tt.wantSubs {
+					if !strings.Contains(err.Error(), sub) {
+						t.Fatalf("error %q does not contain %q", err.Error(), sub)
+					}
+				}
+				return
+			}
+			if len(refs) != tt.wantRefs {
+				t.Fatalf("refs = %d, want %d", len(refs), tt.wantRefs)
+			}
+		})
+	}
+}
+
 func TestTempoCaps(t *testing.T) {
-	caps := NewTempo("http://localhost", nil).Caps()
+	caps := NewTempo("http://localhost", nil, 0).Caps()
 	if !caps.StructuralQuery {
 		t.Fatal("Tempo must report StructuralQuery=true")
 	}
@@ -146,7 +364,7 @@ func TestTempoErrorPaths(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := httptest.NewServer(tt.handler)
 			defer srv.Close()
-			err := tt.action(NewTempo(srv.URL, srv.Client()))
+			err := tt.action(NewTempo(srv.URL, srv.Client(), 0))
 			if err == nil {
 				t.Fatal("expected error, got nil")
 			}
@@ -163,7 +381,7 @@ func TestTempoMalformedEndpointReturnsError(t *testing.T) {
 	// A URL with a control character (0x7f) is rejected by the net/http request
 	// builder, giving us a request-construction error without needing a server.
 	bad := "http://\x7f/bad"
-	tp := NewTempo(bad, http.DefaultClient)
+	tp := NewTempo(bad, http.DefaultClient, 0)
 	_, err := tp.GetByID(context.Background(), "trace1")
 	if err == nil {
 		t.Fatal("expected error from malformed endpoint, got nil")
@@ -195,7 +413,7 @@ func TestTempoGetByIDNonNumericNanoReturnsError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := NewTempo(srv.URL, srv.Client()).GetByID(context.Background(), "bb")
+	_, err := NewTempo(srv.URL, srv.Client(), 0).GetByID(context.Background(), "bb")
 	if err == nil {
 		t.Fatal("expected error for non-numeric nano, got nil")
 	}
@@ -233,7 +451,7 @@ func TestTempoGetByIDMultiRootForest(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tr, err := NewTempo(srv.URL, srv.Client()).GetByID(context.Background(), "cc")
+	tr, err := NewTempo(srv.URL, srv.Client(), 0).GetByID(context.Background(), "cc")
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -278,7 +496,7 @@ func TestTempoGetByIDBatchesEnvelope(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tr, err := NewTempo(srv.URL, srv.Client()).GetByID(context.Background(), "aa")
+	tr, err := NewTempo(srv.URL, srv.Client(), 0).GetByID(context.Background(), "aa")
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -321,7 +539,7 @@ func TestTempoValStrBranches(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tr, err := NewTempo(srv.URL, srv.Client()).GetByID(context.Background(), "zz")
+	tr, err := NewTempo(srv.URL, srv.Client(), 0).GetByID(context.Background(), "zz")
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}

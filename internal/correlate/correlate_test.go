@@ -136,6 +136,40 @@ func TestResolveStablePollsUntilCountStable(t *testing.T) {
 	}
 }
 
+// TestResolveQueriesByTestRunIDTag is the F3 regression pin for invariant §5
+// (tag-first correlation): Resolve must ALWAYS query the store by the tag
+// "test.run.id" with a value equal to the run id it was handed. It passes against
+// the current code and exists to catch future drift — querying a different tag or
+// the wrong value would silently resolve the wrong trace (or none) instead of
+// failing loud, defeating correlation.
+func TestResolveQueriesByTestRunIDTag(t *testing.T) {
+	const runID = "pin-run-42"
+
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+
+	var gotQuery core.TraceQuery
+	st.EXPECT().Query(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, q core.TraceQuery) ([]core.TraceRef, error) {
+			gotQuery = q
+			return []core.TraceRef{{TraceID: "t"}}, nil
+		}).AnyTimes()
+	st.EXPECT().GetByID(gomock.Any(), "t").
+		Return(&trace.Trace{RunID: "t", Spans: []*trace.Span{{Name: "s"}}}, nil).AnyTimes()
+
+	c := New(func() string { return runID }, PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+	if _, err := c.Resolve(context.Background(), st, runID); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	if gotQuery.Tag != "test.run.id" {
+		t.Errorf("query tag: want %q, got %q", "test.run.id", gotQuery.Tag)
+	}
+	if gotQuery.Value != runID {
+		t.Errorf("query value: want %q (the run id), got %q", runID, gotQuery.Value)
+	}
+}
+
 func TestResolveQueryError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	st := mocks.NewMockTraceStore(ctrl)
@@ -194,6 +228,61 @@ func TestResolveGetByIDNilTrace(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "returned nil trace") {
 		t.Fatalf("want error mentioning nil trace, got: %v", err)
+	}
+}
+
+// TestResolveDeadlineUnstableSpansIsHardError proves audit finding A3: when the
+// deadline fires while the span count is still CHANGING (never stabilised) and
+// nonzero, Resolve must NOT return the merged trace as a best-effort success — it
+// must hard-error (invariant §4, no silent fallbacks). The error names the run id,
+// the last observed span count, the stability progress, and the timeout so an
+// operator can distinguish "trace still growing at deadline" from "trace never
+// arrived" (the zero-span case, which keeps its own error).
+func TestResolveDeadlineUnstableSpansIsHardError(t *testing.T) {
+	const runID = "unstable-run"
+
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	st.EXPECT().Query(gomock.Any(), gomock.Any()).
+		Return([]core.TraceRef{{TraceID: "growing"}}, nil).AnyTimes()
+
+	// Span count strictly grows every poll — the count is never observed equal to
+	// the previous poll, so the stability gate never trips before the deadline.
+	// Resolve runs synchronously in this goroutine, so lastN is read race-free
+	// after Resolve returns and equals len(m.Spans) at the deadline.
+	var lastN int
+	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, id string) (*trace.Trace, error) {
+			lastN++
+			tr := &trace.Trace{RunID: id}
+			for i := 0; i < lastN; i++ {
+				tr.Spans = append(tr.Spans, &trace.Span{Name: "span"})
+			}
+			return tr, nil
+		}).AnyTimes()
+
+	c := New(func() string { return runID }, PollConfig{
+		Interval:  time.Millisecond,
+		StableFor: 2,
+		Timeout:   25 * time.Millisecond,
+	})
+	tr, err := c.Resolve(context.Background(), st, runID)
+	if err == nil {
+		t.Fatalf("want hard error on unstable-at-deadline, got nil (tr=%v)", tr)
+	}
+	if tr != nil {
+		t.Fatalf("want nil trace on hard error, got %v", tr)
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		runID,                          // names the run
+		fmt.Sprintf("%d spans", lastN), // last observed span count
+		"stable",                       // stability progress
+		"25ms",                         // the timeout
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("deadline error missing %q: %q", want, msg)
+		}
 	}
 }
 

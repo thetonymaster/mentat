@@ -99,17 +99,21 @@ func (e *Engine) driveOnce(ctx context.Context, target string, args []string) (c
 	select {
 	case sem <- struct{}{}:
 	case <-ctx.Done():
-		return core.Evidence{RunID: runID, Failed: true, FailureKind: core.FailureKindDriver}, fmt.Errorf("engine: drive %q: %w", target, ctx.Err())
+		err := fmt.Errorf("engine: drive %q: %w", target, ctx.Err())
+		return core.Evidence{RunID: runID, Failed: true, FailureKind: core.FailureKindDriver, FailureMsg: err.Error()}, err
 	}
 	defer func() { <-sem }()
 
 	res, err := drv.Run(ctx, spec)
 	if err != nil {
-		return core.Evidence{RunID: runID, Failed: true, FailureKind: core.FailureKindDriver}, fmt.Errorf("engine: drive %q: %w", target, err)
+		werr := fmt.Errorf("engine: drive %q: %w", target, err)
+		return core.Evidence{RunID: runID, Failed: true, FailureKind: core.FailureKindDriver, FailureMsg: werr.Error()}, werr
 	}
 	tr, err := e.cor.Resolve(ctx, e.st, runID)
 	if err != nil {
-		return core.Evidence{RunID: runID, Failed: true, FailureKind: core.FailureKindResolve}, fmt.Errorf("engine: resolve run %q: %w", runID, err)
+		werr := fmt.Errorf("engine: resolve run %q: %w", runID, err)
+		// Retain the real driver Output: the driver succeeded, only resolution failed.
+		return core.Evidence{RunID: runID, Output: res.Output, Failed: true, FailureKind: core.FailureKindResolve, FailureMsg: werr.Error()}, werr
 	}
 	return core.Evidence{RunID: runID, Trace: tr, Output: res.Output}, nil
 }

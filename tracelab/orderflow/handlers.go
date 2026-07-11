@@ -24,7 +24,11 @@ type gatewayPlan struct {
 
 func planFor(scenario string) gatewayPlan {
 	switch scenario {
-	case "happy", "slow":
+	case "happy", "slow", "error":
+		// "error" is a header-only fault-injection scenario (not a business
+		// scenario in Scenarios()): the flow is identical to "happy" so the only
+		// deviation is a single errored child span injected by leafHandler,
+		// isolating the error-budget assertion (A1 L3 proof).
 		return gatewayPlan{[]string{ServiceAuth, ServiceInventory, ServicePayment, ServiceNotify}, http.StatusCreated, map[string]string{"status": "confirmed"}}
 	case "payment_decline":
 		return gatewayPlan{[]string{ServiceAuth, ServiceInventory, ServicePayment}, http.StatusPaymentRequired, map[string]string{"status": "declined"}}
@@ -91,6 +95,16 @@ func leafHandler(service string, tr oteltrace.Tracer) http.HandlerFunc {
 			writeJSON(w, http.StatusPaymentRequired, map[string]string{service: "declined"})
 		case service == ServiceInventory && scenario == "inventory_out":
 			writeJSON(w, http.StatusConflict, map[string]string{service: "out"})
+		case service == ServiceNotify && scenario == "error":
+			// Emit one error-status child span on the terminal leaf but still
+			// return 200, so the gateway chain completes to a happy 201 and the
+			// only red-worthy signal is the errored span (A1 L3 proof). A distinct
+			// child span keeps the Error status independent of otelhttp's
+			// server-span status mapping.
+			_, span := tr.Start(r.Context(), "notify.error")
+			span.SetStatus(codes.Error, "degraded")
+			span.End()
+			writeJSON(w, http.StatusOK, map[string]string{service: "ok"})
 		default:
 			writeJSON(w, http.StatusOK, map[string]string{service: "ok"})
 		}

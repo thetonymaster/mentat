@@ -2,6 +2,7 @@ package report
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/thetonymaster/mentat/internal/comparator"
 	"github.com/thetonymaster/mentat/internal/core"
@@ -14,7 +15,14 @@ import (
 // the representative run — evs[0] when it has a non-nil Trace — so callers must pass
 // evs in run order (run[0] first); for @runs(N) scenarios only the first run's
 // sequence is reported.
-func Derive(name string, tags []string, v core.Verdict, evs []core.Evidence, pricing core.Pricing) (core.ScenarioResult, error) {
+//
+// Derive is an observer: it never fails a scenario (audit A8 / research R5).
+// Verdicts come only from step results. When a derivation cannot be completed
+// (e.g. a span missing service.name, or a malformed cost attribute) Derive keeps
+// the best-effort detail — an empty sequence, cost 0 for that run — and records a
+// human-readable DerivationNote instead of returning an error. The degradation
+// stays visible in the JSON and HTML report (no silent fallback, constitution IV).
+func Derive(name string, tags []string, v core.Verdict, evs []core.Evidence, pricing core.Pricing) core.ScenarioResult {
 	sr := core.ScenarioResult{
 		Name:      name,
 		Tags:      tags,
@@ -22,10 +30,12 @@ func Derive(name string, tags []string, v core.Verdict, evs []core.Evidence, pri
 		Reasons:   v.Reasons,
 		Aggregate: v.Detail,
 	}
+	var notes []string
 	for _, ev := range evs {
 		cost, err := comparator.CostOrZero(ev.Trace, pricing)
 		if err != nil {
-			return core.ScenarioResult{}, fmt.Errorf("report.Derive: run %q: %w", ev.RunID, err)
+			notes = append(notes, fmt.Sprintf("cost unavailable for run %q: %v", ev.RunID, err))
+			cost = 0
 		}
 		rec := core.RunRecord{
 			RunID:       ev.RunID,
@@ -42,11 +52,15 @@ func Derive(name string, tags []string, v core.Verdict, evs []core.Evidence, pri
 	if len(evs) > 0 && evs[0].Trace != nil {
 		seq, err := sequence(evs[0].Trace)
 		if err != nil {
-			return core.ScenarioResult{}, fmt.Errorf("report.Derive: sequence for run %q: %w", evs[0].RunID, err)
+			notes = append(notes, fmt.Sprintf("sequence unavailable for run %q: %v", evs[0].RunID, err))
+		} else {
+			sr.Sequence = seq
 		}
-		sr.Sequence = seq
 	}
-	return sr, nil
+	if len(notes) > 0 {
+		sr.DerivationNote = strings.Join(notes, "; ")
+	}
+	return sr
 }
 
 // sequence returns the tool-call sequence (agents) or, if none, the service-hop

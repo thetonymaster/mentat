@@ -134,6 +134,71 @@ func TestAggregateReasonHasPerRunTable(t *testing.T) {
 	}
 }
 
+// TestAggregateBoundaryBindingGuard pins R4 rule 3 (A6): boundary fields bind only
+// from a real Output. A resolve-failed sample retains its Output so its boundary
+// fields are usable; a driver-failed sample has no real Output, so an expression
+// referencing a boundary field over it is a hard error (never a fabricated zero).
+func TestAggregateBoundaryBindingGuard(t *testing.T) {
+	c := NewAggregateCEL(nil)
+	tests := []struct {
+		name        string
+		evs         []core.Evidence
+		expr        string
+		wantErr     bool
+		wantPass    bool
+		errContains []string
+	}{
+		{
+			name: "resolve-failed sample binds boundary status from retained Output",
+			evs: []core.Evidence{
+				{RunID: "a", Output: core.Output{Status: 200}},
+				{RunID: "b", Failed: true, FailureKind: core.FailureKindResolve, Output: core.Output{Status: 200}},
+			},
+			expr:     `rate(r, r.status == 200) >= 1.0`,
+			wantPass: true,
+		},
+		{
+			name: "driver-failed sample + boundary reference is a hard error",
+			evs: []core.Evidence{
+				{RunID: "a", Output: core.Output{Status: 200}},
+				{RunID: "bad-run", Failed: true, FailureKind: core.FailureKindDriver, FailureMsg: `engine: drive "x": boom`},
+			},
+			expr:        `rate(r, r.status == 200) >= 1.0`,
+			wantErr:     true,
+			errContains: []string{"bad-run", "r.failed", "no boundary output"},
+		},
+		{
+			name: "driver-failed sample without boundary reference still computes",
+			evs: []core.Evidence{
+				evidence("search"),
+				{RunID: "bad", Failed: true, FailureKind: core.FailureKindDriver},
+			},
+			expr:     `count(r, r.failed) == 1`,
+			wantPass: true,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			v, err := c.Aggregate(context.Background(), tt.evs, AggregateCELExpectation{Expr: tt.expr})
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				for _, sub := range tt.errContains {
+					if !strings.Contains(err.Error(), sub) {
+						t.Fatalf("error %q missing %q", err.Error(), sub)
+					}
+				}
+				return
+			}
+			if v.Pass != tt.wantPass {
+				t.Fatalf("Pass=%v want %v (reasons %v)", v.Pass, tt.wantPass, v.Reasons)
+			}
+		})
+	}
+}
+
 func TestAggregateCELName(t *testing.T) {
 	if n := NewAggregateCEL(nil).Name(); n != "aggregate-cel" {
 		t.Fatalf("Name() = %q, want aggregate-cel", n)

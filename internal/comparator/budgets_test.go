@@ -83,17 +83,72 @@ func latencyTrace(d time.Duration) *trace.Trace {
 	}}}
 }
 
-// errorTrace builds a trace with the given number of spans whose Status is "Error".
+// errorTrace builds a trace with the given number of spans whose Status is the
+// canonical trace.StatusError.
 func errorTrace(errCount int) *trace.Trace {
 	tr := &trace.Trace{}
 	for i := 0; i < errCount; i++ {
 		tr.Spans = append(tr.Spans, &trace.Span{
 			Name:   "invoke_agent",
-			Status: "Error",
+			Status: trace.StatusError,
 			Attrs:  map[string]string{genai.Op: genai.OpInvokeAgent},
 		})
 	}
 	return tr
+}
+
+// TestErrorCount pins that errorCount counts only spans carrying the canonical
+// trace.StatusError, and never counts trace.StatusUnset or trace.StatusOk. It
+// references the trace.Status* constants (not bare literals) so the comparator's
+// error-count wiring stays anchored to the canonical vocabulary — a future change
+// to the constant's value follows here instead of silently diverging.
+func TestErrorCount(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		spans []*trace.Span
+		want  int
+	}{
+		{
+			name: "two canonical Error spans are counted",
+			spans: []*trace.Span{
+				{Name: "a", Status: trace.StatusError},
+				{Name: "b", Status: trace.StatusError},
+			},
+			want: 2,
+		},
+		{
+			name: "Unset and Ok spans are not counted",
+			spans: []*trace.Span{
+				{Name: "a", Status: trace.StatusUnset},
+				{Name: "b", Status: trace.StatusOk},
+			},
+			want: 0,
+		},
+		{
+			name: "mixed: only canonical Error spans counted",
+			spans: []*trace.Span{
+				{Name: "a", Status: trace.StatusError},
+				{Name: "b", Status: trace.StatusOk},
+				{Name: "c", Status: trace.StatusUnset},
+				{Name: "d", Status: trace.StatusError},
+			},
+			want: 2,
+		},
+		{
+			name:  "no spans is zero",
+			spans: nil,
+			want:  0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := errorCount(&trace.Trace{Spans: tt.spans}); got != tt.want {
+				t.Fatalf("errorCount = %d, want %d", got, tt.want)
+			}
+		})
+	}
 }
 
 // floatPtr returns a pointer to the given float64 value.

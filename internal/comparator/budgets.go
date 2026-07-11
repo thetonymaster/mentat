@@ -246,11 +246,15 @@ func tokenAttr(s *trace.Span, key string) (int, bool, error) {
 	return n, true, nil
 }
 
-// errorCount returns the number of spans whose Status is "Error".
+// errorCount returns the number of spans whose Status is the canonical
+// trace.StatusError. It compares the constant (not a bare literal) so the
+// comparator stays anchored to the canonical status vocabulary (R1) and never
+// re-introduces a transport spelling. The cel comparator's `errors` binding
+// reuses this function, so both count identically.
 func errorCount(t *trace.Trace) int {
 	errs := 0
 	for _, s := range t.Spans {
-		if s.Status == "Error" {
+		if s.Status == trace.StatusError {
 			errs++
 		}
 	}

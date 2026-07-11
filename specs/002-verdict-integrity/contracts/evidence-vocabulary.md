@@ -33,8 +33,17 @@ Selector `span.kind=<one of the above>`; unknown value → authoring error.
 }
 ```
 
-- `parentIndex`: `-1` = root; `0 ≤ i < len(spans)`, `i ≠ selfIndex` = parent;
-  anything else fails loading: `filestore: span 3 ("checkout"): parentIndex 99 out of range [0,5) (use -1 for root)`.
+- `parentIndex`: **required on every span** (decoded as `*int`); `-1` = root;
+  `0 ≤ i < len(spans)`, `i ≠ selfIndex` = parent; anything else fails loading.
+  Omitted on any span (not just span 0) → error, never a silent child-of-span-0:
+  `filestore: span 1 ("child"): parentIndex is required (use -1 for root)`.
+  Out of range (`< -1` or `≥ len`):
+  `filestore: span 3 ("checkout"): parentIndex 99 out of range [0,5) (use -1 for root)`.
+  Self-reference:
+  `filestore: span 0 ("root"): parentIndex 0 points to itself (use -1 for root)`.
+  After parentage is assigned, each span's `parentIndex` chain must terminate at a
+  `-1` root; a chain that revisits an index is a cycle (rootless non-forest) and fails:
+  `filestore: span 0 ("a"): parentIndex chain does not terminate at a root (cycle detected)`.
 - `status` omitted → `Unset`; `kind` omitted → unspecified.
 
 ## Failure-mode error contracts (substrings tests may pin)

@@ -15,7 +15,7 @@ import (
 // so hermetic tests can inject store.NewInMemStore directly.
 func BuildStore(cfg config.Config) (core.TraceStore, error) {
 	registry.RegisterStore("tempo", func(c config.Config) (core.TraceStore, error) {
-		return store.NewTempo(c.Tempo.Endpoint, nil), nil
+		return store.NewTempo(c.Tempo.Endpoint, nil, c.Poll.SearchLimit), nil
 	})
 	f, ok := registry.Store(cfg.Store)
 	if !ok {
