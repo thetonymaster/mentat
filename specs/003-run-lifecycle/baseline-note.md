@@ -17,7 +17,7 @@ SC-006 no-regression gate (T025).
 
 ## e2e wall-clock baseline (SC-006)
 
-```
+```text
 go test -tags e2e ./e2e/   →   ok  ...e2e  51.831s
 ```
 

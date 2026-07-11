@@ -32,7 +32,7 @@
 
 **Independent Test**: sleep-forever target with child, 2s budget → fails <2s+grace, `pgrep` finds no survivor.
 
-- [X] T006 [US1] Failing helper-process tests: never-exits killed at ctx deadline with whole pgid gone after grace; grandchild-holds-pipe → `Run` returns after `WaitDelay` with captured output preserved; ignores-SIGTERM → SIGKILL escalation in internal/driver/shell_test.go (go-test-writer, red)
+- [X] T006 [US1] Failing helper-process tests: never-exits killed at ctx deadline with whole pgid gone after grace; grandchild-holds-pipe → `Run` returns after `WaitDelay` with captured output preserved; ignores-SIGTERM → SIGKILL escalation in internal/driver/shell_lifecycle_test.go (go-test-writer, red)
 - [X] T007 [US1] Implement `Setpgid` process group, `cmd.Cancel` = SIGTERM→SIGKILL(-pgid) after grace, `WaitDelay = KillGrace` in internal/driver/shell.go (go-test-writer, green)
 - [X] T008 [US1] Failing test: engine derives per-run `context.WithTimeout` from scenario ctx + target budget; timeout failure names target/phase/elapsed; "unbounded" skips the timeout in internal/engine/engine_test.go (go-test-writer, red)
 - [X] T009 [US1] Implement run-budget context + phase-attributed failure wrapping in internal/engine/engine.go (go-test-writer, green)
@@ -48,8 +48,8 @@
 
 **Independent Test**: SIGTERM mid-suite → reports exist with completed results + interrupted marker, exit 130, no orphan.
 
-- [X] T011 [P] [US2] Failing tests: collector/report `Interrupted` marker rendered in JSON field, HTML banner, JUnit property; temp+rename atomic emission in internal/report/collector_test.go, internal/report/report_test.go (go-test-writer, red)
-- [X] T012 [US2] Implement marker + atomic writes in internal/report/collector.go, internal/report/json.go, internal/report/html.go, internal/report/junit-path in cmd/mentat/main.go (go-test-writer, green)
+- [X] T011 [P] [US2] Failing tests: collector/report `Interrupted` marker rendered in JSON field, HTML banner, JUnit property; temp+rename atomic emission in internal/report/collector_test.go, internal/report/lifecycle_test.go (go-test-writer, red)
+- [X] T012 [US2] Implement marker + atomic writes in internal/report/collector.go, internal/report/html.go, internal/report/junit.go, internal/report/emit.go + junit wiring in cmd/mentat/main.go (go-test-writer, green)
 - [X] T013 [US2] Failing test: `signal.NotifyContext` wiring — suite ctx cancelled on SIGTERM, reports still emitted, exit 130, second signal force-exits; child-process test driving a built `mentat` binary in cmd/mentat/signal_test.go (go-test-writer, red)
 - [X] T014 [US2] Implement signal handling + always-emit reports + exit codes in cmd/mentat/main.go (go-test-writer, green)
 

@@ -65,6 +65,15 @@ func registerLocked(set func()) {
 	set()
 }
 
+// resolve is the shared read path for the seam resolvers: it reads m[name] under
+// the read lock so a lookup never races a composition-root registration.
+func resolve[V any](m map[string]V, name string) (V, bool) {
+	mu.RLock()
+	defer mu.RUnlock()
+	v, ok := m[name]
+	return v, ok
+}
+
 // StoreFactory builds a TraceStore from config. Stores are stateful (endpoints,
 // clients), so the store seam registers factories rather than shared instances.
 type StoreFactory func(cfg config.Config) (core.TraceStore, error)
@@ -75,12 +84,7 @@ var stores = map[string]StoreFactory{}
 func RegisterStore(name string, f StoreFactory) { registerLocked(func() { stores[name] = f }) }
 
 // Store resolves a registered TraceStore factory by name.
-func Store(name string) (StoreFactory, bool) {
-	mu.RLock()
-	defer mu.RUnlock()
-	f, ok := stores[name]
-	return f, ok
-}
+func Store(name string) (StoreFactory, bool) { return resolve(stores, name) }
 
 // JudgeFactory builds a Judge from config. Judges are stateful (model clients,
 // credentials), so the judge seam registers factories rather than shared instances.
@@ -92,12 +96,7 @@ var judges = map[string]JudgeFactory{}
 func RegisterJudge(name string, f JudgeFactory) { registerLocked(func() { judges[name] = f }) }
 
 // Judge resolves a registered Judge factory by name.
-func Judge(name string) (JudgeFactory, bool) {
-	mu.RLock()
-	defer mu.RUnlock()
-	f, ok := judges[name]
-	return f, ok
-}
+func Judge(name string) (JudgeFactory, bool) { return resolve(judges, name) }
 
 // RegisterComparator registers a Comparator under the given name.
 func RegisterComparator(name string, c core.Comparator) {
@@ -105,12 +104,7 @@ func RegisterComparator(name string, c core.Comparator) {
 }
 
 // Comparator resolves a registered Comparator by name.
-func Comparator(name string) (core.Comparator, bool) {
-	mu.RLock()
-	defer mu.RUnlock()
-	c, ok := comparators[name]
-	return c, ok
-}
+func Comparator(name string) (core.Comparator, bool) { return resolve(comparators, name) }
 
 // RegisterAggregateComparator registers an AggregateComparator under the given name.
 func RegisterAggregateComparator(name string, c core.AggregateComparator) {
@@ -119,10 +113,7 @@ func RegisterAggregateComparator(name string, c core.AggregateComparator) {
 
 // AggregateComparator resolves a registered AggregateComparator by name.
 func AggregateComparator(name string) (core.AggregateComparator, bool) {
-	mu.RLock()
-	defer mu.RUnlock()
-	c, ok := aggregateComparators[name]
-	return c, ok
+	return resolve(aggregateComparators, name)
 }
 
 // Comparators returns all registered comparator names.
@@ -140,31 +131,16 @@ func Comparators() []string {
 func RegisterDriver(scheme string, d core.Driver) { registerLocked(func() { drivers[scheme] = d }) }
 
 // Driver resolves a registered Driver by scheme.
-func Driver(scheme string) (core.Driver, bool) {
-	mu.RLock()
-	defer mu.RUnlock()
-	d, ok := drivers[scheme]
-	return d, ok
-}
+func Driver(scheme string) (core.Driver, bool) { return resolve(drivers, scheme) }
 
 // RegisterMatcher registers a result Matcher under the given name.
 func RegisterMatcher(name string, m core.Matcher) { registerLocked(func() { matchers[name] = m }) }
 
 // Matcher resolves a registered Matcher by name.
-func Matcher(name string) (core.Matcher, bool) {
-	mu.RLock()
-	defer mu.RUnlock()
-	m, ok := matchers[name]
-	return m, ok
-}
+func Matcher(name string) (core.Matcher, bool) { return resolve(matchers, name) }
 
 // RegisterReporter registers a Reporter under the given name.
 func RegisterReporter(name string, r core.Reporter) { registerLocked(func() { reporters[name] = r }) }
 
 // Reporter resolves a registered Reporter by name.
-func Reporter(name string) (core.Reporter, bool) {
-	mu.RLock()
-	defer mu.RUnlock()
-	r, ok := reporters[name]
-	return r, ok
-}
+func Reporter(name string) (core.Reporter, bool) { return resolve(reporters, name) }

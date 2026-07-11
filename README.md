@@ -78,8 +78,9 @@ judge:
 
 ### Run lifecycle (`run_timeout` / `kill_grace`)
 
-Every SUT run is bounded and its whole process tree is reaped, so a hung SUT fails
-the scenario instead of hanging the suite, and no orphan outlives the run.
+By default every SUT run is bounded (unless `run_timeout` is set to `unbounded`) and
+its whole process tree is reaped, so a hung SUT fails the scenario instead of hanging
+the suite, and no orphan outlives the run.
 
 ```yaml
 run_timeout: 5m        # suite default per SUT run; "unbounded" opts out explicitly
@@ -95,7 +96,7 @@ targets:
 | --- | --- | --- |
 | `run_timeout` | `5m` | Go duration or the literal `unbounded`. Bounds one SUT run; expiry fails the scenario naming the target, phase (`drive`/`resolve`), and elapsed budget. A typo (any other non-duration string) is a hard error at config load. |
 | `targets.<name>.run_timeout` | inherits suite | per-target override of the above |
-| `kill_grace` | `10s` | suite-wide; must be `> 0`. On run end/timeout/cancel the SUT's process group gets SIGTERM, then SIGKILL after this grace. Worst-case scenario wall time per run is `run_timeout + kill_grace`. |
+| `kill_grace` | `10s` | suite-wide; must be `> 0`. On run end/timeout/cancel the SUT's process group gets SIGTERM, then SIGKILL after this grace. For a finite `run_timeout`, worst-case wall time per run is `run_timeout + kill_grace`; an `unbounded` run has no finite upper bound. |
 
 **Interrupting a run.** SIGINT/SIGTERM cancels in-flight work, reaps the SUT tree,
 still writes every configured report (`--report-json` / `--report-html` / `--junit`)
