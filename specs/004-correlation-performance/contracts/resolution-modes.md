@@ -11,6 +11,22 @@
 | Observation sensitivity | **strengthened**: any payload byte change counts as instability (previously span-count only) |
 | Full payload decode | **at most once per trace per resolution** (was: every round) |
 
+### Change-check signal (clarified 2026-07-11)
+
+- Signal: store payload byte **length + hash**, compared round-over-round per
+  trace ref. The hashed bytes and the decoded bytes are the same fetch.
+- Payload definition: Tempo — the exact `/api/traces/{id}` response body;
+  stores with no wire payload (in-memory/mock) — a deterministic canonical
+  serialization of the stored trace content (content-identical ⇒ byte-identical).
+- The `TraceStore` seam splits fetch from decode to expose the payload; today's
+  decoded-only `GetByID` cannot support this check.
+- Guards: (1) observation-parity regression — existing corpus poll sequences
+  produce the same per-round stable/reset decisions as the span-count baseline
+  (FR-006 proof); (2) the unstable-at-deadline error names
+  byte-change-at-constant-span-count, so store-side byte churn is diagnosable.
+- Evidence for byte stability and rejected alternatives (span-count-only,
+  count+size): `investigations/004-n1-change-sensitivity.md`.
+
 ## Known-complete resolution (`ResolveComplete`) — new, historical only
 
 | Property | Contract |

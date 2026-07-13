@@ -45,11 +45,11 @@ contracts (stability gate, complete-or-loud) are the regression baseline here.
 
 **Independent Test**: counting store shows ≤1 full decode per trace per resolution; per-round fetches overlap; 002's error contracts unchanged.
 
-- [ ] T005 [US2] Failing tests: N-round stability poll performs ≤1 decode per trace + N cheap checks (payload len+hash); changed payload → decode + stability reset; byte-change-same-spancount counts as instability (sensitivity ≥ span-count); returned forest is the last-decoded one in internal/correlate/correlate_test.go (go-test-writer, red)
-- [ ] T006 [US2] Implement per-ref `{len, hash, forest}` cache + decode-once loop in internal/correlate/correlate.go (raw-bytes seam: split GetByID fetch/decode internally per research R1) and internal/store/tempo.go if a raw accessor is needed (go-test-writer, green)
+- [ ] T005 [US2] Failing tests: N-round stability poll performs ≤1 decode per trace + N cheap checks (payload len+hash); changed payload → decode + stability reset; byte-change-same-spancount counts as instability; observation-parity replay — the existing corpus poll sequences (growing 1,2,3,3,3; strictly-growing; constant-trace) produce the same per-round stable/reset decisions as the span-count baseline (FR-006 guard); unstable-at-deadline error names byte-change-at-constant-span-count; returned forest is the last-decoded one in internal/correlate/correlate_test.go (go-test-writer, red)
+- [ ] T006 [US2] Implement per-ref `{len, hash, forest}` cache + decode-once loop in internal/correlate/correlate.go. Seam change (research R1, investigation N1 — the resolve loop cannot see bytes today): split fetch from decode on `TraceStore` (raw-payload accessor + decode) in internal/core/core.go (`go generate` mocks); Tempo returns the exact /api/traces body in internal/store/tempo.go; InMemStore derives a deterministic canonical serialization of its stored forest in internal/store/filestore.go (go-test-writer, green)
 - [ ] T007 [US2] Failing tests: multi-ref rounds fetch concurrently (timing/count assertion via delayed store); first fetch error fails resolution with the existing wrapped error; merge order deterministic in internal/correlate/correlate_test.go (go-test-writer, red)
 - [ ] T008 [US2] Implement errgroup per-round fan-out with ref-order merge in internal/correlate/correlate.go (go-test-writer, green)
-- [ ] T009 [US2] Regression guard: re-run feature-002 correlate tests unchanged (unstable-deadline error, zero-span error, truncation guard) — no edits expected, verify green (go-test-writer)
+- [ ] T009 [US2] Regression guard: re-run the feature-002 guard tests unchanged — `TestResolveDeadlineUnstableSpansIsHardError`, `TestResolveTimeoutZeroSpans` (internal/correlate/correlate_test.go), `TestTempoQueryTruncationGuard` (internal/store/tempo_test.go) — no edits expected, verify green. Known exception (investigation N1): `TestResolveStablePollsUntilCountStable` pins GetByID calls==5 and must be rewritten against the new store-call pattern while still proving the stability-path exit, not the timeout path (go-test-writer)
 
 **Checkpoint**: universal per-run tax removed; 002 contracts intact.
 
@@ -64,7 +64,7 @@ contracts (stability gate, complete-or-loud) are the regression baseline here.
 - [ ] T010 [US3] Failing tests: `ResolveComplete` — one query + one fan-out fetch pass, zero sleeps (counting store + elapsed bound), absent trace → existing not-found error in internal/correlate/correlate_test.go (go-test-writer, red)
 - [ ] T011 [US3] Add `ResolveComplete` to the `Correlator` seam (internal/core/core.go, `go generate` mocks) and implement in internal/correlate/correlate.go (go-test-writer, green)
 - [ ] T012 [US3] Failing tests: replay/format/diff call `ResolveComplete` (mock asserts no stability polling); diff resolves both runs concurrently in internal/ctl/ctl_test.go, internal/ctl/diff_test.go (go-test-writer, red)
-- [ ] T013 [US3] Switch ctl call sites + concurrent diff resolves in internal/ctl/run.go, internal/ctl/diff.go, internal/ctl/replay.go, cmd/mentatctl/main.go (go-test-writer, green)
+- [ ] T013 [US3] Switch the shared historical resolve helper `ctl.Resolve` → `ResolveComplete` in internal/ctl/ctl.go (this covers the format/diff call sites in cmd/mentatctl/main.go:119/129/139, which all route through `ctl.Resolve`) + make diff resolve both runs concurrently in internal/ctl/diff.go. Do NOT switch the live drive path internal/ctl/run.go — it has no historical resolve and FR-004 forbids it. NOTE: replay resolves via the engine (`ReplayFeature(ctx, eng, …)`, not `ctl.Resolve`), so routing replay through known-complete needs an engine resolve path — see U1 (resolve in plan before implementing) (go-test-writer, green)
 
 **Checkpoint**: interactive commands sub-second.
 
@@ -96,7 +96,7 @@ contracts (stability gate, complete-or-loud) are the regression baseline here.
 - Feature 002 merged first (baseline contracts). No intra-feature foundational phase.
 - US1 (engine) is file-disjoint from US2/US3 (correlate) and US4 (comparator) → all four stories parallelizable after Setup.
 - Within correlate: US2 (T005–T009) before US3 (T010–T013) — same file, and ResolveComplete reuses the fan-out fetch pass from T008.
-- T011 touches core.go/mocks — coordinate with any concurrent feature editing core.
+- T006 and T011 touch core.go/mocks (raw-payload seam split; ResolveComplete) — coordinate with any concurrent feature editing core.
 - MVP = Phase 3 (US1) alone: biggest win, smallest diff.
 
 ## Parallel Example (after Setup)

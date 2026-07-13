@@ -39,13 +39,15 @@ before/after on the aggregate suite
 suite (SC-001); `mentatctl diff` < 200ms excluding RTT (SC-003); e2e suite never
 slower (SC-005)
 
-**Constraints**: bit-for-bit verdict preservation (SC-004); stability-gate
-sensitivity ≥ current span-count comparison (FR-002); complete-or-loud fetch
-errors unchanged (FR-003)
+**Constraints**: bit-for-bit verdict preservation (SC-004), proven by the
+observation-parity regression; stability-gate sensitivity is byte-level
+(payload length + hash), strictly stronger than the previous span-count
+comparison (FR-002, clarified 2026-07-11); complete-or-loud fetch errors
+unchanged (FR-003)
 
-**Scale/Scope**: 4 packages touched (`engine`, `correlate`, `store` only if the
-change-check needs a helper, `comparator` matchers) + `internal/ctl` call sites;
-~7 red→green pairs + 1 baseline measurement task
+**Scale/Scope**: 5 packages touched (`engine`, `correlate`, `core` + `store` for
+the raw-payload seam split fetch/decode, `comparator` matchers) + `internal/ctl`
+call sites; ~7 red→green pairs + 1 baseline measurement task
 
 ## Constitution Check
 
@@ -82,8 +84,10 @@ specs/004-correlation-performance/
 ```text
 internal/
 ├── engine/         # engine.go: semaphore released after drv.Run (C2); resolve outside slot
-├── correlate/      # correlate.go: decode-once + cheap change check (C1/C5), errgroup fan-out (C3),
+├── core/           # core.go: TraceStore raw-payload seam (fetch/decode split) + regenerated mocks
+├── correlate/      # correlate.go: decode-once + byte-level change check (C1/C5), errgroup fan-out (C3),
 │                   #   known-complete mode (C4)
+├── store/          # tempo.go: raw /api/traces body accessor; filestore.go: canonical hermetic payload
 ├── comparator/     # matchers.go / result_span.go: compile-once per expectation (C6)
 └── ctl/            # run.go / diff.go / replay call sites use known-complete resolution
 
@@ -91,9 +95,10 @@ cmd/mentatctl/      # wires known-complete mode for historical ids
 e2e/                # baseline + after measurement notes for the aggregate suite
 ```
 
-**Structure Decision**: existing layout; the semaphore-scope change is engine-only;
-resolution changes stay behind the `Correlator` seam so stores and comparators are
-untouched by the polling redesign.
+**Structure Decision**: existing layout; the semaphore-scope change is engine-only.
+The polling redesign needs one seam change — `TraceStore` splits fetch from decode
+so the resolve loop can hash payload bytes without decoding (research R1 seam
+consequence); comparators are untouched.
 
 ## Complexity Tracking
 

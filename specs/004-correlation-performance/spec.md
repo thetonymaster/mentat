@@ -8,6 +8,20 @@
 
 **Input**: User description: "Correlation performance — cut the fixed and redundant costs of trace resolution. The 2026-07-01 audit (docs/audits/2026-07-01-codebase-audit.md, cluster C, findings C1–C6) measured where Mentat wastes wall-clock: redundant re-fetch/re-decode every poll round plus a fixed ~600ms stability sleep per run; the per-target concurrency gate held through trace resolution serializing parallel multi-run ingestion waits; serial per-trace fetches; historical replay/diff paying the live stability poll; per-span attribute copying; per-span matcher recompilation. Constraint: the correctness guarantees of feature 002 (stability gate, complete-or-loud search) must be preserved exactly."
 
+## Clarifications
+
+### Session 2026-07-11
+
+- Q: Which per-round change-detection signal replaces the full re-decode in the
+  decode-once stability check — (A) span-count + payload byte-size, (B) full
+  payload byte-hash, or (C) span-count only? → A: **B — payload byte length +
+  hash**: any payload byte change counts as instability, strictly stronger than
+  the previous span-count comparison. Conditional on two guards: a hermetic
+  observation-parity regression proving FR-006 on the existing corpus, and an
+  unstable-at-deadline error that names byte-change-at-constant-span-count so
+  store-side byte churn is diagnosable. Evidence and rejected alternatives:
+  `investigations/004-n1-change-sensitivity.md`.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Multi-run scenarios finish in overlapped, not summed, time (Priority: P1)
@@ -119,9 +133,12 @@ expectation regardless of matched-span count.
 ### Edge Cases
 
 - Change detection must never mistake "different content, same size" for
-  stability — the cheap check must be at least as sensitive as the current
-  span-count comparison (the stability gate's observation semantics are the
-  feature-002 contract and must not weaken).
+  stability — resolved (Clarifications 2026-07-11): the check is byte-level
+  (payload length + hash), strictly stronger than the feature-002 span-count
+  comparison. The strengthening is deliberate and is guarded by the
+  observation-parity regression (FR-006) so no existing corpus verdict changes;
+  a reset caused by byte churn at constant span count must be identifiable in
+  the unstable-at-deadline error.
 - Overlapped per-round fetches must preserve complete-or-loud: any fetch error
   fails the round exactly as the serial version did.
 - Releasing the SUT-execution gate before resolution must not allow unbounded
@@ -142,8 +159,12 @@ expectation regardless of matched-span count.
 - **FR-001**: The per-target concurrency limit MUST bound only SUT execution;
   trace resolution MUST NOT hold the SUT-execution slot. *(C2)*
 - **FR-002**: During stability polling, full trace payload decode MUST happen at
-  most once per trace per resolution (plus cheap per-round change checks whose
-  sensitivity is at least the current span-count comparison). *(C1, C5)*
+  most once per trace per resolution. The cheap per-round change check compares
+  payload bytes (length + hash): any byte change counts as instability —
+  strictly stronger than the previous span-count comparison (Clarifications
+  2026-07-11). A stability reset caused by a byte change while the span count
+  stayed constant MUST be identifiable in the unstable-at-deadline error text.
+  *(C1, C5)*
 - **FR-003**: Within a poll round, per-trace fetches MUST overlap; a failure in
   any fetch MUST fail resolution with the same error contract as serial fetching.
   *(C3)*
@@ -156,7 +177,10 @@ expectation regardless of matched-span count.
   scenarios. *(C6)*
 - **FR-006**: All stability-gate and complete-or-loud guarantees from feature 002
   MUST be preserved bit-for-bit: same pass/fail decisions, same error classes, on
-  the entire existing test corpus.
+  the entire existing test corpus — proven by an observation-parity regression:
+  replaying the existing corpus poll sequences through the byte-level change
+  check yields the same per-round stable/reset decisions and final outcomes as
+  the span-count baseline.
 - **FR-007**: The performance effects MUST be verifiable hermetically:
   fetch/decode-count assertions and overlap-timing assertions with stub stores —
   not only by live-harness wall-clock measurements.
@@ -192,10 +216,13 @@ expectation regardless of matched-span count.
   complete-or-loud error contracts are the correctness baseline this feature must
   preserve. If 002 is re-scoped, this feature re-baselines against the then-current
   resolve contract.
-- A store-side cheap change signal (e.g. span count from search metadata, payload
-  size/hash) is available or derivable without full decode; the exact mechanism is
-  implementation-defined behind the resolution seam, as long as FR-002's
-  sensitivity requirement holds.
+- The change signal is the store payload's bytes (length + hash), which requires
+  the store seam to expose the raw payload separately from decoding (today the
+  bytes exist only inside the trace store's fetch and are discarded once
+  decoded). Stores with no wire payload (in-memory/mock stores) define their
+  payload as a deterministic canonical serialization of the stored trace content,
+  so content-identical rounds compare equal by construction. The hashed bytes and
+  the decoded bytes are the same fetch — no partial-evidence window.
 - Resolution concurrency in overlapped mode is bounded by a store-protection
   limit that is not user-facing configuration in this feature (a generous fixed
   bound is acceptable).

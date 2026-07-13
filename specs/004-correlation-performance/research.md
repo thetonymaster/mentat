@@ -2,18 +2,40 @@
 
 ## R1. Cheap per-round change check (C1) — what signal, what sensitivity
 
-**Decision**: Keep the last decoded forest per trace ref; each poll round fetches
-the trace payload bytes and compares (a) payload length and (b) a fast hash
-(FNV-1a over the body) against the previous round. Unchanged → count a stable
-observation without decoding. Changed → decode, update the cached forest, reset
-stability. The final returned forest is the one whose decode produced the last
-stable observation — no extra decode, no new partial-evidence window (the bytes
-that were hashed are the bytes that were decoded).
+**Decision** *(confirmed by clarification 2026-07-11 — option B in
+`investigations/004-n1-change-sensitivity.md`)*: Keep the last decoded forest per
+trace ref; each poll round fetches the trace payload bytes and compares (a)
+payload length and (b) a fast hash (FNV-1a over the body) against the previous
+round. Unchanged → count a stable observation without decoding. Changed → decode,
+update the cached forest, reset stability. The final returned forest is the one
+whose decode produced the last stable observation — no extra decode, no new
+partial-evidence window (the bytes that were hashed are the bytes that were
+decoded).
+
+**Seam consequence** *(corrected 2026-07-13; the original rationale claimed
+`GetByID` "already returns the raw payload" — false: the bytes exist only inside
+`Tempo.GetByID` and are discarded after unmarshal, invisible to the resolve
+loop)*: the `TraceStore` seam must split fetch from decode — a raw-payload
+accessor plus a decode step (exact method names decided at implementation), with
+`internal/core` mocks regenerated. Stores with no wire payload (`InMemStore`,
+gomock stubs) define their payload as a deterministic canonical serialization of
+the stored trace content, so content-identical rounds hash identically and
+hermetic FR-006 parity holds by construction. Tempo's payload is the exact
+`/api/traces/{id}` response body.
+
+**Guards** *(conditions attached to the clarification decision)*: a hermetic
+observation-parity regression replays the existing corpus poll sequences through
+the byte-level check and asserts the same per-round stable/reset decisions as the
+span-count baseline (FR-006); the unstable-at-deadline error names
+byte-change-at-constant-span-count so live byte churn (unproven but possible on
+distributed/replicated stores) is diagnosable, not mistaken for a growing trace.
 
 **Rationale**: Strictly more sensitive than today's span-count comparison (any
-byte change trips it, including attribute mutations span-count misses). Avoids
-inventing store-API surface: `GetByID` already returns the raw payload before
-decode; the split is internal to the resolve loop.
+byte change trips it, including attribute mutations span-count misses), and the
+only candidate computable without decoding — span count does not exist until the
+payload is decoded, so count-based checks would reintroduce the per-round decode
+this feature removes. Live probe (2026-07-11, dev harness): six fetches of an
+unchanged complete trace over ~12s returned byte-identical payloads.
 
 **Alternatives considered**: (a) Tempo search metadata span counts — extra API
 shape, version-dependent, weaker sensitivity; (b) HTTP ETag/If-None-Match — Tempo
