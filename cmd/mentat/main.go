@@ -10,9 +10,7 @@ import (
 	"time"
 
 	"github.com/cucumber/godog"
-	"github.com/google/uuid"
 	"github.com/thetonymaster/mentat/internal/config"
-	"github.com/thetonymaster/mentat/internal/correlate"
 	"github.com/thetonymaster/mentat/internal/engine"
 	"github.com/thetonymaster/mentat/internal/report"
 	"github.com/thetonymaster/mentat/internal/steps"
@@ -31,6 +29,8 @@ func main() {
 	reportJSON := fs.String("report-json", "", "write a JSON run report to this file")
 	reportHTML := fs.String("report-html", "", "write an HTML run report to this file")
 	failFast := fs.Bool("fail-fast", false, "stop on first failure")
+	verbose := fs.Bool("v", false, "narrate the run at Info level to stderr")
+	debug := fs.Bool("vv", false, "narrate the run at Debug level to stderr (implies -v)")
 	_ = fs.Parse(os.Args[2:])
 	paths := fs.Args()
 	if len(paths) == 0 {
@@ -48,18 +48,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	pc := correlate.PollConfig{
-		Interval:  parseDur(cfg.Poll.Interval, 200*time.Millisecond),
-		Timeout:   parseDur(cfg.Poll.Timeout, 30*time.Second),
-		StableFor: orDefault(cfg.Poll.StableFor, 3),
+	// Verbosity flags map to a stderr slog handler; the no-flag default is a
+	// discard handler so the happy path stays byte-identical (SC-005). The logger
+	// (and the store endpoint) are injected into the seams here at the composition
+	// root — no package-global logger, no slog.SetDefault.
+	logger := engine.NewLogger(os.Stderr, *verbose, *debug)
+
+	cor, err := engine.BuildCorrelator(cfg, logger)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "mentat:", err)
+		os.Exit(1)
 	}
-	cor := correlate.New(func() string { return uuid.NewString() }, pc)
 	st, err := engine.BuildStore(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "mentat:", err)
 		os.Exit(1)
 	}
-	eng, err := engine.Build(cfg, st, cor)
+	eng, err := engine.Build(cfg, st, cor, engine.WithLogger(logger))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "mentat:", err)
 		os.Exit(1)
@@ -120,25 +125,4 @@ func main() {
 		os.Exit(130)
 	}
 	os.Exit(code)
-}
-
-// parseDur converts a duration string into time.Duration. An empty string
-// returns def (unset → default). A non-empty but malformed value is fatal.
-func parseDur(s string, def time.Duration) time.Duration {
-	if s == "" {
-		return def
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "mentat: invalid duration %q: %v\n", s, err)
-		os.Exit(1)
-	}
-	return d
-}
-
-func orDefault(n, def int) int {
-	if n == 0 {
-		return def
-	}
-	return n
 }

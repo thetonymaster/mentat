@@ -130,6 +130,59 @@ func TestBuildWiresSemanticJudge(t *testing.T) {
 	}
 }
 
+// TestBuildRejectsUnregisteredAdapter proves D3/FR-005: adapter existence is
+// validated at the composition root against the driver registry (the single
+// runtime source of truth), not against a drift-prone load-time allowlist. A
+// target whose adapter has no registered driver fails at Build (startup, before
+// any scenario) with an error naming the target, the adapter, and the registered
+// set. The built-in shell/http drivers Build registers must still Build cleanly.
+//
+// Substring (not exact) assertions: the registry's driver map is package-global
+// and accumulates across Builds within the test binary, so the "registered:" set
+// may contain more than shell/http — we assert containment, not equality.
+//
+// No t.Parallel(): Build mutates the registry's package-global maps.
+func TestBuildRejectsUnregisteredAdapter(t *testing.T) {
+	tests := []struct {
+		name            string
+		targets         map[string]config.Target
+		wantErr         bool
+		wantErrContains []string
+	}{
+		{
+			name:            "phantom adapter fails at build naming target, adapter, and registered set",
+			targets:         map[string]config.Target{"svc": {Adapter: "telepathy"}},
+			wantErr:         true,
+			wantErrContains: []string{"svc", "telepathy", "registered:", "shell", "http"},
+		},
+		{
+			name: "built-in shell and http adapters build cleanly",
+			targets: map[string]config.Target{
+				"agent": {Adapter: "shell"},
+				"api":   {Adapter: "http"},
+			},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.Config{OTLPEndpoint: "x", Targets: tt.targets}
+			_, err := Build(cfg, nil, nil) // Build does not call st/cor; nil is safe
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Build() err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !tt.wantErr {
+				return
+			}
+			for _, want := range tt.wantErrContains {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("Build() err = %q, want substring %q", err, want)
+				}
+			}
+		})
+	}
+}
+
 func TestToPricing(t *testing.T) {
 	t.Run("empty maps to nil", func(t *testing.T) {
 		if got := toPricing(nil); got != nil {

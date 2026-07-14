@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"log/slog"
 	"regexp"
 	"sort"
 	"strings"
@@ -28,15 +29,47 @@ type PollConfig struct {
 	Timeout   time.Duration
 }
 
+// zeroSpanChecklist is the curated triage list (research R8) appended ONLY to
+// the zero-span timeout error: when no trace is found at all, these are the
+// three things to check. The unstable-at-deadline error omits it — that trace
+// exists, so it is a stability problem, not a "where is it" problem. The
+// alignment of items (2)/(3) under item (1) is deliberate (readable in stderr).
+const zeroSpanChecklist = "\n\tchecklist: (1) is the collector/Tempo up? (deploy: make harness-up)" +
+	"\n\t           (2) does the SUT export OTLP to the endpoint above?" +
+	"\n\t           (3) were OTEL_RESOURCE_ATTRIBUTES applied? (run with -vv to see injected env)"
+
+// traceQLByRunID renders the exact TraceQL query the correlator issues for a run
+// id, mirroring store/tempo.go's `{ .%s = "%s" }` with the tag-first correlation
+// key (invariant §5). It is the single source of truth for the query text shared
+// by the resolve.start narration and the enriched not-found/unstable errors, so
+// the two can never drift.
+func traceQLByRunID(runID string) string {
+	return fmt.Sprintf("{ .%s = %q }", "test.run.id", runID)
+}
+
+// storeQueryLines renders the correlator's store endpoint and the exact TraceQL
+// query it issued as two indented lines, led by a newline so it appends onto a
+// one-line error message, so a live-resolve failure is diagnosable from the
+// message alone (FR-003).
+func (c *correlator) storeQueryLines(runID string) string {
+	return fmt.Sprintf("\n\tstore: %s\n\tquery: %s", c.endpoint, traceQLByRunID(runID))
+}
+
 type correlator struct {
-	idFn func() string
-	poll PollConfig
+	idFn     func() string
+	poll     PollConfig
+	logger   *slog.Logger
+	endpoint string
 }
 
 // New returns a core.Correlator that uses idFn to generate run IDs and poll
-// according to the given PollConfig.
-func New(idFn func() string, poll PollConfig) core.Correlator {
-	return &correlator{idFn: idFn, poll: poll}
+// according to the given PollConfig. Options are applied over a silent
+// (discard-handler) logger default so the seam narrates nothing unless a caller
+// opts in via WithLogger; the variadic keeps existing New(idFn, poll) call sites
+// compiling.
+func New(idFn func() string, poll PollConfig, opts ...Option) core.Correlator {
+	o := resolveOptions(opts)
+	return &correlator{idFn: idFn, poll: poll, logger: o.logger, endpoint: o.endpoint}
 }
 
 // Inject sets spec.RunID and spec.Tags["test.run.id"] to a fresh run ID and
@@ -112,7 +145,10 @@ func refsKey(refs []core.TraceRef) string {
 // order is a stable observation. Zero traces within Timeout is a hard error
 // (invariant §4).
 func (c *correlator) Resolve(ctx context.Context, store core.TraceStore, runID string) (*trace.Trace, error) {
-	deadline := time.Now().Add(c.poll.Timeout)
+	start := time.Now()
+	deadline := start.Add(c.poll.Timeout)
+	c.logger.InfoContext(ctx, "resolve.start", "run_id", runID, "store_endpoint", c.endpoint, "query", traceQLByRunID(runID))
+	round := 0
 	stable := 0
 	lastSpanCount := -1
 	lastRefsKey := ""
@@ -124,6 +160,7 @@ func (c *correlator) Resolve(ctx context.Context, store core.TraceStore, runID s
 	churnResets, churnSpanCount := 0, 0
 
 	for {
+		round++
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("correlate: context cancelled resolving run %q: %w", runID, err)
 		}
@@ -150,11 +187,6 @@ func (c *correlator) Resolve(ctx context.Context, store core.TraceStore, runID s
 
 		if !changed && count > 0 {
 			stable++
-			if stable >= c.poll.StableFor {
-				// The returned forests were decoded from exactly the bytes the
-				// stable observations hashed — no re-fetch, no re-decode.
-				return m, nil
-			}
 		} else {
 			if bytesChanged && count > 0 && count == lastSpanCount {
 				churnResets++
@@ -162,11 +194,18 @@ func (c *correlator) Resolve(ctx context.Context, store core.TraceStore, runID s
 			}
 			stable = 0
 		}
+		c.logger.DebugContext(ctx, "resolve.poll", "round", round, "spans_seen", count, "stable_streak", stable)
+		if !changed && count > 0 && stable >= c.poll.StableFor {
+			// The returned forests were decoded from exactly the bytes the
+			// stable observations hashed — no re-fetch, no re-decode.
+			c.logger.InfoContext(ctx, "resolve.done", "run_id", runID, "spans", len(m.Spans), "roots", len(m.Roots), "rounds", round, "elapsed", time.Since(start))
+			return m, nil
+		}
 		lastSpanCount = count
 
 		if time.Now().After(deadline) {
 			if count == 0 {
-				return nil, fmt.Errorf("correlate: no trace for run %q within %v (0 spans seen)", runID, c.poll.Timeout)
+				return nil, fmt.Errorf("correlate: no trace for run %q within %v (0 spans seen)%s%s", runID, c.poll.Timeout, c.storeQueryLines(runID), zeroSpanChecklist)
 			}
 			// Spans present but never observed stable: the trace was still growing at
 			// the deadline. Returning it best-effort (audit A3) risks running
@@ -178,6 +217,10 @@ func (c *correlator) Resolve(ctx context.Context, store core.TraceStore, runID s
 			if churnResets > 0 {
 				msg += fmt.Sprintf("; payload hash changed %d times with span count constant at %d", churnResets, churnSpanCount)
 			}
+			// FR-003: name the store and query so the failure is diagnosable from
+			// the message alone — but NO checklist: the trace exists (spans
+			// present), so this is a stability problem, not a "where is it" one.
+			msg += c.storeQueryLines(runID)
 			return nil, errors.New(msg)
 		}
 		select {

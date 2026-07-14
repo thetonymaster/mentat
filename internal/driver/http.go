@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -23,13 +24,20 @@ const (
 	headerBaggage  = "baggage"
 )
 
-type httpDriver struct{ hc *http.Client }
+type httpDriver struct {
+	hc     *http.Client
+	logger *slog.Logger
+}
 
 // NewHTTP returns the http driver adapter. It is a plain, un-instrumented,
 // non-exporting HTTP client: it injects correlation baggage only (no traceparent),
-// so the SUT's first server span roots the trace (spec §3).
-func NewHTTP() core.Driver {
-	return httpDriver{hc: &http.Client{Timeout: httpClientTimeout}}
+// so the SUT's first server span roots the trace (spec §3). Options are applied
+// over a silent (discard-handler) logger default so the seam narrates nothing
+// unless a caller opts in via WithLogger; the variadic keeps existing NewHTTP()
+// call sites compiling.
+func NewHTTP(opts ...Option) core.Driver {
+	o := resolveOptions(opts)
+	return httpDriver{hc: &http.Client{Timeout: httpClientTimeout}, logger: o.logger}
 }
 
 func (d httpDriver) Run(ctx context.Context, spec core.RunSpec) (core.RunResult, error) {

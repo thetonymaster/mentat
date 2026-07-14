@@ -8,6 +8,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- **Strict config load (breaking).** Unknown or misspelled keys anywhere in
+  `mentat.yaml` now fail to load instead of being silently ignored. A dropped typo
+  (e.g. `poll.timout` for `poll.timeout`) previously fell back to a default and could
+  quietly change verdict semantics; loading is now strict and the error names the
+  offending key (`field timout not found in type config.PollSpec`). Absent optional
+  keys are unaffected — absence still applies documented defaults.
+- **Phantom adapters rejected at startup (breaking).** A target whose `adapter` names
+  no registered driver (e.g. `mcp`, `grpc`) now fails at engine build (`engine.Build`)
+  listing the registered adapters, instead of loading and then failing mid-suite when
+  that target first runs
+  (`engine: target "svc": adapter "mcp" has no registered driver (registered: http, shell)`).
 - **Fixture/trace strictness (breaking).** Span `status` and `kind` spellings are
   now normalized through a canonical vocabulary at store-decode time. Unknown
   spellings that previously loaded silently now fail loudly with a decode error

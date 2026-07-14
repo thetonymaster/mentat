@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +16,6 @@ func TestLoadAppliesPerAdapterConcurrencyDefaults(t *testing.T) {
 		wantConcurrency int
 	}{
 		{name: "shell defaults to 1", adapter: "shell", wantConcurrency: 1},
-		{name: "mcp defaults to 1", adapter: "mcp", wantConcurrency: 1},
 		{
 			name:    "http defaults to 8",
 			adapter: "http",
@@ -24,7 +25,10 @@ func TestLoadAppliesPerAdapterConcurrencyDefaults(t *testing.T) {
       method: GET`,
 			wantConcurrency: 8,
 		},
-		{name: "grpc defaults to 8", adapter: "grpc", wantConcurrency: 8},
+		// An adapter with no per-adapter default (existence is now validated at
+		// engine.Build against the driver registry, D3/FR-005) falls back to a
+		// conservative concurrency of 1 at load time rather than erroring.
+		{name: "unlisted adapter defaults to 1", adapter: "telepathy", wantConcurrency: 1},
 	}
 
 	for _, tt := range tests {
@@ -68,17 +72,20 @@ func TestLoadRejectsNegativeMaxConcurrency(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsUnknownAdapter(t *testing.T) {
-	_, err := Load([]byte(`targets: { x: { adapter: telepathy } }`))
-	if err == nil {
-		t.Fatal("expected error for unknown adapter")
+// TestLoadAcceptsUnregisteredAdapter proves the D3/FR-005 migration: adapter
+// existence is no longer Load's concern (it moved to engine.Build against the
+// driver registry, the single source of truth). Load accepts an adapter value it
+// has no per-adapter default for, returning nil error and defaulting concurrency
+// to 1. A misspelled adapter KEY (adaptor:) is still caught by strict decode —
+// that path lives in TestLoadRejectsUnknownKeys and is a different failure class.
+func TestLoadAcceptsUnregisteredAdapter(t *testing.T) {
+	cfg, err := Load([]byte(`targets: { x: { adapter: telepathy } }`))
+	if err != nil {
+		t.Fatalf("Load rejected an unregistered adapter value, but existence is validated at engine.Build now: %v", err)
 	}
-	msg := err.Error()
-	if !strings.Contains(msg, "x") {
-		t.Fatalf("error %q does not contain target name %q", msg, "x")
-	}
-	if !strings.Contains(msg, "telepathy") {
-		t.Fatalf("error %q does not contain adapter value %q", msg, "telepathy")
+	got := cfg.Targets["x"].MaxConcurrency
+	if got != 1 {
+		t.Fatalf("target x MaxConcurrency = %d, want 1 (unlisted-adapter default)", got)
 	}
 }
 
@@ -570,6 +577,177 @@ targets:
 				}
 			}
 		})
+	}
+}
+
+// --- Feature 005 (D2): strict decode rejects unknown keys --------------------
+
+// TestLoadRejectsUnknownKeys proves FR-004/SC-002: a misspelled or stray key at
+// any nesting level is a hard, named error, not a silent fallback to defaults.
+// One typo is injected per config section; the error must name the offending key.
+func TestLoadRejectsUnknownKeys(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		yaml    string
+		wantKey string // the offending key name must appear in the error
+	}{
+		{
+			name:    "root-level typo",
+			yaml:    "stroe: tempo\n",
+			wantKey: "stroe",
+		},
+		{
+			name:    "stray root key with no matching section",
+			yaml:    "reporters: []\n",
+			wantKey: "reporters",
+		},
+		{
+			name:    "poll section typo",
+			yaml:    "poll:\n  timout: 30s\n",
+			wantKey: "timout",
+		},
+		{
+			name:    "judge section typo",
+			yaml:    "judge:\n  vote: 3\n",
+			wantKey: "vote",
+		},
+		{
+			name:    "tempo section typo",
+			yaml:    "tempo:\n  endpont: http://localhost:3200\n",
+			wantKey: "endpont",
+		},
+		{
+			name:    "target typo",
+			yaml:    "targets:\n  x:\n    adaptor: shell\n",
+			wantKey: "adaptor",
+		},
+		{
+			name:    "target http section typo",
+			yaml:    "targets:\n  x:\n    adapter: http\n    http:\n      url: http://localhost:8080\n      mehtod: POST\n",
+			wantKey: "mehtod",
+		},
+		{
+			name:    "pricing wrong-case key (yaml.v3 is case-sensitive on tags)",
+			yaml:    "pricing:\n  m: { inputPerMtok: 1.0, outputPerMTok: 1.0 }\n",
+			wantKey: "inputPerMtok",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Load([]byte(tt.yaml))
+			if err == nil {
+				t.Fatalf("expected error for unknown key %q, got nil", tt.wantKey)
+			}
+			if !strings.Contains(err.Error(), tt.wantKey) {
+				t.Fatalf("error %q does not name the offending key %q", err.Error(), tt.wantKey)
+			}
+		})
+	}
+}
+
+// TestLoadValidConfigUnchangedUnderStrictDecode is the regression guard for the
+// strict decode: a representative config that mirrors the real mentat.yaml (all
+// documented sections, a shell target with a per-target run_timeout override, and
+// an http target with headers) must still load and resolve its values unchanged.
+func TestLoadValidConfigUnchangedUnderStrictDecode(t *testing.T) {
+	t.Parallel()
+	data := []byte(`
+tempo: { endpoint: "http://localhost:3200" }
+otlpEndpoint: "http://localhost:4318"
+poll: { interval: "200ms", timeout: "30s", stableFor: 3, searchLimit: 100 }
+run_timeout: 5m
+kill_grace: 7s
+targets:
+  research-agent:
+    adapter: shell
+    command: ["go", "run", "./cmd"]
+    run_timeout: 2s
+  checkout:
+    adapter: http
+    max_concurrency: 8
+    http:
+      url: "http://localhost:8080/orders"
+      method: POST
+      headers:
+        Content-Type: application/json
+`)
+	cfg, err := Load(data)
+	if err != nil {
+		t.Fatalf("Load valid config: %v", err)
+	}
+	if cfg.Tempo.Endpoint != "http://localhost:3200" {
+		t.Errorf("Tempo.Endpoint = %q, want %q", cfg.Tempo.Endpoint, "http://localhost:3200")
+	}
+	if cfg.Poll.SearchLimit != 100 {
+		t.Errorf("Poll.SearchLimit = %d, want 100", cfg.Poll.SearchLimit)
+	}
+	shell := cfg.Targets["research-agent"]
+	if shell.Adapter != "shell" {
+		t.Errorf("research-agent Adapter = %q, want shell", shell.Adapter)
+	}
+	wantShellBudget := RunBudget{Timeout: 2 * time.Second, Unbounded: false, KillGrace: 7 * time.Second}
+	if shell.Budget != wantShellBudget {
+		t.Errorf("research-agent Budget = %+v, want %+v", shell.Budget, wantShellBudget)
+	}
+	http := cfg.Targets["checkout"]
+	if http.Adapter != "http" {
+		t.Errorf("checkout Adapter = %q, want http", http.Adapter)
+	}
+	if http.HTTP.Headers["Content-Type"] != "application/json" {
+		t.Errorf("checkout Content-Type header = %q, want application/json", http.HTTP.Headers["Content-Type"])
+	}
+}
+
+// TestLoadAbsentOptionalKeysApplyDefaults proves absence is not an unknown key: a
+// minimal config, and an empty document, both load and receive documented defaults
+// (store->tempo, poll.searchLimit->100, judge defaults, and a resolved budget).
+func TestLoadAbsentOptionalKeysApplyDefaults(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{name: "minimal shell target", yaml: "targets:\n  a: { adapter: shell, command: [\"true\"] }\n"},
+		{name: "empty document", yaml: ""},
+		{name: "comment-only document", yaml: "# nothing here\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := Load([]byte(tt.yaml))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.Store != "tempo" {
+				t.Errorf("Store = %q, want tempo (default)", cfg.Store)
+			}
+			if cfg.Poll.SearchLimit != 100 {
+				t.Errorf("Poll.SearchLimit = %d, want 100 (default)", cfg.Poll.SearchLimit)
+			}
+			if cfg.Judge.Backend != "claude" || cfg.Judge.Model != "claude-opus-4-8" || cfg.Judge.Votes != 1 {
+				t.Errorf("Judge = %+v, want defaults {claude claude-opus-4-8 1 0}", cfg.Judge)
+			}
+			wantSuite := RunBudget{Timeout: DefaultRunTimeout, Unbounded: false, KillGrace: DefaultKillGrace}
+			if cfg.Budget != wantSuite {
+				t.Errorf("suite Budget = %+v, want %+v (defaults)", cfg.Budget, wantSuite)
+			}
+		})
+	}
+}
+
+// TestLoadRepoMentatYAML is the CRITICAL regression guard: the repo's own
+// mentat.yaml must still parse under strict decode. If a real key drifts from the
+// structs, this fails loudly here instead of at `mentat run`.
+func TestLoadRepoMentatYAML(t *testing.T) {
+	t.Parallel()
+	data, err := os.ReadFile(filepath.Join("..", "..", "mentat.yaml"))
+	if err != nil {
+		t.Skipf("mentat.yaml not found (%v); skipping repo-config regression guard", err)
+	}
+	if _, err := Load(data); err != nil {
+		t.Fatalf("repo mentat.yaml must parse under strict decode: %v", err)
 	}
 }
 

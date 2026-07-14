@@ -257,7 +257,10 @@ func parseSpanSpec(slot string) (comparator.Quant, int, error) {
 		return comparator.QuantLast, 0, nil
 	case len(f) == 2 && f[0] == "the":
 		if mm := reSpanOrdinal.FindStringSubmatch(f[1]); mm != nil {
-			n, _ := strconv.Atoi(mm[1])
+			n, err := strconv.Atoi(mm[1])
+			if err != nil {
+				return 0, 0, fmt.Errorf("steps: span ordinal %q: %w", f[1], err)
+			}
 			if n < 1 {
 				return 0, 0, fmt.Errorf("span ordinal must be >= 1, got %q", f[1])
 			}

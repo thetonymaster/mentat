@@ -105,6 +105,45 @@ containing the completed scenarios plus an explicit interrupted marker (JSON
 A second signal force-quits. Reports are written atomically (temp file + rename), so
 an interrupt never leaves a truncated report. (POSIX only; Windows is out of scope.)
 
+## Verbosity & diagnostics
+
+Both `mentat` and `mentatctl` are **silent by default** — stdout stays reserved for
+report/godog output, so piping or golden-diffing a run stays byte-stable. Two flags
+turn on narration, and **all narration goes to stderr**:
+
+| Flag | Level | Shows |
+| --- | --- | --- |
+| (none) | silent | nothing on stderr; happy-path output unchanged |
+| `-v` | Info | drive/resolve lifecycle: `drive.start`, `resolve.start`, `resolve.done` (one line per stage) |
+| `-vv` | Debug | everything `-v` shows, plus the injected SUT env (`drive.env` — Mentat-set keys only, including the merged `OTEL_RESOURCE_ATTRIBUTES`) and per-poll rounds (`resolve.poll`: round, spans seen, stable streak) |
+
+```bash
+go run ./cmd/mentat -vv run features/     # local debugging: injected env + poll rounds
+go run ./cmd/mentatctl -v agent run --target research-agent --scenario happy
+```
+
+`-vv` never logs inherited environment beyond the keys Mentat itself sets, so ambient
+secrets in the runner's environment do not leak into narration.
+
+### Trace-not-found diagnosis
+
+Correlation failures are **self-diagnosing without any verbosity flag**. When a run's
+trace never appears within the poll timeout, the error names the store endpoint it
+queried, the exact TraceQL query it issued, and a three-item triage checklist:
+
+```
+correlate: no trace for run "…" within 30s (0 spans seen)
+	store: http://localhost:3200
+	query: { .test.run.id = "…" }
+	checklist: (1) is the collector/Tempo up? (deploy: make harness-up)
+	           (2) does the SUT export OTLP to the endpoint above?
+	           (3) were OTEL_RESOURCE_ATTRIBUTES applied? (run with -vv to see injected env)
+```
+
+An *unstable* trace (spans present but still growing at the deadline) reports the same
+`store:`/`query:` lines but omits the checklist — the trace exists, so it is a
+stability problem, not a "where is it" one.
+
 ## Layout
 
 - `cmd/mentat` — the behaviour-test runner (embeds godog)

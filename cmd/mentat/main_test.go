@@ -1,48 +1,56 @@
 package main
 
 import (
+	"bytes"
+	"strings"
 	"testing"
-	"time"
+
+	"github.com/thetonymaster/mentat/internal/engine"
 )
 
-func TestParseDur(t *testing.T) {
+// TestNewLoggerLevels pins the verbosity->level mapping for the shared logger
+// helper both binaries use (FR-001): no flags is a silent discard handler
+// (SC-005, byte-identical happy path), -v emits Info but suppresses Debug, and
+// -vv (Debug) emits both; when both flags are set, -vv (Debug) wins. Narration
+// must go to the provided writer only.
+func TestNewLoggerLevels(t *testing.T) {
+	t.Parallel()
+	const (
+		infoProbe  = "probe-info-msg"
+		debugProbe = "probe-debug-msg"
+	)
 	tests := []struct {
-		name string
-		s    string
-		def  time.Duration
-		want time.Duration
+		name      string
+		verbose   bool
+		debug     bool
+		wantInfo  bool
+		wantDebug bool
+		wantEmpty bool
 	}{
-		{"empty uses default", "", 5 * time.Second, 5 * time.Second},
-		{"parses valid duration", "200ms", time.Second, 200 * time.Millisecond},
-		{"parses minutes", "2m", time.Second, 2 * time.Minute},
+		{name: "no flags is silent discard", verbose: false, debug: false, wantEmpty: true},
+		{name: "-v emits info suppresses debug", verbose: true, debug: false, wantInfo: true, wantDebug: false},
+		{name: "-vv emits info and debug", verbose: false, debug: true, wantInfo: true, wantDebug: true},
+		{name: "both set debug wins", verbose: true, debug: true, wantInfo: true, wantDebug: true},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			got := parseDur(tt.s, tt.def)
-			if got != tt.want {
-				t.Fatalf("parseDur(%q, %v) = %v; want %v", tt.s, tt.def, got, tt.want)
+			t.Parallel()
+			var buf bytes.Buffer
+			logger := engine.NewLogger(&buf, tt.verbose, tt.debug)
+			logger.Info(infoProbe)
+			logger.Debug(debugProbe)
+			out := buf.String()
+			if tt.wantEmpty {
+				if len(out) != 0 {
+					t.Fatalf("silent default wrote %d bytes, want 0: %q", len(out), out)
+				}
+				return
 			}
-		})
-	}
-}
-
-func TestOrDefault(t *testing.T) {
-	tests := []struct {
-		name string
-		n    int
-		def  int
-		want int
-	}{
-		{"zero uses default", 0, 3, 3},
-		{"non-zero uses n", 5, 3, 5},
-	}
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			got := orDefault(tt.n, tt.def)
-			if got != tt.want {
-				t.Fatalf("orDefault(%d, %d) = %d; want %d", tt.n, tt.def, got, tt.want)
+			if got := strings.Contains(out, infoProbe); got != tt.wantInfo {
+				t.Fatalf("info present=%v want %v (out=%q)", got, tt.wantInfo, out)
+			}
+			if got := strings.Contains(out, debugProbe); got != tt.wantDebug {
+				t.Fatalf("debug present=%v want %v (out=%q)", got, tt.wantDebug, out)
 			}
 		})
 	}
