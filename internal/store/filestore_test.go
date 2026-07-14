@@ -2,9 +2,13 @@ package store
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"maps"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/genai"
@@ -257,6 +261,304 @@ func TestInMemStoreGetByID(t *testing.T) {
 			}
 			if (got == nil) != tt.wantNil {
 				t.Fatalf("got=%v wantNil=%v", got, tt.wantNil)
+			}
+		})
+	}
+}
+
+// inmemSpan builds a span with a multi-key Attrs map. Multiple keys matter: Go
+// map iteration order is randomized, so these tests prove the canonical
+// serialization sorts keys instead of leaking iteration order into the bytes.
+func inmemSpan(name, status string, extra map[string]string) *trace.Span {
+	attrs := map[string]string{
+		"service.name":          "researchbot",
+		"test.run.id":           "run-1",
+		"gen_ai.operation.name": "invoke_agent",
+	}
+	for k, v := range extra {
+		attrs[k] = v
+	}
+	return &trace.Span{Name: name, Status: status, Attrs: attrs}
+}
+
+func inmemForest(extra map[string]string) *trace.Trace {
+	root := inmemSpan("invoke_agent researchbot", trace.StatusOk, extra)
+	child := inmemSpan("execute_tool search", trace.StatusOk, extra)
+	child.ParentID = root.Name
+	return &trace.Trace{RunID: "run-1", Roots: []*trace.Span{root}, Spans: []*trace.Span{root, child}}
+}
+
+// TestInMemStoreFetchPayloadDeterministicCanonicalSerialization pins the
+// feature-004 hermetic payload definition (spec Assumptions, research R1): a
+// store with no wire payload derives its payload as a deterministic canonical
+// serialization of the stored forest — content-identical ⇒ byte-identical
+// (across repeated fetches AND across independently-constructed stores), any
+// content change ⇒ different bytes, unknown id ⇒ hard error.
+func TestInMemStoreFetchPayloadDeterministicCanonicalSerialization(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		a, b      *trace.Trace // payloads compared between two independent stores
+		wantEqual bool
+	}{
+		{
+			name:      "content-identical forests serialize byte-identically",
+			a:         inmemForest(nil),
+			b:         inmemForest(nil),
+			wantEqual: true,
+		},
+		{
+			name:      "one changed attr value changes the bytes",
+			a:         inmemForest(nil),
+			b:         inmemForest(map[string]string{"gen_ai.operation.name": "execute_tool"}),
+			wantEqual: false,
+		},
+		{
+			name: "an added span changes the bytes",
+			a:    inmemForest(nil),
+			b: func() *trace.Trace {
+				tr := inmemForest(nil)
+				tr.Spans = append(tr.Spans, inmemSpan("extra", trace.StatusOk, nil))
+				return tr
+			}(),
+			wantEqual: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			stA := NewInMemStore(map[string]*trace.Trace{"run-1": tt.a})
+			stB := NewInMemStore(map[string]*trace.Trace{"run-1": tt.b})
+
+			pA, err := stA.FetchPayload(context.Background(), "run-1")
+			if err != nil {
+				t.Fatalf("FetchPayload A: %v", err)
+			}
+			pB, err := stB.FetchPayload(context.Background(), "run-1")
+			if err != nil {
+				t.Fatalf("FetchPayload B: %v", err)
+			}
+			if gotEqual := string(pA) == string(pB); gotEqual != tt.wantEqual {
+				t.Fatalf("payload equality = %v, want %v\nA: %s\nB: %s", gotEqual, tt.wantEqual, pA, pB)
+			}
+
+			// Repeated fetches of the same store must be byte-identical (the
+			// stability poll compares round over round).
+			pA2, err := stA.FetchPayload(context.Background(), "run-1")
+			if err != nil {
+				t.Fatalf("FetchPayload A (2nd): %v", err)
+			}
+			if string(pA) != string(pA2) {
+				t.Fatalf("repeated FetchPayload not byte-identical:\n1st: %s\n2nd: %s", pA, pA2)
+			}
+		})
+	}
+
+	t.Run("unknown id is a hard error", func(t *testing.T) {
+		t.Parallel()
+		st := NewInMemStore(map[string]*trace.Trace{"run-1": inmemForest(nil)})
+		_, err := st.FetchPayload(context.Background(), "missing")
+		if err == nil {
+			t.Fatal("want error for unknown id, got nil")
+		}
+		if !strings.Contains(err.Error(), `"missing"`) {
+			t.Fatalf("error does not name the id: %q", err.Error())
+		}
+	})
+}
+
+// inmemForestWithIDs builds a multi-root forest (invariant §2 — a run may span
+// more than one root trace) with span IDs and UTC timestamps: the IDs are what
+// DecodePayload uses to rebuild the Roots→Spans aliasing after the JSON
+// round-trip, and time.Date(..., time.UTC) times survive RFC 3339 marshalling
+// with .Equal semantics.
+func inmemForestWithIDs() *trace.Trace {
+	start := time.Date(2026, 7, 14, 10, 0, 0, 0, time.UTC)
+	r1 := &trace.Span{
+		ID: "s1", Name: "invoke_agent researchbot", Kind: trace.KindServer,
+		Status: trace.StatusOk, Start: start, End: start.Add(2 * time.Second),
+		Attrs: map[string]string{"test.run.id": "run-1", "gen_ai.operation.name": "invoke_agent"},
+	}
+	c1 := &trace.Span{
+		ID: "s2", ParentID: "s1", Name: "execute_tool search",
+		Status: trace.StatusOk, Start: start.Add(100 * time.Millisecond), End: start.Add(time.Second),
+		Attrs: map[string]string{"gen_ai.operation.name": "execute_tool"},
+	}
+	r2 := &trace.Span{
+		ID: "s3", Name: "invoke_agent subagent",
+		Status: trace.StatusOk, Start: start.Add(time.Second), End: start.Add(3 * time.Second),
+		Attrs: map[string]string{"gen_ai.operation.name": "invoke_agent"},
+	}
+	return &trace.Trace{RunID: "run-1", Roots: []*trace.Span{r1, r2}, Spans: []*trace.Span{r1, c1, r2}}
+}
+
+// assertSpanEqual compares span content field-by-field; times via .Equal so the
+// JSON round-trip's location normalization cannot produce false mismatches.
+func assertSpanEqual(t *testing.T, got, want *trace.Span) {
+	t.Helper()
+	if got.ID != want.ID || got.ParentID != want.ParentID || got.Name != want.Name ||
+		got.Kind != want.Kind || got.Status != want.Status ||
+		!got.Start.Equal(want.Start) || !got.End.Equal(want.End) ||
+		!maps.Equal(got.Attrs, want.Attrs) {
+		t.Fatalf("span %q mismatch:\n got: %+v\nwant: %+v", want.ID, got, want)
+	}
+}
+
+// TestInMemStoreDecodePayloadDecodesSuppliedBytes pins the TraceStore contract
+// (core.TraceStore.DecodePayload): decode THESE bytes — the correlator hashes
+// the fetched payload and decodes the same bytes, so the decode must describe
+// the snapshot the hash described, never the store's current state. Because
+// json.Marshal duplicates root spans (Roots alias Spans in the stored forest),
+// the decode must also rebuild that aliasing.
+func TestInMemStoreDecodePayloadDecodesSuppliedBytes(t *testing.T) {
+	t.Parallel()
+
+	t.Run("round-trip decodes a content-equal snapshot, not the stored pointer", func(t *testing.T) {
+		t.Parallel()
+		forest := inmemForestWithIDs()
+		st := NewInMemStore(map[string]*trace.Trace{"run-1": forest})
+		payload, err := st.FetchPayload(context.Background(), "run-1")
+		if err != nil {
+			t.Fatalf("FetchPayload: %v", err)
+		}
+		got, err := st.DecodePayload("run-1", payload)
+		if err != nil {
+			t.Fatalf("DecodePayload: %v", err)
+		}
+		if got == forest {
+			t.Fatal("decoded forest is the stored pointer; DecodePayload must decode the supplied bytes")
+		}
+		if got.RunID != forest.RunID {
+			t.Fatalf("RunID = %q, want %q", got.RunID, forest.RunID)
+		}
+		if len(got.Spans) != len(forest.Spans) {
+			t.Fatalf("spans len = %d, want %d", len(got.Spans), len(forest.Spans))
+		}
+		for i, want := range forest.Spans {
+			assertSpanEqual(t, got.Spans[i], want)
+		}
+		if len(got.Roots) != 2 || got.Roots[0].ID != "s1" || got.Roots[1].ID != "s3" {
+			t.Fatalf("roots = %+v, want IDs [s1 s3]", got.Roots)
+		}
+	})
+
+	t.Run("decoded roots alias the decoded spans objects", func(t *testing.T) {
+		t.Parallel()
+		st := NewInMemStore(map[string]*trace.Trace{"run-1": inmemForestWithIDs()})
+		payload, err := st.FetchPayload(context.Background(), "run-1")
+		if err != nil {
+			t.Fatalf("FetchPayload: %v", err)
+		}
+		got, err := st.DecodePayload("run-1", payload)
+		if err != nil {
+			t.Fatalf("DecodePayload: %v", err)
+		}
+		for i, root := range got.Roots {
+			var match *trace.Span
+			for _, sp := range got.Spans {
+				if sp.ID == root.ID {
+					match = sp
+					break
+				}
+			}
+			if match == nil {
+				t.Fatalf("root %d (id %q) has no matching span in decoded Spans", i, root.ID)
+			}
+			if root != match {
+				t.Fatalf("root %d (id %q) is a distinct object from its Spans entry: %p != %p", i, root.ID, root, match)
+			}
+		}
+	})
+
+	t.Run("decodes the fetched snapshot even after the store mutates", func(t *testing.T) {
+		t.Parallel()
+		forest := inmemForestWithIDs()
+		st := NewInMemStore(map[string]*trace.Trace{"run-1": forest})
+		payload, err := st.FetchPayload(context.Background(), "run-1")
+		if err != nil {
+			t.Fatalf("FetchPayload: %v", err)
+		}
+		// Mutate the stored forest AFTER the fetch: the hash the correlator
+		// computed describes the payload, so the decode must too.
+		forest.Spans = append(forest.Spans, &trace.Span{ID: "s4", Name: "late arrival"})
+		got, err := st.DecodePayload("run-1", payload)
+		if err != nil {
+			t.Fatalf("DecodePayload: %v", err)
+		}
+		if len(got.Spans) != 3 {
+			t.Fatalf("spans len = %d, want 3 (the snapshot); decode leaked post-fetch store state", len(got.Spans))
+		}
+	})
+}
+
+// TestInMemStoreDecodePayloadErrors pins the hard-error paths (constitution IV
+// — no silent fallback): unknown id, malformed payload bytes (wrapped, naming
+// the trace id), and a payload whose root span id is absent from Spans (the
+// aliasing rebuild must not guess).
+func TestInMemStoreDecodePayloadErrors(t *testing.T) {
+	t.Parallel()
+	st := NewInMemStore(map[string]*trace.Trace{"run-1": inmemForestWithIDs()})
+	valid, err := st.FetchPayload(context.Background(), "run-1")
+	if err != nil {
+		t.Fatalf("FetchPayload: %v", err)
+	}
+	orphanRoot, err := json.Marshal(&trace.Trace{
+		RunID: "run-1",
+		Roots: []*trace.Span{{ID: "ghost", Name: "orphan root"}},
+		Spans: []*trace.Span{{ID: "s1", Name: "real span"}},
+	})
+	if err != nil {
+		t.Fatalf("marshal orphan-root payload: %v", err)
+	}
+
+	tests := []struct {
+		name        string
+		id          string
+		payload     []byte
+		wantSubs    []string
+		wantJSONErr bool
+	}{
+		{
+			name:     "unknown id is a hard error",
+			id:       "missing",
+			payload:  valid,
+			wantSubs: []string{`"missing"`},
+		},
+		{
+			name:        "malformed payload errors naming the trace id and wraps the json error",
+			id:          "run-1",
+			payload:     []byte("{not json"),
+			wantSubs:    []string{`"run-1"`, "decode payload"},
+			wantJSONErr: true,
+		},
+		{
+			name:     "root id absent from spans is a hard error",
+			id:       "run-1",
+			payload:  orphanRoot,
+			wantSubs: []string{`"run-1"`, "ghost"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := st.DecodePayload(tt.id, tt.payload)
+			if err == nil {
+				t.Fatalf("want error, got nil (trace %+v)", got)
+			}
+			if got != nil {
+				t.Fatalf("want nil trace on error, got %+v", got)
+			}
+			for _, sub := range tt.wantSubs {
+				if !strings.Contains(err.Error(), sub) {
+					t.Fatalf("error %q does not contain %q", err.Error(), sub)
+				}
+			}
+			if tt.wantJSONErr {
+				var syn *json.SyntaxError
+				if !errors.As(err, &syn) {
+					t.Fatalf("error %q does not wrap *json.SyntaxError", err.Error())
+				}
 			}
 		})
 	}

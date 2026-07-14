@@ -45,6 +45,15 @@ func degradedTrace() *trace.Trace {
 	return &trace.Trace{Roots: []*trace.Span{span}, Spans: []*trace.Span{span}}
 }
 
+// stubStoredTrace stubs the feature-004 store seam pair (FetchPayload +
+// DecodePayload) on st to serve tr for every trace id, with a byte-stable
+// payload so Resolve's stability gate converges exactly as the old
+// constant-trace GetByID stub did.
+func stubStoredTrace(st *mocks.MockTraceStore, tr *trace.Trace) {
+	st.EXPECT().FetchPayload(gomock.Any(), gomock.Any()).Return([]byte("payload"), nil).AnyTimes()
+	st.EXPECT().DecodePayload(gomock.Any(), gomock.Any()).Return(tr, nil).AnyTimes()
+}
+
 func TestFeatureExercisesGrammarAgainstFakeEngine(t *testing.T) {
 	cfg := config.Config{
 		OTLPEndpoint: "x",
@@ -53,7 +62,7 @@ func TestFeatureExercisesGrammarAgainstFakeEngine(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	st := mocks.NewMockTraceStore(ctrl)
 	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "r"}}, nil).AnyTimes()
-	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(happyTrace(), nil).AnyTimes()
+	stubStoredTrace(st, happyTrace())
 	cor := correlate.New(func() string { return "r" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
 	eng, err := engine.Build(cfg, st, cor)
 	if err != nil {
@@ -98,7 +107,7 @@ func TestFeatureGoesRedOnBadScenario(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	st := mocks.NewMockTraceStore(ctrl)
 	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "r"}}, nil).AnyTimes()
-	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(happyTrace(), nil).AnyTimes()
+	stubStoredTrace(st, happyTrace())
 	cor := correlate.New(func() string { return "r" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
 	eng, err := engine.Build(cfg, st, cor)
 	if err != nil {
@@ -164,7 +173,7 @@ func buildEng(t *testing.T, tr *trace.Trace) *engine.Engine {
 	ctrl := gomock.NewController(t)
 	st := mocks.NewMockTraceStore(ctrl)
 	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "r"}}, nil).AnyTimes()
-	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(tr, nil).AnyTimes()
+	stubStoredTrace(st, tr)
 	cor := correlate.New(func() string { return "r" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
 	eng, err := engine.Build(cfg, st, cor)
 	if err != nil {
@@ -398,7 +407,8 @@ func TestCELScenarioInitFailsBeforeDrive(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	st := mocks.NewMockTraceStore(ctrl)
 	st.EXPECT().Query(gomock.Any(), gomock.Any()).Times(0)
-	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Times(0)
+	st.EXPECT().FetchPayload(gomock.Any(), gomock.Any()).Times(0)
+	st.EXPECT().DecodePayload(gomock.Any(), gomock.Any()).Times(0)
 	cor := correlate.New(func() string { return "r" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
 	eng, err := engine.Build(cfg, st, cor)
 	if err != nil {
@@ -426,7 +436,7 @@ func TestCELScenarioInitFailsBeforeDrive(t *testing.T) {
 	if s := out.String(); !strings.Contains(s, "scenario-init") {
 		t.Fatalf("expected 'scenario-init' in output, got:\n%s", s)
 	}
-	// ctrl's t.Cleanup asserts Query/GetByID were never called → no SUT resolved.
+	// ctrl's t.Cleanup asserts Query/FetchPayload were never called → no SUT resolved.
 }
 
 // TestSchemaStep exercises the `the response body matches schema` step. The
@@ -732,7 +742,7 @@ func runsEngine(t *testing.T, tr *trace.Trace) *engine.Engine {
 	ctrl := gomock.NewController(t)
 	st := mocks.NewMockTraceStore(ctrl)
 	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "t"}}, nil).AnyTimes()
-	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(tr, nil).AnyTimes()
+	stubStoredTrace(st, tr)
 	var n int
 	cor := correlate.New(func() string { n++; return fmt.Sprintf("run-%d", n) }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
 	eng, err := engine.Build(cfg, st, cor)
@@ -786,19 +796,23 @@ func badDistEngine(t *testing.T, withSearch, total int) *engine.Engine {
 	}
 	ctrl := gomock.NewController(t)
 	st := mocks.NewMockTraceStore(ctrl)
-	// Distribution is keyed by RUN ID, not GetByID call count. A successful Resolve
-	// now needs ≥2 polls per run (StableFor:1 requires the span count to repeat once),
-	// so GetByID is invoked more than once per run and a call-count split no longer
-	// maps 1:1 to runs. Query returns the run id AS the trace id so GetByID can
-	// identify the run; GetByID returns a constant trace per run across polls, so the
-	// span count is stable and Resolve succeeds — the deadline/best-effort path (now a
-	// hard error, audit A3) is never taken.
+	// Distribution is keyed by RUN ID, not store call count. A successful Resolve
+	// needs ≥2 polls per run (StableFor:1 requires one unchanged observation), so
+	// the store is polled more than once per run and a call-count split no longer
+	// maps 1:1 to runs. Query returns the run id AS the trace id so the decode can
+	// identify the run; the payload is constant per run across polls, so the
+	// observation is byte-stable and Resolve succeeds — the deadline/best-effort
+	// path (now a hard error, audit A3) is never taken.
 	st.EXPECT().Query(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, q core.TraceQuery) ([]core.TraceRef, error) {
 			return []core.TraceRef{{TraceID: q.Value}}, nil
 		}).AnyTimes()
-	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).DoAndReturn(
-		func(_ context.Context, id string) (*trace.Trace, error) {
+	st.EXPECT().FetchPayload(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, id string) ([]byte, error) {
+			return []byte("payload-" + id), nil
+		}).AnyTimes()
+	st.EXPECT().DecodePayload(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(id string, _ []byte) (*trace.Trace, error) {
 			// id is the run id "run-K"; runs run-1..run-withSearch carry "search".
 			var k int
 			if _, err := fmt.Sscanf(id, "run-%d", &k); err != nil {
@@ -924,7 +938,7 @@ func TestInitializer_CollectsResults(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	st := mocks.NewMockTraceStore(ctrl)
 	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "r"}}, nil).AnyTimes()
-	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(happyTrace(), nil).AnyTimes()
+	stubStoredTrace(st, happyTrace())
 	cor := correlate.New(func() string { return "r" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
 	eng, err := engine.Build(cfg, st, cor)
 	if err != nil {
@@ -1076,7 +1090,7 @@ func shapePatternEngine(t *testing.T, expDir string) *engine.Engine {
 	ctrl := gomock.NewController(t)
 	st := mocks.NewMockTraceStore(ctrl)
 	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "r"}}, nil).AnyTimes()
-	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(shapeTrace(), nil).AnyTimes()
+	stubStoredTrace(st, shapeTrace())
 	cor := correlate.New(func() string { return "r" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
 	eng, err := engine.Build(cfg, st, cor)
 	if err != nil {
@@ -1144,7 +1158,7 @@ clauses:
 }
 
 // TestFeatureUnknownShapePattern proves that an unknown shape pattern name fails
-// the scenario in sc.Before — before the SUT is driven. Times(0) on Query/GetByID
+// the scenario in sc.Before — before the SUT is driven. Times(0) on Query/FetchPayload
 // asserts the store is never contacted, mirroring TestCELScenarioInitFailsBeforeDrive.
 func TestFeatureUnknownShapePattern(t *testing.T) {
 	// Load a dir that has a KNOWN pattern so engine.Build succeeds; the feature
@@ -1162,7 +1176,8 @@ clauses:
 	st := mocks.NewMockTraceStore(ctrl)
 	// Times(0): the store must never be queried — the scenario aborts in sc.Before.
 	st.EXPECT().Query(gomock.Any(), gomock.Any()).Times(0)
-	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Times(0)
+	st.EXPECT().FetchPayload(gomock.Any(), gomock.Any()).Times(0)
+	st.EXPECT().DecodePayload(gomock.Any(), gomock.Any()).Times(0)
 	cor := correlate.New(func() string { return "r" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
 	eng, err := engine.Build(cfg, st, cor)
 	if err != nil {
@@ -1182,7 +1197,7 @@ clauses:
 	if !strings.Contains(out, "unknown shape pattern") {
 		t.Fatalf("expected \"unknown shape pattern\" in output, got:\n%s", out)
 	}
-	// ctrl's t.Cleanup asserts Query/GetByID were never called → pre-check fired before drive.
+	// ctrl's t.Cleanup asserts Query/FetchPayload were never called → pre-check fired before drive.
 }
 
 // spanResultTrace: two "search" calls with distinct results + start times and one
@@ -1465,7 +1480,7 @@ func TestFeatureExercisesShapeGrammar(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	st := mocks.NewMockTraceStore(ctrl)
 	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "r"}}, nil).AnyTimes()
-	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(shapeTrace(), nil).AnyTimes()
+	stubStoredTrace(st, shapeTrace())
 	cor := correlate.New(func() string { return "r" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
 	eng, err := engine.Build(cfg, st, cor)
 	if err != nil {
@@ -1509,7 +1524,7 @@ func TestFeatureGoesRedOnBadShape(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	st := mocks.NewMockTraceStore(ctrl)
 	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "r"}}, nil).AnyTimes()
-	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(shapeTrace(), nil).AnyTimes()
+	stubStoredTrace(st, shapeTrace())
 	cor := correlate.New(func() string { return "r" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
 	eng, err := engine.Build(cfg, st, cor)
 	if err != nil {

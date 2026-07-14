@@ -51,7 +51,10 @@ func ReadLast() (string, error) {
 	return id, nil
 }
 
-// Resolve fetches and merges a run's trace forest by run id (no driving).
+// Resolve fetches and merges a SAVED run's trace forest by run id (no driving).
+// Every mentatctl call site (trace/tools/services/diff) operates on historical
+// run ids, so this uses the correlator's known-complete mode: one fetch pass,
+// no stability sleep; absence still errors descriptively (feature 004, FR-004).
 func Resolve(ctx context.Context, cor core.Correlator, st core.TraceStore, runID string) (*trace.Trace, error) {
-	return cor.Resolve(ctx, st, runID)
+	return cor.ResolveComplete(ctx, st, runID)
 }

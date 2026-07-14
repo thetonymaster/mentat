@@ -104,6 +104,58 @@ func (s *InMemStore) GetByID(_ context.Context, id string) (*trace.Trace, error)
 	return nil, fmt.Errorf("inmem store: no trace %q", id)
 }
 
+// FetchPayload returns a deterministic canonical serialization of the stored
+// forest — the hermetic definition of the feature-004 change-detection payload
+// (spec Assumptions): content-identical forests yield byte-identical payloads.
+// encoding/json guarantees the determinism: struct fields encode in declaration
+// order and map keys (span Attrs) are sorted, so Go map iteration order never
+// leaks into the bytes.
+func (s *InMemStore) FetchPayload(_ context.Context, id string) ([]byte, error) {
+	tr, ok := s.byRunID[id]
+	if !ok {
+		return nil, fmt.Errorf("inmem store: no trace %q", id)
+	}
+	payload, err := json.Marshal(tr)
+	if err != nil {
+		return nil, fmt.Errorf("inmem store: canonical serialization of trace %q: %w", id, err)
+	}
+	return payload, nil
+}
+
+// DecodePayload decodes the supplied payload bytes — previously returned by
+// FetchPayload for the same id — into a Trace forest. It decodes THESE bytes,
+// never the current store state: the correlator hashes the fetched payload and
+// decodes the same bytes, so if the stored forest mutates between fetch and
+// decode, the decode must still return the snapshot the hash described.
+// An unknown id remains a hard error, never a silent nil.
+//
+// In the stored forest Roots entries alias the same *Span objects present in
+// Spans, so json.Marshal duplicates root spans in the payload and a plain
+// unmarshal yields Roots pointing at distinct objects. The aliasing is rebuilt
+// by span ID; a root whose ID is absent from Spans is a hard error
+// (constitution IV — no silent fallback).
+func (s *InMemStore) DecodePayload(id string, payload []byte) (*trace.Trace, error) {
+	if _, ok := s.byRunID[id]; !ok {
+		return nil, fmt.Errorf("inmem store: no trace %q", id)
+	}
+	var tr trace.Trace
+	if err := json.Unmarshal(payload, &tr); err != nil {
+		return nil, fmt.Errorf("inmem store: decode payload for trace %q: %w", id, err)
+	}
+	byID := make(map[string]*trace.Span, len(tr.Spans))
+	for _, sp := range tr.Spans {
+		byID[sp.ID] = sp
+	}
+	for i, root := range tr.Roots {
+		sp, ok := byID[root.ID]
+		if !ok {
+			return nil, fmt.Errorf("inmem store: decode payload for trace %q: root span %q (id %q) not present in spans", id, root.Name, root.ID)
+		}
+		tr.Roots[i] = sp
+	}
+	return &tr, nil
+}
+
 func (s *InMemStore) Query(_ context.Context, q core.TraceQuery) ([]core.TraceRef, error) {
 	if q.Tag != "test.run.id" {
 		return nil, fmt.Errorf("inmem store: only test.run.id queries supported, got %q", q.Tag)

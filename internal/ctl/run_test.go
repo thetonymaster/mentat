@@ -35,7 +35,7 @@ func buildTestEngine(t *testing.T, runID string, tr *trace.Trace) *engine.Engine
 	ctrl := gomock.NewController(t)
 	st := mocks.NewMockTraceStore(ctrl)
 	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: runID}}, nil).AnyTimes()
-	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(tr, nil).AnyTimes()
+	stubForestByID(st, func(string) (*trace.Trace, error) { return tr, nil })
 	cor := correlate.New(func() string { return runID },
 		correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
 	cfg := config.Config{

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,6 +35,21 @@ func toolForest(run string, tools ...string) *trace.Trace {
 	return tr
 }
 
+// stubForestByID stubs the feature-004 store seam pair (FetchPayload +
+// DecodePayload) on st to serve per-id forests: the payload is byte-stable per
+// id across polls (so Resolve's stability gate converges exactly as the old
+// constant GetByID stub did) and the decode is keyed by the trace id.
+func stubForestByID(st *mocks.MockTraceStore, forest func(id string) (*trace.Trace, error)) {
+	st.EXPECT().FetchPayload(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, id string) ([]byte, error) {
+			return []byte("payload-" + id), nil
+		}).AnyTimes()
+	st.EXPECT().DecodePayload(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(id string, _ []byte) (*trace.Trace, error) {
+			return forest(id)
+		}).AnyTimes()
+}
+
 func newTestCorrelator() core.Correlator {
 	return correlate.New(func() string { return "" }, correlate.PollConfig{
 		Interval:  time.Millisecond,
@@ -52,15 +68,15 @@ func newFastCorrelator() core.Correlator {
 
 func TestDiff(t *testing.T) {
 	tests := []struct {
-		name       string
-		idA        string
-		idB        string
-		useFast    bool // use short-timeout correlator (for error cases)
-		setupMock  func(st *mocks.MockTraceStore)
-		wantErr    bool
-		wantErrSub string
-		wantOut    []string // substrings expected in stdout
-		wantAbsent []string // substrings that must NOT appear
+		name        string
+		idA         string
+		idB         string
+		useFast     bool // use short-timeout correlator (for error cases)
+		setupMock   func(st *mocks.MockTraceStore)
+		wantErr     bool
+		wantErrSubs []string // substrings expected in the error
+		wantOut     []string // substrings expected in stdout
+		wantAbsent  []string // substrings that must NOT appear
 	}{
 		{
 			name: "differing_positions",
@@ -71,13 +87,12 @@ func TestDiff(t *testing.T) {
 					func(_ context.Context, q core.TraceQuery) ([]core.TraceRef, error) {
 						return []core.TraceRef{{TraceID: q.Value}}, nil
 					}).AnyTimes()
-				st.EXPECT().GetByID(gomock.Any(), gomock.Any()).DoAndReturn(
-					func(_ context.Context, id string) (*trace.Trace, error) {
-						if id == "A" {
-							return toolForest("A", "search", "summarize"), nil
-						}
-						return toolForest("B", "search", "delete_record"), nil
-					}).AnyTimes()
+				stubForestByID(st, func(id string) (*trace.Trace, error) {
+					if id == "A" {
+						return toolForest("A", "search", "summarize"), nil
+					}
+					return toolForest("B", "search", "delete_record"), nil
+				})
 			},
 			wantOut: []string{"summarize", "delete_record"},
 		},
@@ -90,10 +105,9 @@ func TestDiff(t *testing.T) {
 					func(_ context.Context, q core.TraceQuery) ([]core.TraceRef, error) {
 						return []core.TraceRef{{TraceID: q.Value}}, nil
 					}).AnyTimes()
-				st.EXPECT().GetByID(gomock.Any(), gomock.Any()).DoAndReturn(
-					func(_ context.Context, id string) (*trace.Trace, error) {
-						return toolForest(id, "search", "summarize"), nil
-					}).AnyTimes()
+				stubForestByID(st, func(id string) (*trace.Trace, error) {
+					return toolForest(id, "search", "summarize"), nil
+				})
 			},
 			wantOut: []string{"identical"},
 		},
@@ -106,30 +120,32 @@ func TestDiff(t *testing.T) {
 					func(_ context.Context, q core.TraceQuery) ([]core.TraceRef, error) {
 						return []core.TraceRef{{TraceID: q.Value}}, nil
 					}).AnyTimes()
-				st.EXPECT().GetByID(gomock.Any(), gomock.Any()).DoAndReturn(
-					func(_ context.Context, id string) (*trace.Trace, error) {
-						if id == "short" {
-							return toolForest(id, "search"), nil
-						}
-						return toolForest(id, "search", "summarize", "finalize"), nil
-					}).AnyTimes()
+				stubForestByID(st, func(id string) (*trace.Trace, error) {
+					if id == "short" {
+						return toolForest(id, "search"), nil
+					}
+					return toolForest(id, "search", "summarize", "finalize"), nil
+				})
 			},
 			wantOut: []string{"—"},
 		},
 		{
-			name:    "error_on_idA_resolve",
+			// Both resolves fail here (Query returns zero refs for BOTH ids):
+			// the error must surface BOTH failures descriptively, each naming
+			// its run id — the second failure is never lost silently (US3).
+			name:    "error_on_both_resolves_surfaces_both",
 			idA:     "missing-A",
-			idB:     "B",
+			idB:     "missing-B",
 			useFast: true,
 			setupMock: func(st *mocks.MockTraceStore) {
-				// Query returns zero refs → correlator times out resolving missing-A
+				// Query returns zero refs → both resolves fail not-found
 				st.EXPECT().Query(gomock.Any(), gomock.Any()).DoAndReturn(
 					func(_ context.Context, q core.TraceQuery) ([]core.TraceRef, error) {
 						return nil, nil
 					}).AnyTimes()
 			},
-			wantErr:    true,
-			wantErrSub: "diff: run missing-A",
+			wantErr:     true,
+			wantErrSubs: []string{"diff: run missing-A", "diff: run missing-B"},
 		},
 		{
 			name:    "error_on_idB_resolve",
@@ -141,17 +157,16 @@ func TestDiff(t *testing.T) {
 					func(_ context.Context, q core.TraceQuery) ([]core.TraceRef, error) {
 						return []core.TraceRef{{TraceID: q.Value}}, nil
 					}).AnyTimes()
-				st.EXPECT().GetByID(gomock.Any(), gomock.Any()).DoAndReturn(
-					func(_ context.Context, id string) (*trace.Trace, error) {
-						if id == "A" {
-							return toolForest("A", "search"), nil
-						}
-						// run B: GetByID returns an error → Resolve fails for B
-						return nil, errors.New("store: trace B not found")
-					}).AnyTimes()
+				stubForestByID(st, func(id string) (*trace.Trace, error) {
+					if id == "A" {
+						return toolForest("A", "search"), nil
+					}
+					// run B: the store errors → Resolve fails for B
+					return nil, errors.New("store: trace B not found")
+				})
 			},
-			wantErr:    true,
-			wantErrSub: "diff: run B",
+			wantErr:     true,
+			wantErrSubs: []string{"diff: run B"},
 		},
 	}
 
@@ -175,9 +190,11 @@ func TestDiff(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("Diff() error = %v, wantErr %v", err, tt.wantErr)
 			}
-			if tt.wantErr && tt.wantErrSub != "" {
-				if !strings.Contains(err.Error(), tt.wantErrSub) {
-					t.Fatalf("error %q does not contain %q", err.Error(), tt.wantErrSub)
+			if tt.wantErr {
+				for _, sub := range tt.wantErrSubs {
+					if !strings.Contains(err.Error(), sub) {
+						t.Fatalf("error %q does not contain %q", err.Error(), sub)
+					}
 				}
 			}
 			for _, sub := range tt.wantOut {
@@ -191,6 +208,62 @@ func TestDiff(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestDiffResolvesRunsConcurrently pins the US3 diff parallelization (research
+// R4, tasks T012/T013): diff's two known-complete resolves must OVERLAP in
+// time, not run serially — a saved-run diff pays ~one resolve latency, not two.
+// Proven two ways with a delayed, instrumented mock correlator (150ms per
+// resolve): the in-flight high-water mark must reach 2, and the wall clock must
+// beat the 300ms serial sum. The correlator is mocked at the SEAM, so this also
+// re-asserts the FR-004 routing: only ResolveComplete is expected; a Resolve
+// call would be an unexpected gomock call.
+//
+// Deliberately NOT t.Parallel(): asserts an elapsed-time bound.
+func TestDiffResolvesRunsConcurrently(t *testing.T) {
+	const lag = 150 * time.Millisecond
+
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl) // never touched: resolution is mocked at the correlator seam
+	cor := mocks.NewMockCorrelator(ctrl)
+
+	var mu sync.Mutex
+	inFlight, highWater := 0, 0
+	cor.EXPECT().ResolveComplete(gomock.Any(), st, gomock.Any()).DoAndReturn(
+		func(_ context.Context, _ core.TraceStore, runID string) (*trace.Trace, error) {
+			mu.Lock()
+			inFlight++
+			if inFlight > highWater {
+				highWater = inFlight
+			}
+			mu.Unlock()
+			time.Sleep(lag)
+			mu.Lock()
+			inFlight--
+			mu.Unlock()
+			return toolForest(runID, "search", "summarize"), nil
+		}).Times(2)
+
+	var buf bytes.Buffer
+	start := time.Now()
+	err := Diff(context.Background(), cor, st, "A", "B", &buf)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !strings.Contains(buf.String(), "identical") {
+		t.Fatalf("diff output wrong (same sequences must be identical):\n%s", buf.String())
+	}
+
+	mu.Lock()
+	hw := highWater
+	mu.Unlock()
+	if hw != 2 {
+		t.Fatalf("diff resolves did not overlap: in-flight high-water = %d, want 2", hw)
+	}
+	if limit := 250 * time.Millisecond; elapsed >= limit {
+		t.Fatalf("diff resolves look serial: elapsed %v >= %v (serial sum would be ~%v)", elapsed, limit, 2*lag)
 	}
 }
 
@@ -214,13 +287,12 @@ func TestDiffServices(t *testing.T) {
 		func(_ context.Context, q core.TraceQuery) ([]core.TraceRef, error) {
 			return []core.TraceRef{{TraceID: q.Value}}, nil
 		}).AnyTimes()
-	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).DoAndReturn(
-		func(_ context.Context, id string) (*trace.Trace, error) {
-			if id == "A" {
-				return svcForest("A", "auth", "inventory", "payment"), nil
-			}
-			return svcForest("B", "auth", "payment", "inventory"), nil
-		}).AnyTimes()
+	stubForestByID(st, func(id string) (*trace.Trace, error) {
+		if id == "A" {
+			return svcForest("A", "auth", "inventory", "payment"), nil
+		}
+		return svcForest("B", "auth", "payment", "inventory"), nil
+	})
 
 	var buf bytes.Buffer
 	if err := DiffServices(context.Background(), newTestCorrelator(), st, "A", "B", &buf); err != nil {
@@ -257,10 +329,9 @@ func TestDiffWriteError(t *testing.T) {
 				func(_ context.Context, q core.TraceQuery) ([]core.TraceRef, error) {
 					return []core.TraceRef{{TraceID: q.Value}}, nil
 				}).AnyTimes()
-			st.EXPECT().GetByID(gomock.Any(), gomock.Any()).DoAndReturn(
-				func(_ context.Context, id string) (*trace.Trace, error) {
-					return toolForest(id, "search"), nil
-				}).AnyTimes()
+			stubForestByID(st, func(id string) (*trace.Trace, error) {
+				return toolForest(id, "search"), nil
+			})
 
 			cor := newTestCorrelator()
 			err := Diff(context.Background(), cor, st, tt.idA, tt.idB, diffErrWriter{})

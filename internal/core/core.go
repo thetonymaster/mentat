@@ -147,7 +147,17 @@ type TraceRef struct{ TraceID string }
 type StoreCaps struct{ StructuralQuery bool }
 
 type TraceStore interface {
-	GetByID(ctx context.Context, id string) (*trace.Trace, error)
+	// FetchPayload returns the store's raw payload bytes for a trace id — the
+	// per-round change-detection signal of the stability poll (feature 004,
+	// FR-002). Tempo: the exact /api/traces/{id} response body. Stores with no
+	// wire payload (InMemStore, mocks): a deterministic canonical serialization
+	// of the stored forest (content-identical ⇒ byte-identical). A store that
+	// cannot produce payload bytes returns an error, never (nil, nil).
+	FetchPayload(ctx context.Context, id string) ([]byte, error)
+	// DecodePayload decodes payload bytes previously returned by FetchPayload
+	// for the same id into a Trace forest. It must not fetch: the hashed bytes
+	// and the decoded bytes are the same fetch (no partial-evidence window).
+	DecodePayload(id string, payload []byte) (*trace.Trace, error)
 	Query(ctx context.Context, q TraceQuery) ([]TraceRef, error)
 	Caps() StoreCaps
 }
@@ -155,6 +165,13 @@ type TraceStore interface {
 type Correlator interface {
 	Inject(ctx context.Context, spec *RunSpec) (runID string)
 	Resolve(ctx context.Context, store TraceStore, runID string) (*trace.Trace, error)
+	// ResolveComplete is the known-complete resolution mode for saved/historical
+	// runs (feature 004, FR-004, audit C4): one tag query + one concurrent fetch
+	// pass, no stability loop, no sleep. An absent trace is the same descriptive
+	// not-found error as live mode. Live scenario resolution MUST NOT call it —
+	// it is a separate seam method (not a flag) precisely so accidental live use
+	// is a compile-time impossibility (research R4).
+	ResolveComplete(ctx context.Context, store TraceStore, runID string) (*trace.Trace, error)
 }
 
 // Matcher is one strategy inside the result comparator. It reads the run's
