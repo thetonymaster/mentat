@@ -47,7 +47,7 @@ func (e *Engine) withResolveSlot(ctx context.Context, fn func(ctx context.Contex
 	select {
 	case e.resolveSem <- struct{}{}:
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, fmt.Errorf("engine: wait for trace-resolution slot: %w", ctx.Err())
 	}
 	defer func() { <-e.resolveSem }()
 	return fn(ctx)

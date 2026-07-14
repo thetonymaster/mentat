@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -74,8 +75,22 @@ func hashPayload(payload []byte) uint64 {
 	return h.Sum64()
 }
 
-// refsKey canonicalizes a ref set for round-over-round comparison. TraceIDs are
-// hex (no NUL bytes), so the separator is unambiguous.
+// canonicalRefs returns a copy of refs sorted by TraceID — the canonical ref
+// order. A store's query order is not a contract (the same ref set may come
+// back in a different order per call), so both resolution modes canonicalize
+// immediately after every Query: the stability key (refsKey) becomes
+// order-independent and the merge order (mergeRefs) deterministic. The store's
+// slice is never mutated — sort a copy.
+func canonicalRefs(refs []core.TraceRef) []core.TraceRef {
+	out := make([]core.TraceRef, len(refs))
+	copy(out, refs)
+	sort.Slice(out, func(i, j int) bool { return out[i].TraceID < out[j].TraceID })
+	return out
+}
+
+// refsKey flattens an already-canonical (sorted-by-TraceID, via canonicalRefs)
+// ref set into a string for round-over-round comparison. TraceIDs are hex (no
+// NUL bytes), so the separator is unambiguous.
 func refsKey(refs []core.TraceRef) string {
 	var sb strings.Builder
 	for _, ref := range refs {
@@ -91,8 +106,11 @@ func refsKey(refs []core.TraceRef) string {
 // ref's payload bytes (length + FNV-1a hash) are unchanged from the previous
 // round — strictly stronger than the feature-002 span-count comparison
 // (Clarifications 2026-07-11) — and unchanged payloads are NOT re-decoded: full
-// decode happens at most once per trace per change (FR-002, audit C1). Zero
-// traces within Timeout is a hard error (invariant §4).
+// decode happens at most once per trace per change (FR-002, audit C1). The
+// ref-set comparison is order-independent: refs are canonicalized (sorted by
+// TraceID) after every query, so a store returning the same set in a different
+// order is a stable observation. Zero traces within Timeout is a hard error
+// (invariant §4).
 func (c *correlator) Resolve(ctx context.Context, store core.TraceStore, runID string) (*trace.Trace, error) {
 	deadline := time.Now().Add(c.poll.Timeout)
 	stable := 0
@@ -114,6 +132,7 @@ func (c *correlator) Resolve(ctx context.Context, store core.TraceStore, runID s
 		if err != nil {
 			return nil, fmt.Errorf("correlate: query tag=%q value=%q: %w", "test.run.id", runID, err)
 		}
+		refs = canonicalRefs(refs)
 
 		bytesChanged, err := observeRefs(ctx, store, refs, cache)
 		if err != nil {
@@ -172,14 +191,17 @@ func (c *correlator) Resolve(ctx context.Context, store core.TraceStore, runID s
 // ResolveComplete resolves a KNOWN-COMPLETE (saved/historical) run: one tag
 // query plus one concurrent fetch+decode pass — reusing the live loop's
 // fan-out (observeRefs) — with no stability loop and no sleep; the PollConfig
-// plays no part (feature 004, FR-004, audit C4). An absent trace (zero merged
-// spans) is the same descriptive not-found error class as live mode; fetch and
-// decode failures keep the live wrapped-error contracts (invariant §4).
+// plays no part (feature 004, FR-004, audit C4). Refs are canonicalized the
+// same way as live mode, so the merge is in sorted-TraceID order regardless of
+// query order. An absent trace (zero merged spans) is the same descriptive
+// not-found error class as live mode; fetch and decode failures keep the live
+// wrapped-error contracts (invariant §4).
 func (c *correlator) ResolveComplete(ctx context.Context, store core.TraceStore, runID string) (*trace.Trace, error) {
 	refs, err := store.Query(ctx, core.TraceQuery{Tag: "test.run.id", Value: runID})
 	if err != nil {
 		return nil, fmt.Errorf("correlate: query tag=%q value=%q: %w", "test.run.id", runID, err)
 	}
+	refs = canonicalRefs(refs)
 	cache := map[string]*refObservation{}
 	if _, err := observeRefs(ctx, store, refs, cache); err != nil {
 		return nil, err
@@ -191,8 +213,9 @@ func (c *correlator) ResolveComplete(ctx context.Context, store core.TraceStore,
 	return m, nil
 }
 
-// mergeRefs merges the cached forests of every ref, in ref order, into one
-// run-level forest (invariant §2 — a run may span multiple root traces).
+// mergeRefs merges the cached forests of every ref, in canonical sorted-TraceID
+// order (callers pass canonicalRefs output), into one run-level forest
+// (invariant §2 — a run may span multiple root traces).
 func mergeRefs(runID string, refs []core.TraceRef, cache map[string]*refObservation) *trace.Trace {
 	m := &trace.Trace{RunID: runID}
 	for _, ref := range refs {

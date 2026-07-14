@@ -122,15 +122,38 @@ func (s *InMemStore) FetchPayload(_ context.Context, id string) ([]byte, error) 
 	return payload, nil
 }
 
-// DecodePayload returns the stored forest the payload canonically serializes.
-// The store keeps decoded forests (there is no wire format to parse), so the
-// lookup IS the decode; an unknown id is a hard error, never a silent nil.
-func (s *InMemStore) DecodePayload(id string, _ []byte) (*trace.Trace, error) {
-	tr, ok := s.byRunID[id]
-	if !ok {
+// DecodePayload decodes the supplied payload bytes — previously returned by
+// FetchPayload for the same id — into a Trace forest. It decodes THESE bytes,
+// never the current store state: the correlator hashes the fetched payload and
+// decodes the same bytes, so if the stored forest mutates between fetch and
+// decode, the decode must still return the snapshot the hash described.
+// An unknown id remains a hard error, never a silent nil.
+//
+// In the stored forest Roots entries alias the same *Span objects present in
+// Spans, so json.Marshal duplicates root spans in the payload and a plain
+// unmarshal yields Roots pointing at distinct objects. The aliasing is rebuilt
+// by span ID; a root whose ID is absent from Spans is a hard error
+// (constitution IV — no silent fallback).
+func (s *InMemStore) DecodePayload(id string, payload []byte) (*trace.Trace, error) {
+	if _, ok := s.byRunID[id]; !ok {
 		return nil, fmt.Errorf("inmem store: no trace %q", id)
 	}
-	return tr, nil
+	var tr trace.Trace
+	if err := json.Unmarshal(payload, &tr); err != nil {
+		return nil, fmt.Errorf("inmem store: decode payload for trace %q: %w", id, err)
+	}
+	byID := make(map[string]*trace.Span, len(tr.Spans))
+	for _, sp := range tr.Spans {
+		byID[sp.ID] = sp
+	}
+	for i, root := range tr.Roots {
+		sp, ok := byID[root.ID]
+		if !ok {
+			return nil, fmt.Errorf("inmem store: decode payload for trace %q: root span %q (id %q) not present in spans", id, root.Name, root.ID)
+		}
+		tr.Roots[i] = sp
+	}
+	return &tr, nil
 }
 
 func (s *InMemStore) Query(_ context.Context, q core.TraceQuery) ([]core.TraceRef, error) {

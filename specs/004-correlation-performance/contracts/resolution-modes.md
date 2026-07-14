@@ -8,7 +8,7 @@
 | Deadline with unstable spans → hard descriptive error | unchanged (feature 002) |
 | Zero traces within timeout → hard descriptive error | unchanged |
 | Fetch/query errors → wrapped hard errors | unchanged |
-| Observation sensitivity | **strengthened**: any payload byte change counts as instability (previously span-count only) |
+| Observation sensitivity | **strengthened**: any payload byte change counts as instability (previously span-count only); detection is probabilistic — see Change-check signal |
 | Full payload decode | **at most once per trace per resolution** (was: every round) |
 
 ### Change-check signal (clarified 2026-07-11)
@@ -24,6 +24,12 @@
   produce the same per-round stable/reset decisions as the span-count baseline
   (FR-006 proof); (2) the unstable-at-deadline error names
   byte-change-at-constant-span-count, so store-side byte churn is diagnosable.
+- Precision: the length+hash comparison is probabilistic, not exact — an
+  undetected change requires an equal-length FNV-1a-64 collision (≈2⁻⁶⁴ per
+  round on non-adversarial input). Strictly stronger in practice than the
+  span-count baseline; not a cryptographic guarantee. Escalation if exactness
+  is ever needed: retain the previous payload bytes per ref and compare
+  `bytes.Equal` (research R1, precision note).
 - Evidence for byte stability and rejected alternatives (span-count-only,
   count+size): `investigations/004-n1-change-sensitivity.md`.
 
@@ -42,7 +48,8 @@
 - Trace resolution overlaps across parallel runs; internally bounded (constant)
   to protect the store.
 - Per-round trace fetches within one resolution overlap; merge order is
-  deterministic (ref order); first fetch error fails the resolution.
+  deterministic (canonical sorted-TraceID order, independent of store Query
+  order); first fetch error fails the resolution.
 
 ## Non-goals
 

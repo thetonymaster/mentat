@@ -6,10 +6,10 @@ References research.md R1–R5. No config or fixture format changes.
 
 | Element | Change | Rules |
 |---------|--------|-------|
-| `Correlator.Resolve` | behaviour-preserving optimization (sensitivity strengthened per Clarifications 2026-07-11) | Same contract as feature 002 (stable-or-hard-error). Internally: per-ref cached `{payloadLen, payloadHash, decodedForest}`; unchanged payload → stable observation without decode; changed → decode + reset stability. Unstable-at-deadline error names byte-change-at-constant-span-count. |
+| `Correlator.Resolve` | behaviour-preserving optimization (sensitivity strengthened per Clarifications 2026-07-11) | Same contract as feature 002 (stable-or-hard-error). Internally: per-ref cached `{payloadLen, payloadHash, decodedForest}`; unchanged payload → stable observation without decode; changed → decode + reset stability. Byte-change detection is probabilistic (length + FNV-1a-64: an undetected change requires an equal-length hash collision, ≈2⁻⁶⁴ — research R1 precision note). Unstable-at-deadline error names byte-change-at-constant-span-count. |
 | `TraceStore` fetch/decode split | **new seam surface** | Raw-payload accessor + decode step (names at implementation; mocks regenerated). Tempo: exact `/api/traces/{id}` body. `InMemStore`/stubs: deterministic canonical serialization of stored forest (content-identical ⇒ byte-identical). The hashed bytes are the decoded bytes. |
 | `Correlator.ResolveComplete(ctx, store, runID)` | **new seam method** | One query + one concurrent fetch pass; no stability loop, no sleep. Zero traces → existing not-found error. Used only by historical-inspection callers. |
-| per-round fetches | concurrent | errgroup fan-out; ref-order merge; first error fails resolution with the existing wrapped error. |
+| per-round fetches | concurrent | errgroup fan-out; canonical merge order (refs sorted by TraceID after Query — store Query order affects neither the stability key nor the merge); first error fails resolution with the existing wrapped error. |
 
 ## Engine (internal/engine)
 

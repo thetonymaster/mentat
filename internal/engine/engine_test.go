@@ -1273,3 +1273,76 @@ func TestDriveNParallelResolveConcurrencyCappedAtEight(t *testing.T) {
 		t.Fatalf("max concurrent resolves = %d, want >= 2: the bound must not re-serialize resolution", got)
 	}
 }
+
+// TestDriveResolveSlotWaitCancelledReturnsWrappedError pins the error contract of
+// withResolveSlot's ctx.Done() branch: waiting for a resolve slot under a cancelled
+// context must return a wrapped error naming the failing operation, not a bare
+// ctx.Err() (repo convention: errors wrapped with %w naming the concrete thing).
+// The semaphore is saturated first — all maxConcurrentResolves slots held by
+// blocking resolves — so the select's send case can never fire and the ctx.Done()
+// branch is hit deterministically.
+func TestDriveResolveSlotWaitCancelledReturnsWrappedError(t *testing.T) {
+	cfg := config.Config{
+		OTLPEndpoint: "http://localhost:4318",
+		Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+		Targets:      map[string]config.Target{},
+	}
+	tr := &trace.Trace{Spans: []*trace.Span{{Name: "root"}}, Roots: []*trace.Span{{Name: "root"}}}
+
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	cor := mocks.NewMockCorrelator(ctrl)
+
+	// Each in-flight resolve signals started, then blocks until release closes —
+	// holding its resolve slot so the semaphore stays full for the 9th call.
+	started := make(chan struct{}, maxConcurrentResolves)
+	release := make(chan struct{})
+	cor.EXPECT().ResolveComplete(gomock.Any(), gomock.Any(), "pinned-full").DoAndReturn(
+		func(ctx context.Context, _ core.TraceStore, _ string) (*trace.Trace, error) {
+			started <- struct{}{}
+			<-release
+			return tr, nil
+		}).Times(maxConcurrentResolves)
+
+	eng, err := Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	eng.PinRun("pinned-full") // Drive resolves the pinned run: no Inject, no SUT
+
+	var wg sync.WaitGroup
+	for i := 0; i < maxConcurrentResolves; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := eng.Drive(context.Background(), "unused", nil); err != nil {
+				t.Errorf("saturating Drive: %v", err)
+			}
+		}()
+	}
+	// Wait until all slots are provably held (each resolve signalled started).
+	for i := 0; i < maxConcurrentResolves; i++ {
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for resolves to saturate the semaphore")
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled: with the semaphore full, only ctx.Done() can fire
+	_, err = eng.Drive(ctx, "unused", nil)
+
+	close(release) // unblock and drain the saturating resolves before asserting
+	wg.Wait()
+
+	if err == nil {
+		t.Fatal("expected error from Drive with cancelled context and full semaphore, got nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("errors.Is(err, context.Canceled) = false; err = %v", err)
+	}
+	if want := "wait for trace-resolution slot"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("error %q does not contain %q", err.Error(), want)
+	}
+}

@@ -786,18 +786,97 @@ func TestResolveWaitsOutIngestionLagThenConverges(t *testing.T) {
 	}
 }
 
-// TestResolvePerRoundFetchesOverlapAndMergeInRefOrder pins FR-003 (audit C3):
-// within a poll round the per-trace fetches must OVERLAP rather than execute
-// serially, while the merge stays deterministic in REF order (not completion
-// order — latencies here are deliberately reversed so the last ref finishes
-// first). Proven two ways: the in-flight high-water mark across fetches must
-// exceed 1, and the wall clock must beat the serial sum (2 rounds × 200ms of
-// summed latency = 400ms serial vs ~160ms overlapped; 300ms is the generous,
-// CI-safe boundary).
+// TestResolveQueryOrderFlappingStabilizesAndMergesInCanonicalIDOrder pins the
+// order-canonicalization contract: store query order is NOT part of the ref-set
+// identity. Query returns the SAME 3-ref set in a DIFFERENT order every round
+// (rotating) while every ref's payload bytes stay identical — the stability
+// counter must NOT reset on order alone, so Resolve converges via the stability
+// path in exactly 1 changed + StableFor stable rounds (without canonicalization
+// it never stabilizes and dies with the unstable-at-deadline hard error). The
+// merged forest — a multi-root forest, one root per ref (invariant §2) — is in
+// canonical sorted-TraceID order, and canonicalization must sort a COPY: the
+// slices the store returned keep their original order.
+func TestResolveQueryOrderFlappingStabilizesAndMergesInCanonicalIDOrder(t *testing.T) {
+	t.Parallel()
+	base := []string{"t2", "t3", "t1"} // deliberately non-sorted
+	forests := map[string]*trace.Trace{}
+	for _, id := range base {
+		sp := &trace.Span{Name: "span-" + id}
+		forests[id] = &trace.Trace{Roots: []*trace.Span{sp}, Spans: []*trace.Span{sp}}
+	}
+
+	var mu sync.Mutex
+	calls := 0
+	var returned [][]core.TraceRef // every slice handed to Resolve, in call order
+	ctrl := gomock.NewController(t)
+	st, counters := newCountingStoreFuncs(ctrl,
+		func(context.Context, core.TraceQuery) ([]core.TraceRef, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			refs := make([]core.TraceRef, len(base))
+			for i := range base {
+				refs[i] = core.TraceRef{TraceID: base[(i+calls)%len(base)]}
+			}
+			calls++
+			returned = append(returned, refs)
+			return refs, nil
+		},
+		func(_ context.Context, id string) ([]byte, error) {
+			return []byte("payload-" + id), nil // byte-identical every round
+		},
+		func(id string, _ []byte) (*trace.Trace, error) {
+			return forests[id], nil
+		})
+
+	c := New(func() string { return "run-flap" }, PollConfig{Interval: time.Millisecond, StableFor: 3, Timeout: 2 * time.Second})
+	got, err := c.Resolve(context.Background(), st, "run-flap")
+	if err != nil {
+		t.Fatalf("resolve with order-flapping (byte-identical) refs: %v", err)
+	}
+
+	// Stability path, not deadline: 1 changed round (fresh decodes) + 3 stable.
+	if rounds := counters.Queries(); rounds != 4 {
+		t.Fatalf("want 4 poll rounds (1 changed + StableFor=3 stable; order flap must not reset), got %d", rounds)
+	}
+
+	// Merge order is canonical sorted-TraceID order, never the flapping query order.
+	wantOrder := []string{"span-t1", "span-t2", "span-t3"}
+	if len(got.Spans) != len(wantOrder) {
+		t.Fatalf("want %d spans, got %d (%v)", len(wantOrder), len(got.Spans), spanNames(got))
+	}
+	for i, want := range wantOrder {
+		if got.Spans[i].Name != want {
+			t.Fatalf("merge order not canonical sorted-TraceID at %d: want %q, got %q (full: %v)", i, want, got.Spans[i].Name, spanNames(got))
+		}
+	}
+	if len(got.Roots) != 3 {
+		t.Fatalf("multi-root forest: want 3 roots (one per trace), got %d", len(got.Roots))
+	}
+
+	// Canonicalization sorted a copy: the store-returned slices are unmutated.
+	mu.Lock()
+	defer mu.Unlock()
+	for call, refs := range returned {
+		for i := range refs {
+			if want := base[(i+call)%len(base)]; refs[i].TraceID != want {
+				t.Fatalf("store-returned slice mutated (call %d, index %d): want %q, got %q — canonicalization must sort a copy", call, i, want, refs[i].TraceID)
+			}
+		}
+	}
+}
+
+// TestResolvePerRoundFetchesOverlapAndMergeInCanonicalIDOrder pins FR-003
+// (audit C3): within a poll round the per-trace fetches must OVERLAP rather
+// than execute serially, while the merge stays deterministic in canonical
+// sorted-TraceID order (not completion order — latencies here are deliberately
+// reversed so the last ref finishes first). Proven two ways: the in-flight
+// high-water mark across fetches must exceed 1, and the wall clock must beat
+// the serial sum (2 rounds × 200ms of summed latency = 400ms serial vs ~160ms
+// overlapped; 300ms is the generous, CI-safe boundary).
 //
 // Deliberately NOT t.Parallel(): the elapsed-time bound would be distorted by
 // sibling tests competing for the same cores.
-func TestResolvePerRoundFetchesOverlapAndMergeInRefOrder(t *testing.T) {
+func TestResolvePerRoundFetchesOverlapAndMergeInCanonicalIDOrder(t *testing.T) {
 	refIDs := []string{"t1", "t2", "t3", "t4"}
 	latency := map[string]time.Duration{ // reversed: first ref is slowest
 		"t1": 80 * time.Millisecond,
@@ -944,8 +1023,12 @@ func TestResolveCompleteSingleFetchPassNoStabilitySleep(t *testing.T) {
 	st, counters := newCountingStore(ctrl, []storedTrace{{id: "t1", tr: nSpanTrace(3, nil)}})
 
 	c := New(func() string { return "run-hist" }, PollConfig{Interval: time.Hour, StableFor: 100, Timeout: time.Hour})
+	// Bounded ctx: with the hour-scale hostile PollConfig, a regression into the
+	// live polling loop must fail in seconds, not as a 10-minute test panic.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	start := time.Now()
-	got, err := c.ResolveComplete(context.Background(), st, "run-hist")
+	got, err := c.ResolveComplete(ctx, st, "run-hist")
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("ResolveComplete: %v", err)
@@ -970,18 +1053,19 @@ func TestResolveCompleteSingleFetchPassNoStabilitySleep(t *testing.T) {
 	}
 }
 
-// TestResolveCompleteMultiRefFetchesOverlapAndMergeInRefOrder pins the fan-out
-// reuse: the single known-complete fetch pass overlaps its per-trace fetches
-// (in-flight high-water > 1, wall clock beats the 200ms serial sum) and merges
-// in REF order, not completion order (latencies are reversed so the last ref
-// finishes first). Each ref carries its own root — the multi-root forest case
-// (invariant §2): a historical run spanning 4 traces merges into one forest
-// with 4 roots.
+// TestResolveCompleteMultiRefFetchesOverlapAndMergeInCanonicalIDOrder pins the
+// fan-out reuse: the single known-complete fetch pass overlaps its per-trace
+// fetches (in-flight high-water > 1, wall clock beats the 200ms serial sum)
+// and merges in CANONICAL sorted-TraceID order — regardless of Query order
+// (deliberately non-sorted: t3,t1,t4,t2) and regardless of completion order
+// (latencies are reversed so t1, first in sorted order, finishes last). Each
+// ref carries its own root — the multi-root forest case (invariant §2): a
+// historical run spanning 4 traces merges into one forest with 4 roots.
 //
 // Deliberately NOT t.Parallel(): asserts an elapsed-time bound.
-func TestResolveCompleteMultiRefFetchesOverlapAndMergeInRefOrder(t *testing.T) {
-	refIDs := []string{"t1", "t2", "t3", "t4"}
-	latency := map[string]time.Duration{ // reversed: first ref is slowest
+func TestResolveCompleteMultiRefFetchesOverlapAndMergeInCanonicalIDOrder(t *testing.T) {
+	refIDs := []string{"t3", "t1", "t4", "t2"} // Query order: deliberately non-sorted
+	latency := map[string]time.Duration{       // reversed vs sorted-ID order: t1 is slowest
 		"t1": 80 * time.Millisecond,
 		"t2": 60 * time.Millisecond,
 		"t3": 40 * time.Millisecond,
@@ -1020,21 +1104,26 @@ func TestResolveCompleteMultiRefFetchesOverlapAndMergeInRefOrder(t *testing.T) {
 		})
 
 	c := New(func() string { return "run-hist-multi" }, PollConfig{Interval: time.Hour, StableFor: 100, Timeout: time.Hour})
+	// Bounded ctx: with the hour-scale hostile PollConfig, a regression into the
+	// live polling loop must fail in seconds, not as a 10-minute test panic.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	start := time.Now()
-	got, err := c.ResolveComplete(context.Background(), st, "run-hist-multi")
+	got, err := c.ResolveComplete(ctx, st, "run-hist-multi")
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("ResolveComplete: %v", err)
 	}
 
-	// Merge order: ref order, even though t4 (fastest) completed first.
+	// Merge order: canonical sorted-TraceID order — not the (non-sorted) Query
+	// order t3,t1,t4,t2, and not completion order (t4, fastest, completed first).
 	wantOrder := []string{"span-t1", "span-t2", "span-t3", "span-t4"}
 	if len(got.Spans) != len(wantOrder) {
 		t.Fatalf("want %d spans, got %d", len(wantOrder), len(got.Spans))
 	}
 	for i, want := range wantOrder {
 		if got.Spans[i].Name != want {
-			t.Fatalf("merge order not ref order at %d: want %q, got %q (full: %v)", i, want, got.Spans[i].Name, spanNames(got))
+			t.Fatalf("merge order not canonical sorted-TraceID at %d: want %q, got %q (full: %v)", i, want, got.Spans[i].Name, spanNames(got))
 		}
 	}
 	if len(got.Roots) != 4 {
@@ -1074,7 +1163,11 @@ func TestResolveCompleteAbsentTraceIsDescriptiveNotFound(t *testing.T) {
 	st, counters := newCountingStore(ctrl, nil) // no stored traces: Query returns zero refs
 
 	c := New(func() string { return "run-gone" }, PollConfig{Interval: time.Hour, StableFor: 100, Timeout: time.Hour})
-	tr, err := c.ResolveComplete(context.Background(), st, "run-gone")
+	// Bounded ctx: with the hour-scale hostile PollConfig, a regression into the
+	// live polling loop must fail in seconds, not as a 10-minute test panic.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	tr, err := c.ResolveComplete(ctx, st, "run-gone")
 	if err == nil {
 		t.Fatalf("want descriptive not-found error for absent trace, got nil (tr=%v)", tr)
 	}

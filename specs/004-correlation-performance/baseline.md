@@ -147,8 +147,8 @@ poll, ≥1.2 s of sleep alone).
 No pre-feature full-suite number existed in this file, and HEAD `38fe148` is
 pre-feature, so both sides were recorded now, sequentially (never overlapped),
 against the same live harness. Build caches warmed symmetrically before timing
-(compile-only `-run ZZZNoSuchTest` pass in the pre worktree; post tree already
-warm). Command both sides: `/usr/bin/time -p go test -tags e2e ./e2e/ -count=1`.
+(compile-only `-run ZZZNoSuchTest` pass in the pre-feature worktree; the
+post-feature tree was already warm). Command both sides: `/usr/bin/time -p go test -tags e2e ./e2e/ -count=1`.
 
 | Run | Pre (worktree @ 38fe148) | Post (working tree) |
 | --- | ------------------------ | ------------------- |
