@@ -46,6 +46,13 @@ func resolveSpanSource(ctx context.Context, ev core.Evidence, exp ResultExpectat
 	if !ok {
 		return core.Verdict{}, fmt.Errorf("result: unknown matcher %q", exp.Matcher)
 	}
+	// Compile Want once per expectation, before any span is selected or
+	// evaluated (FR-005, audit C6): all quantified spans reuse the compiled
+	// matcher, and authoring errors surface at construction, never mid-span.
+	m, err := compileMatcher(m, exp.Want)
+	if err != nil {
+		return core.Verdict{}, err
+	}
 	if ev.Trace == nil {
 		return core.Verdict{}, fmt.Errorf("result: Evidence.Trace is nil (span source %s)", src.Selector)
 	}

@@ -202,19 +202,34 @@ func (mr *MockTraceStoreMockRecorder) Caps() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Caps", reflect.TypeOf((*MockTraceStore)(nil).Caps))
 }
 
-// GetByID mocks base method.
-func (m *MockTraceStore) GetByID(ctx context.Context, id string) (*trace.Trace, error) {
+// DecodePayload mocks base method.
+func (m *MockTraceStore) DecodePayload(id string, payload []byte) (*trace.Trace, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetByID", ctx, id)
+	ret := m.ctrl.Call(m, "DecodePayload", id, payload)
 	ret0, _ := ret[0].(*trace.Trace)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// GetByID indicates an expected call of GetByID.
-func (mr *MockTraceStoreMockRecorder) GetByID(ctx, id any) *gomock.Call {
+// DecodePayload indicates an expected call of DecodePayload.
+func (mr *MockTraceStoreMockRecorder) DecodePayload(id, payload any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetByID", reflect.TypeOf((*MockTraceStore)(nil).GetByID), ctx, id)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DecodePayload", reflect.TypeOf((*MockTraceStore)(nil).DecodePayload), id, payload)
+}
+
+// FetchPayload mocks base method.
+func (m *MockTraceStore) FetchPayload(ctx context.Context, id string) ([]byte, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FetchPayload", ctx, id)
+	ret0, _ := ret[0].([]byte)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FetchPayload indicates an expected call of FetchPayload.
+func (mr *MockTraceStoreMockRecorder) FetchPayload(ctx, id any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FetchPayload", reflect.TypeOf((*MockTraceStore)(nil).FetchPayload), ctx, id)
 }
 
 // Query mocks base method.
@@ -283,6 +298,21 @@ func (m *MockCorrelator) Resolve(ctx context.Context, store core.TraceStore, run
 func (mr *MockCorrelatorMockRecorder) Resolve(ctx, store, runID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Resolve", reflect.TypeOf((*MockCorrelator)(nil).Resolve), ctx, store, runID)
+}
+
+// ResolveComplete mocks base method.
+func (m *MockCorrelator) ResolveComplete(ctx context.Context, store core.TraceStore, runID string) (*trace.Trace, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ResolveComplete", ctx, store, runID)
+	ret0, _ := ret[0].(*trace.Trace)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ResolveComplete indicates an expected call of ResolveComplete.
+func (mr *MockCorrelatorMockRecorder) ResolveComplete(ctx, store, runID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResolveComplete", reflect.TypeOf((*MockCorrelator)(nil).ResolveComplete), ctx, store, runID)
 }
 
 // MockMatcher is a mock of Matcher interface.

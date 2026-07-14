@@ -28,7 +28,7 @@ func TestReplayFeatureEvaluatesStoredRunWithoutDriving(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	st := mocks.NewMockTraceStore(ctrl)
 	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "r"}}, nil).AnyTimes()
-	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(sampleForest(), nil).AnyTimes()
+	stubForestByID(st, func(string) (*trace.Trace, error) { return sampleForest(), nil })
 	cor := correlate.New(func() string { return "r" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
 	eng, _ := engine.Build(cfg, st, cor)
 
@@ -79,7 +79,7 @@ func TestReplayFeatureFailsWhenStoredRunDoesNotSatisfyFeature(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			st := mocks.NewMockTraceStore(ctrl)
 			st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: tt.runID}}, nil).AnyTimes()
-			st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(mismatchForest(tt.runID), nil).AnyTimes()
+			stubForestByID(st, func(string) (*trace.Trace, error) { return mismatchForest(tt.runID), nil })
 			cor := correlate.New(func() string { return tt.runID }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
 			eng, _ := engine.Build(cfg, st, cor)
 
@@ -168,9 +168,10 @@ func TestReplayFeatureHonorsCallerCancellation(t *testing.T) {
 	st := mocks.NewMockTraceStore(ctrl)
 	cor := mocks.NewMockCorrelator(ctrl)
 	cor.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("r").AnyTimes()
-	// Resolve blocks until the scenario context is cancelled, then returns its error —
+	// The pinned (replay) branch resolves via ResolveComplete (feature 004, FR-004).
+	// It blocks until the scenario context is cancelled, then returns its error —
 	// only reachable if the caller's cancellation threads through to the steps.
-	cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+	cor.EXPECT().ResolveComplete(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
 		func(ctx context.Context, _ core.TraceStore, _ string) (*trace.Trace, error) {
 			<-ctx.Done()
 			return nil, ctx.Err()

@@ -11,7 +11,15 @@ import (
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/expectations"
 	"github.com/thetonymaster/mentat/internal/registry"
+	"github.com/thetonymaster/mentat/internal/trace"
 )
+
+// maxConcurrentResolves bounds concurrent trace resolutions per engine. The
+// per-target slot bounds SUT execution only (FR-001), so this separate, generous
+// bound is what keeps a large parallel batch from stampeding the trace store —
+// without re-serializing the batch. Internal constant by design, not user-facing
+// configuration (feature 004, research R2).
+const maxConcurrentResolves = 8
 
 // Engine wires configuration, a trace store, and a correlator into the
 // Drive/Comparator lifecycle. Build is the only way to construct it.
@@ -19,10 +27,49 @@ type Engine struct {
 	cfg      config.Config
 	cor      core.Correlator
 	st       core.TraceStore
-	sems     map[string]chan struct{} // per-target concurrency gate
+	sems     map[string]chan struct{} // per-target concurrency gate (SUT execution only)
 	pinned   string                   // when set, Drive resolves this run id instead of driving
 	pricing  core.Pricing
 	patterns expectations.Patterns
+
+	// resolveSem gates cor.Resolve calls at maxConcurrentResolves. Lazily built on
+	// first use (sync.Once, race-free) rather than wired in Build: it is a fixed
+	// internal bound, not a configurable seam, and lazy init keeps every existing
+	// Engine construction path working unchanged.
+	resolveOnce sync.Once
+	resolveSem  chan struct{}
+}
+
+// withResolveSlot runs fn under the engine-wide resolve bound. Waiting for a
+// resolve slot honours ctx so a cancelled run never blocks on the gate.
+func (e *Engine) withResolveSlot(ctx context.Context, fn func(ctx context.Context) (*trace.Trace, error)) (*trace.Trace, error) {
+	e.resolveOnce.Do(func() { e.resolveSem = make(chan struct{}, maxConcurrentResolves) })
+	select {
+	case e.resolveSem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-e.resolveSem }()
+	return fn(ctx)
+}
+
+// resolve runs the LIVE stability-gated cor.Resolve under the resolve bound —
+// the only resolution mode reachable from live drives (FR-004).
+func (e *Engine) resolve(ctx context.Context, runID string) (*trace.Trace, error) {
+	return e.withResolveSlot(ctx, func(ctx context.Context) (*trace.Trace, error) {
+		return e.cor.Resolve(ctx, e.st, runID)
+	})
+}
+
+// resolveComplete runs the KNOWN-COMPLETE cor.ResolveComplete under the same
+// resolve bound. Reached only via the pinned branch: a pinned run is by
+// definition saved/historical — PinRun's sole production caller is
+// ctl.ReplayFeature (feature 004, plan U1) — so replay skips the stability
+// sleep while live paths (Drive unpinned, DriveN) cannot reach this mode.
+func (e *Engine) resolveComplete(ctx context.Context, runID string) (*trace.Trace, error) {
+	return e.withResolveSlot(ctx, func(ctx context.Context) (*trace.Trace, error) {
+		return e.cor.ResolveComplete(ctx, e.st, runID)
+	})
 }
 
 // Pricing returns the per-model cost table wired at Build (may be nil).
@@ -57,7 +104,7 @@ func (e *Engine) AggregateComparator(name string) (core.AggregateComparator, boo
 // When PinRun was called, it resolves the pinned run id without driving.
 func (e *Engine) Drive(ctx context.Context, target string, args []string) (core.Evidence, error) {
 	if e.pinned != "" {
-		tr, err := e.cor.Resolve(ctx, e.st, e.pinned)
+		tr, err := e.resolveComplete(ctx, e.pinned)
 		if err != nil {
 			return core.Evidence{}, fmt.Errorf("engine: resolve pinned run %q: %w", e.pinned, err)
 		}
@@ -121,11 +168,15 @@ func (e *Engine) driveOnce(ctx context.Context, target string, args []string) (c
 		}
 		return core.Evidence{RunID: runID, Failed: true, FailureKind: core.FailureKindDriver, FailureMsg: werr.Error()}, werr
 	}
-	defer func() { <-sem }()
+	// The slot bounds SUT execution only (FR-001): it is released explicitly the
+	// moment drv.Run returns — never held through trace resolution — so parallel
+	// runs overlap their ingestion waits instead of summing them. Explicit release
+	// on every path below, not defer-to-end-of-run (feature 004, research R2).
 
 	// If the batch/scenario was cancelled while we waited for the slot, do not start
 	// the SUT — its result would be discarded (FR-008). Abort before driving.
 	if runCtx.Err() != nil {
+		<-sem
 		werr := budgetTimeout(ctx, runCtx, target, "drive", budget)
 		if werr == nil {
 			werr = fmt.Errorf("engine: drive %q: %w", target, runCtx.Err())
@@ -134,6 +185,7 @@ func (e *Engine) driveOnce(ctx context.Context, target string, args []string) (c
 	}
 
 	res, err := drv.Run(runCtx, spec)
+	<-sem // SUT finished (or failed): free the slot before any resolution work
 	if err != nil {
 		werr := budgetTimeout(ctx, runCtx, target, "drive", budget)
 		if werr == nil {
@@ -141,7 +193,7 @@ func (e *Engine) driveOnce(ctx context.Context, target string, args []string) (c
 		}
 		return core.Evidence{RunID: runID, Failed: true, FailureKind: core.FailureKindDriver, FailureMsg: werr.Error()}, werr
 	}
-	tr, err := e.cor.Resolve(runCtx, e.st, runID)
+	tr, err := e.resolve(runCtx, runID)
 	if err != nil {
 		werr := budgetTimeout(ctx, runCtx, target, "resolve", budget)
 		if werr == nil {
@@ -175,8 +227,21 @@ func (e *Engine) DriveN(ctx context.Context, target string, args []string, n int
 	if n < 1 {
 		return nil, fmt.Errorf("engine: DriveN needs n>=1, got %d", n)
 	}
-	if e.pinned != "" && n > 1 {
-		return nil, fmt.Errorf("engine: cannot multi-run a pinned scenario (n=%d); replay is deterministic", n)
+	if e.pinned != "" {
+		if n > 1 {
+			return nil, fmt.Errorf("engine: cannot multi-run a pinned scenario (n=%d); replay is deterministic", n)
+		}
+		// A pinned engine replays a SAVED run: route through Drive's pinned
+		// branch (known-complete resolve, no Inject, no SUT execution) instead of
+		// driveOnce's live path. The godog steps always call DriveN, so without
+		// this the pinned branch was unreachable from replay: DriveN(n=1)
+		// re-drove the SUT and resolved a fresh injected run id (feature 004,
+		// plan U1, FR-004).
+		ev, err := e.Drive(ctx, target, args)
+		if err != nil {
+			return nil, err
+		}
+		return []core.Evidence{ev}, nil
 	}
 	evs := make([]core.Evidence, n)
 	collect := func(ctx context.Context, i int) error {

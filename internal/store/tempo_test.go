@@ -110,6 +110,104 @@ func TestTempoGetByIDNormalizesStatusAndKind(t *testing.T) {
 	}
 }
 
+// TestTempoFetchPayloadReturnsExactBody pins the feature-004 raw-payload seam
+// (FR-002): FetchPayload must return the EXACT /api/traces/{id} response body —
+// byte-for-byte, no parsing, no re-encoding — because those bytes are the
+// stability poll's change-detection signal and later the input to DecodePayload
+// (the hashed bytes and the decoded bytes must be the same fetch).
+func TestTempoFetchPayloadReturnsExactBody(t *testing.T) {
+	t.Parallel()
+	// Deliberately NOT canonical JSON: leading/trailing whitespace and key order
+	// must survive verbatim — a raw accessor that parses/re-encodes would lose them.
+	const body = "  {\"batches\": [],  \"zzz\": 1}\n\n"
+
+	tests := []struct {
+		name       string
+		status     int
+		wantErr    bool
+		wantErrSub string
+	}{
+		{name: "200 returns exact bytes", status: http.StatusOK},
+		{name: "non-200 is a hard error", status: http.StatusInternalServerError, wantErr: true, wantErrSub: "status 500"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(body))
+			}))
+			defer srv.Close()
+
+			got, err := NewTempo(srv.URL, srv.Client(), 0).FetchPayload(context.Background(), "tt")
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				if !strings.Contains(err.Error(), tt.wantErrSub) {
+					t.Fatalf("error %q does not contain %q", err.Error(), tt.wantErrSub)
+				}
+				return
+			}
+			if string(got) != body {
+				t.Fatalf("payload not the exact response body:\ngot  %q\nwant %q", got, body)
+			}
+		})
+	}
+}
+
+// TestTempoDecodePayloadDecodesFetchedBytes pins the decode half of the seam
+// split: DecodePayload(id, payload) must decode payload bytes previously
+// returned by FetchPayload — same forest building and resource-attr merge
+// (the C5 copy) as the composed GetByID path — and hard-error on bytes it
+// cannot decode, naming the trace id.
+func TestTempoDecodePayloadDecodesFetchedBytes(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		payload    string
+		wantErr    bool
+		wantErrSub string
+		check      func(t *testing.T, tr *trace.Trace)
+	}{
+		{
+			name:    "otlp resourceSpans envelope decodes with resource attrs merged",
+			payload: otlpTraceJSON,
+			check: func(t *testing.T, tr *trace.Trace) {
+				if len(tr.Spans) != 2 || len(tr.Roots) != 1 {
+					t.Fatalf("forest wrong: spans=%d roots=%d", len(tr.Spans), len(tr.Roots))
+				}
+				if tr.Roots[0].Attr("test.run.id") != "abc123" {
+					t.Fatalf("resource attr not merged onto span: %v", tr.Roots[0].Attrs)
+				}
+			},
+		},
+		{
+			name:       "malformed bytes are a hard error naming the id",
+			payload:    "not json",
+			wantErr:    true,
+			wantErrSub: "parse trace deadbeef",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			tp := NewTempo("http://unused.invalid", http.DefaultClient, 0)
+			tr, err := tp.DecodePayload("deadbeef", []byte(tt.payload))
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				if !strings.Contains(err.Error(), tt.wantErrSub) {
+					t.Fatalf("error %q does not contain %q", err.Error(), tt.wantErrSub)
+				}
+				return
+			}
+			tt.check(t, tr)
+		})
+	}
+}
+
 const otlpTraceJSON = `{
   "resourceSpans": [{
     "resource": { "attributes": [

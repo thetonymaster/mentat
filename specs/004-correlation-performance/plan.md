@@ -103,3 +103,50 @@ consequence); comparators are untouched.
 ## Complexity Tracking
 
 No constitution violations — table intentionally empty.
+
+## Resolved Open Questions
+
+### U1 — how replay reaches known-complete resolution (resolved 2026-07-13)
+
+Problem (from the 2026-07-11 analyze session, referenced by tasks.md T013):
+`mentatctl agent replay` resolves via the engine (`ctl.ReplayFeature` →
+`eng.PinRun(runID)` → `Drive`'s pinned branch at `internal/engine/engine.go:60`
+calling `e.cor.Resolve`), not via `ctl.Resolve` — so switching `ctl.Resolve` to
+`ResolveComplete` (T013) covers format/diff but not replay.
+
+**Decision**: the engine's pinned branch calls `ResolveComplete` instead of
+`Resolve`. A pinned run is by definition saved/historical — `PinRun`'s only
+production caller is `ctl.ReplayFeature` (verified 2026-07-13:
+`grep -rn PinRun`, replay.go:21 is the sole non-test caller). Live paths
+(`Drive` unpinned, `DriveN`) keep the stability-gated `Resolve`, so the fast
+path stays unreachable for live scenarios by construction (spec edge case,
+research R4) — the pinned branch is only entered via `PinRun`, which only the
+historical replay command invokes.
+
+**Alternatives rejected**:
+- Correlator adapter (Resolve→ResolveComplete) wired at mentatctl's composition
+  root for the replay engine: scopes the fast path to an engine *instance*
+  instead of the pinned *branch*; any live Drive on that instance would silently
+  fast-path — exactly the accidental-use risk R4's separate-method design exists
+  to prevent. More moving parts for a weaker guarantee.
+- Replay bypasses the engine (pre-resolve Evidence via `ResolveComplete`, inject
+  into steps): large refactor of the steps/engine seam for no contract benefit.
+
+**Consequence for T012/T013**: the replay red test asserts the pinned engine
+calls `ResolveComplete` (mock Correlator expects `ResolveComplete`, forbids
+`Resolve`); T013's engine-side diff is the one-line pinned-branch switch plus
+that test.
+
+**Premise correction (found during T013, 2026-07-13)**: the original U1 analysis
+assumed replay reaches `Drive`'s pinned branch. In fact the godog steps always
+call `DriveN` (steps.go:161), and `DriveN(n=1)` on a pinned engine bypassed the
+pinned branch into `driveOnce`'s live path — production replay re-drove the SUT
+and resolved a fresh injected run id (pre-existing regression from the @runs
+steps switch Drive→DriveN, masked in ctl tests by an idFn rigged to the pinned
+id). Fixed under T013: `DriveN` routes pinned n=1 through `Drive`'s pinned
+branch (no Inject, no SUT execution, known-complete resolve), guarded by
+`TestDriveNPinnedSingleRunResolvesStoredRunWithoutDriving`. The U1 decision
+(pinned branch → `ResolveComplete`) is unchanged; full account in tasks.md T013. Known accepted edge (inherent to FR-004 naming replay as a
+known-complete caller): replaying a run whose trace is still mid-ingestion
+evaluates the fetch-once snapshot rather than waiting for stability — accepted
+at spec time (US3, FR-004 name replay explicitly as historical).

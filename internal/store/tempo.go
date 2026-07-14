@@ -105,13 +105,31 @@ func nanos(s string) (time.Time, error) {
 	return time.Unix(0, n), nil
 }
 
+// FetchPayload returns the exact /api/traces/{id} response body — the raw
+// payload whose bytes the stability poll compares round over round (feature
+// 004, FR-002). It never parses or re-encodes: DecodePayload must decode these
+// same bytes, so the hashed bytes and the decoded bytes are one fetch.
+func (t *Tempo) FetchPayload(ctx context.Context, id string) ([]byte, error) {
+	return t.get(ctx, t.endpoint+"/api/traces/"+url.PathEscape(id))
+}
+
+// GetByID fetches and decodes in one step: DecodePayload(FetchPayload(id)).
+// The stability poll uses the split methods directly; this composition remains
+// for one-shot callers and pins that both halves agree.
 func (t *Tempo) GetByID(ctx context.Context, id string) (*trace.Trace, error) {
-	body, err := t.get(ctx, t.endpoint+"/api/traces/"+url.PathEscape(id))
+	body, err := t.FetchPayload(ctx, id)
 	if err != nil {
 		return nil, err
 	}
+	return t.DecodePayload(id, body)
+}
+
+// DecodePayload decodes payload bytes previously returned by FetchPayload for
+// the same id into a Trace forest. Resource attributes are merged onto each
+// span here — once per decode, not once per poll round (audit C5).
+func (t *Tempo) DecodePayload(id string, payload []byte) (*trace.Trace, error) {
 	var ot otlpTrace
-	if err := json.Unmarshal(body, &ot); err != nil {
+	if err := json.Unmarshal(payload, &ot); err != nil {
 		return nil, fmt.Errorf("tempo: parse trace %s: %w", id, err)
 	}
 	tr := &trace.Trace{}

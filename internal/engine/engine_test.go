@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,6 +23,15 @@ import (
 	"github.com/thetonymaster/mentat/internal/trace"
 )
 
+// stubStoredTrace stubs the feature-004 store seam pair (FetchPayload +
+// DecodePayload) on st to serve tr for every trace id, with a byte-stable
+// payload so the correlator's stability gate converges exactly as the old
+// constant-trace GetByID stub did.
+func stubStoredTrace(st *mocks.MockTraceStore, tr *trace.Trace) {
+	st.EXPECT().FetchPayload(gomock.Any(), gomock.Any()).Return([]byte("payload"), nil).AnyTimes()
+	st.EXPECT().DecodePayload(gomock.Any(), gomock.Any()).Return(tr, nil).AnyTimes()
+}
+
 func TestDriveProducesEvidenceFromStore(t *testing.T) {
 	cfg := config.Config{
 		OTLPEndpoint: "http://localhost:4318",
@@ -35,7 +45,7 @@ func TestDriveProducesEvidenceFromStore(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	st := mocks.NewMockTraceStore(ctrl)
 	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "run-1"}}, nil).AnyTimes()
-	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(tr, nil).AnyTimes()
+	stubStoredTrace(st, tr)
 
 	cor := correlate.New(func() string { return "run-1" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
 
@@ -309,7 +319,11 @@ func TestDrivePinned(t *testing.T) {
 			st := mocks.NewMockTraceStore(ctrl)
 			cor := mocks.NewMockCorrelator(ctrl)
 			// Inject must NOT be called — the absent EXPECT proves drive/inject is bypassed.
-			cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), tt.runID).Return(tt.resolveRet, tt.resolveErr)
+			// A pinned run is by definition saved/historical (plan U1): the pinned
+			// branch must use the known-complete mode. Resolve(...).Times(0) forbids
+			// the live stability-gated path (FR-004: live-only, never historical).
+			cor.EXPECT().ResolveComplete(gomock.Any(), gomock.Any(), tt.runID).Return(tt.resolveRet, tt.resolveErr)
+			cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
 
 			eng, err := Build(cfg, st, cor)
 			if err != nil {
@@ -499,7 +513,7 @@ func TestDriveNCollectsSamples(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	st := mocks.NewMockTraceStore(ctrl)
 	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "t"}}, nil).AnyTimes()
-	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(tr, nil).AnyTimes()
+	stubStoredTrace(st, tr)
 
 	var mu sync.Mutex
 	var n int
@@ -588,6 +602,52 @@ func TestDriveNPinnedRejectsMulti(t *testing.T) {
 	}
 }
 
+// TestDriveNPinnedSingleRunResolvesStoredRunWithoutDriving pins the replay
+// routing (feature 004, plan U1 + FR-004): the godog steps always call DriveN
+// (never Drive), so a PINNED engine's n=1 DriveN must take the same
+// known-complete pinned branch as Drive — resolve the stored run id via
+// ResolveComplete, with no Inject, no SUT execution, and no live stability
+// poll. Before this pin, DriveN(n=1) bypassed the pinned branch into
+// driveOnce's live path: it re-DROVE the SUT and resolved a FRESH injected run
+// id, so replay evaluated a new run instead of the stored one.
+func TestDriveNPinnedSingleRunResolvesStoredRunWithoutDriving(t *testing.T) {
+	pinnedTrace := &trace.Trace{Spans: []*trace.Span{{Name: "stored"}}, Roots: []*trace.Span{{Name: "stored"}}}
+	cfg := config.Config{
+		OTLPEndpoint: "http://localhost:4318",
+		Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+		// No targets: any attempt to live-drive fails with "unknown target", so a
+		// successful DriveN proves the pinned resolve-only branch was taken.
+		Targets: map[string]config.Target{},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	cor := mocks.NewMockCorrelator(ctrl)
+	// Inject must NOT be called (no EXPECT): replay never mints a fresh run id.
+	cor.EXPECT().ResolveComplete(gomock.Any(), gomock.Any(), "pinned-n1").Return(pinnedTrace, nil)
+	// The live stability-gated mode is forbidden for a pinned run (FR-004).
+	cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+
+	eng, err := Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	eng.PinRun("pinned-n1")
+
+	evs, err := eng.DriveN(context.Background(), "unused", nil, 1, false)
+	if err != nil {
+		t.Fatalf("DriveN pinned n=1: %v", err)
+	}
+	if len(evs) != 1 {
+		t.Fatalf("want 1 evidence, got %d", len(evs))
+	}
+	if evs[0].RunID != "pinned-n1" {
+		t.Fatalf("RunID: want %q, got %q", "pinned-n1", evs[0].RunID)
+	}
+	if evs[0].Trace != pinnedTrace {
+		t.Fatalf("Trace: want the stored pinned forest, got %v", evs[0].Trace)
+	}
+}
+
 func TestDriveNInvalidN(t *testing.T) {
 	cfg := config.Config{
 		OTLPEndpoint: "http://localhost:4318",
@@ -618,7 +678,7 @@ func TestDriveNParallel(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	st := mocks.NewMockTraceStore(ctrl)
 	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "t"}}, nil).AnyTimes()
-	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(tr, nil).AnyTimes()
+	stubStoredTrace(st, tr)
 
 	var mu sync.Mutex
 	var counter int
@@ -745,7 +805,7 @@ func TestDriveHTTPTarget(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	st := mocks.NewMockTraceStore(ctrl)
 	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "run-http"}}, nil).AnyTimes()
-	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(tr, nil).AnyTimes()
+	stubStoredTrace(st, tr)
 
 	cor := correlate.New(func() string { return "run-http" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
 
@@ -1002,5 +1062,214 @@ func TestDriveNParallelCancelledMidBatch(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `DriveN "svc" cancelled`) {
 		t.Fatalf("error %q does not contain %q", err.Error(), `DriveN "svc" cancelled`)
+	}
+}
+
+// instantDriver succeeds immediately — drive time ≈ 0, isolating resolve time so
+// batch wall-clock measures only how resolution waits compose.
+type instantDriver struct{}
+
+func (instantDriver) Run(context.Context, core.RunSpec) (core.RunResult, error) {
+	return core.RunResult{Output: core.Output{Answer: "ok"}}, nil
+}
+
+// TestDriveNParallelResolveOverlapsOutsideSlot pins feature 004 US1/FR-001: the
+// per-target concurrency slot bounds SUT execution ONLY. With limit 1 and 10
+// parallel runs whose resolution lags ~300ms each, the ingestion waits must
+// overlap: batch wall time stays under 4× lag (generous, CI-safe bound). Holding
+// the slot through cor.Resolve serializes the waits (~10× lag) and fails this.
+//
+// No t.Parallel: the assertion is wall-clock-bound and Build mutates the global
+// registry; background load would turn a real regression signal into flake noise.
+func TestDriveNParallelResolveOverlapsOutsideSlot(t *testing.T) {
+	const (
+		n   = 10
+		lag = 300 * time.Millisecond
+	)
+	registry.ResetForTest(t) // reopen the sealed registry to register a custom seam
+	registry.RegisterDriver("instant-overlap", instantDriver{})
+
+	cfg := config.Config{
+		OTLPEndpoint: "http://localhost:4318",
+		Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+		Targets: map[string]config.Target{
+			"sut": {Adapter: "instant-overlap", Command: []string{"x"}, MaxConcurrency: 1},
+		},
+	}
+	tr := &trace.Trace{Spans: []*trace.Span{{Name: "root"}}, Roots: []*trace.Span{{Name: "root"}}}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	cor := mocks.NewMockCorrelator(ctrl)
+	cor.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("run-ov").AnyTimes()
+	cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, _ core.TraceStore, _ string) (*trace.Trace, error) {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(lag):
+				return tr, nil
+			}
+		}).Times(n)
+
+	eng, err := Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	start := time.Now()
+	evs, err := eng.DriveN(context.Background(), "sut", nil, n, true)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("DriveN: %v", err)
+	}
+	if len(evs) != n {
+		t.Fatalf("got %d samples, want %d", len(evs), n)
+	}
+	for i, ev := range evs {
+		if ev.Failed {
+			t.Fatalf("sample %d unexpectedly failed: %+v", i, ev)
+		}
+	}
+	if limit := 4 * lag; elapsed >= limit {
+		t.Fatalf("parallel batch took %v, want < %v: resolution waits are serialized behind the SUT-execution slot (FR-001)", elapsed, limit)
+	}
+}
+
+// recordingDriver records each Run's [start, end] interval (thread-safe) and holds
+// the SUT slot briefly so overlapping drives are detectable.
+type recordingDriver struct {
+	mu        sync.Mutex
+	hold      time.Duration
+	intervals [][2]time.Time
+}
+
+func (d *recordingDriver) Run(context.Context, core.RunSpec) (core.RunResult, error) {
+	start := time.Now()
+	time.Sleep(d.hold)
+	end := time.Now()
+	d.mu.Lock()
+	d.intervals = append(d.intervals, [2]time.Time{start, end})
+	d.mu.Unlock()
+	return core.RunResult{Output: core.Output{Answer: "ok"}}, nil
+}
+
+// TestDriveNParallelLimitOneKeepsDrivesSerialized guards the other half of
+// FR-001: narrowing the slot's scope must NOT weaken it — with limit 1 the
+// semaphore still gates SUT execution, so no two drives may overlap even while
+// their resolutions do. This is a preservation guard: it must pass before AND
+// after the slot-scope change.
+func TestDriveNParallelLimitOneKeepsDrivesSerialized(t *testing.T) {
+	const n = 6
+	drv := &recordingDriver{hold: 30 * time.Millisecond}
+	registry.ResetForTest(t) // reopen the sealed registry to register a custom seam
+	registry.RegisterDriver("recording-serial", drv)
+
+	cfg := config.Config{
+		OTLPEndpoint: "http://localhost:4318",
+		Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+		Targets: map[string]config.Target{
+			"sut": {Adapter: "recording-serial", Command: []string{"x"}, MaxConcurrency: 1},
+		},
+	}
+	tr := &trace.Trace{Spans: []*trace.Span{{Name: "root"}}, Roots: []*trace.Span{{Name: "root"}}}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	cor := mocks.NewMockCorrelator(ctrl)
+	cor.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("run-ser").AnyTimes()
+	cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).Return(tr, nil).Times(n)
+
+	eng, err := Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	evs, err := eng.DriveN(context.Background(), "sut", nil, n, true)
+	if err != nil {
+		t.Fatalf("DriveN: %v", err)
+	}
+	if len(evs) != n {
+		t.Fatalf("got %d samples, want %d", len(evs), n)
+	}
+
+	drv.mu.Lock()
+	intervals := append([][2]time.Time{}, drv.intervals...)
+	drv.mu.Unlock()
+	if len(intervals) != n {
+		t.Fatalf("driver ran %d times, want %d", len(intervals), n)
+	}
+	sort.Slice(intervals, func(i, j int) bool { return intervals[i][0].Before(intervals[j][0]) })
+	for i := 1; i < len(intervals); i++ {
+		if intervals[i][0].Before(intervals[i-1][1]) {
+			t.Fatalf("drives %d and %d overlap (%v starts before %v ends): limit=1 must serialize SUT execution",
+				i-1, i, intervals[i][0], intervals[i-1][1])
+		}
+	}
+}
+
+// TestDriveNParallelResolveConcurrencyCappedAtEight pins feature 004's internal
+// resolve bound (research R2): releasing the SUT slot before resolution must not
+// allow unbounded concurrent resolutions — at most 8 run at once per engine
+// (store protection), yet resolution still overlaps (>1 in flight), never
+// re-serializing the batch. With 16 slots and 16 parallel runs the current
+// slot-held-through-resolve code drives all 16 resolves concurrently (>8): red.
+func TestDriveNParallelResolveConcurrencyCappedAtEight(t *testing.T) {
+	const n = 16
+	registry.ResetForTest(t) // reopen the sealed registry to register a custom seam
+	registry.RegisterDriver("instant-bound", instantDriver{})
+
+	cfg := config.Config{
+		OTLPEndpoint: "http://localhost:4318",
+		Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+		Targets: map[string]config.Target{
+			"sut": {Adapter: "instant-bound", Command: []string{"x"}, MaxConcurrency: n},
+		},
+	}
+	tr := &trace.Trace{Spans: []*trace.Span{{Name: "root"}}, Roots: []*trace.Span{{Name: "root"}}}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	cor := mocks.NewMockCorrelator(ctrl)
+	cor.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("run-bound").AnyTimes()
+
+	// In-flight high-water mark over concurrent Resolve calls. The 250ms hold keeps
+	// every resolve in flight long enough that unbounded concurrency reliably
+	// exceeds the cap (generous, CI-safe).
+	var mu sync.Mutex
+	inFlight, highWater := 0, 0
+	cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, _ core.TraceStore, _ string) (*trace.Trace, error) {
+			mu.Lock()
+			inFlight++
+			if inFlight > highWater {
+				highWater = inFlight
+			}
+			mu.Unlock()
+			defer func() { mu.Lock(); inFlight--; mu.Unlock() }()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(250 * time.Millisecond):
+				return tr, nil
+			}
+		}).Times(n)
+
+	eng, err := Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	evs, err := eng.DriveN(context.Background(), "sut", nil, n, true)
+	if err != nil {
+		t.Fatalf("DriveN: %v", err)
+	}
+	if len(evs) != n {
+		t.Fatalf("got %d samples, want %d", len(evs), n)
+	}
+
+	mu.Lock()
+	got := highWater
+	mu.Unlock()
+	if got > 8 {
+		t.Fatalf("max concurrent resolves = %d, want <= 8 (engine resolve bound, store protection)", got)
+	}
+	if got < 2 {
+		t.Fatalf("max concurrent resolves = %d, want >= 2: the bound must not re-serialize resolution", got)
 	}
 }

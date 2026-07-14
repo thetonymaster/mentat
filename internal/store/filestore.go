@@ -104,6 +104,35 @@ func (s *InMemStore) GetByID(_ context.Context, id string) (*trace.Trace, error)
 	return nil, fmt.Errorf("inmem store: no trace %q", id)
 }
 
+// FetchPayload returns a deterministic canonical serialization of the stored
+// forest — the hermetic definition of the feature-004 change-detection payload
+// (spec Assumptions): content-identical forests yield byte-identical payloads.
+// encoding/json guarantees the determinism: struct fields encode in declaration
+// order and map keys (span Attrs) are sorted, so Go map iteration order never
+// leaks into the bytes.
+func (s *InMemStore) FetchPayload(_ context.Context, id string) ([]byte, error) {
+	tr, ok := s.byRunID[id]
+	if !ok {
+		return nil, fmt.Errorf("inmem store: no trace %q", id)
+	}
+	payload, err := json.Marshal(tr)
+	if err != nil {
+		return nil, fmt.Errorf("inmem store: canonical serialization of trace %q: %w", id, err)
+	}
+	return payload, nil
+}
+
+// DecodePayload returns the stored forest the payload canonically serializes.
+// The store keeps decoded forests (there is no wire format to parse), so the
+// lookup IS the decode; an unknown id is a hard error, never a silent nil.
+func (s *InMemStore) DecodePayload(id string, _ []byte) (*trace.Trace, error) {
+	tr, ok := s.byRunID[id]
+	if !ok {
+		return nil, fmt.Errorf("inmem store: no trace %q", id)
+	}
+	return tr, nil
+}
+
 func (s *InMemStore) Query(_ context.Context, q core.TraceQuery) ([]core.TraceRef, error) {
 	if q.Tag != "test.run.id" {
 		return nil, fmt.Errorf("inmem store: only test.run.id queries supported, got %q", q.Tag)

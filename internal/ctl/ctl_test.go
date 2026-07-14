@@ -52,6 +52,11 @@ func TestSaveLastMkdirFails(t *testing.T) {
 	}
 }
 
+// TestResolve pins the FR-004 routing (feature 004, US3): ctl.Resolve is the
+// shared HISTORICAL resolve helper (trace/tools/services/diff all route through
+// it for saved run ids), so it must use the correlator's known-complete mode —
+// ResolveComplete, one fetch pass, no stability polling. The explicit
+// Resolve(...).Times(0) forbids the live stability-gated path.
 func TestResolve(t *testing.T) {
 	wantTrace := &trace.Trace{RunID: "trace-abc"}
 	wantErr := errors.New("not found")
@@ -90,8 +95,12 @@ func TestResolve(t *testing.T) {
 			mockSt := mocks.NewMockTraceStore(ctrl)
 
 			mockCor.EXPECT().
-				Resolve(gomock.Any(), mockSt, tt.runID).
+				ResolveComplete(gomock.Any(), mockSt, tt.runID).
 				Return(tt.retTrace, tt.retErr)
+			// Historical resolution must never pay the live stability poll (FR-004).
+			mockCor.EXPECT().
+				Resolve(gomock.Any(), gomock.Any(), gomock.Any()).
+				Times(0)
 
 			got, err := Resolve(context.Background(), mockCor, mockSt, tt.runID)
 			if (err != nil) != tt.wantErr {

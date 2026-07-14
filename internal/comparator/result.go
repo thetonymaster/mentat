@@ -45,5 +45,11 @@ func (result) Compare(ctx context.Context, ev core.Evidence, e core.Expectation)
 	if !ok {
 		return core.Verdict{}, fmt.Errorf("result: unknown matcher %q", exp.Matcher)
 	}
+	// Bind Want's compiled artifact once, before evaluation (FR-005): authoring
+	// errors (bad pattern/schema) surface at expectation construction.
+	m, err := compileMatcher(m, exp.Want)
+	if err != nil {
+		return core.Verdict{}, err
+	}
 	return m.Match(ctx, ev, exp.Want, exp.Target)
 }

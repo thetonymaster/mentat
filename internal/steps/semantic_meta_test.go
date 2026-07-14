@@ -68,7 +68,7 @@ func semanticMetaEng(t *testing.T, backend string) *engine.Engine {
 	ctrl := gomock.NewController(t)
 	st := mocks.NewMockTraceStore(ctrl)
 	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "r"}}, nil).AnyTimes()
-	st.EXPECT().GetByID(gomock.Any(), gomock.Any()).Return(happyTrace(), nil).AnyTimes()
+	stubStoredTrace(st, happyTrace())
 	cor := correlate.New(func() string { return "r" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
 	eng, err := engine.Build(cfg, st, cor)
 	if err != nil {

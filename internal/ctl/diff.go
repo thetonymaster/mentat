@@ -2,8 +2,10 @@ package ctl
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/thetonymaster/mentat/internal/comparator"
 	"github.com/thetonymaster/mentat/internal/core"
@@ -35,13 +37,30 @@ func DiffServices(ctx context.Context, cor core.Correlator, st core.TraceStore, 
 }
 
 func diffWith(ctx context.Context, cor core.Correlator, st core.TraceStore, idA, idB string, w io.Writer, sel seqFunc, noun string) error {
-	ta, err := Resolve(ctx, cor, st, idA)
-	if err != nil {
-		return fmt.Errorf("diff: run %s: %w", idA, err)
-	}
-	tb, err := Resolve(ctx, cor, st, idB)
-	if err != nil {
-		return fmt.Errorf("diff: run %s: %w", idB, err)
+	// Both runs are saved/historical, so their known-complete resolves are
+	// independent single fetch passes — overlap them instead of paying the
+	// resolve latency twice (feature 004, US3). Both goroutines run to
+	// completion; failures are then surfaced deterministically (A before B)
+	// with BOTH errors joined when both fail — the second failure is never
+	// lost silently, and each error names the run id that failed.
+	var (
+		ta, tb     *trace.Trace
+		errA, errB error
+		wg         sync.WaitGroup
+	)
+	wg.Add(2)
+	go func() { defer wg.Done(); ta, errA = Resolve(ctx, cor, st, idA) }()
+	go func() { defer wg.Done(); tb, errB = Resolve(ctx, cor, st, idB) }()
+	wg.Wait()
+	if errA != nil || errB != nil {
+		var errs []error
+		if errA != nil {
+			errs = append(errs, fmt.Errorf("diff: run %s: %w", idA, errA))
+		}
+		if errB != nil {
+			errs = append(errs, fmt.Errorf("diff: run %s: %w", idB, errB))
+		}
+		return errors.Join(errs...)
 	}
 	a, err := sel(ta)
 	if err != nil {

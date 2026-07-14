@@ -28,6 +28,35 @@ func RegisterBuiltinMatchers() {
 	}
 }
 
+// compileRegexp and compileSchemaDoc are the compilation seams for the regex
+// and schema matchers. Tests swap them for counting wrappers to prove one
+// compilation per expectation regardless of matched-span count (audit C6).
+var (
+	compileRegexp    = regexp.Compile
+	compileSchemaDoc = compileSchema
+)
+
+// compilingMatcher is implemented by matchers whose Want must be compiled
+// (regex, schema). Compile happens once per expectation, when the expectation
+// is bound for evaluation — mirroring the CEL precompile lifecycle (research
+// R5): authoring errors surface before any span or target is read. The
+// returned matcher carries the compiled artifact and its Match is read-only,
+// so one expectation object is safe to evaluate from parallel scenarios.
+type compilingMatcher interface {
+	Compile(want string) (core.Matcher, error)
+}
+
+// compileMatcher returns m bound to want's compiled artifact when m requires
+// compilation, or m unchanged otherwise. Callers invoke it exactly once per
+// expectation, before evaluating any span (FR-005).
+func compileMatcher(m core.Matcher, want string) (core.Matcher, error) {
+	cm, ok := m.(compilingMatcher)
+	if !ok {
+		return m, nil
+	}
+	return cm.Compile(want)
+}
+
 type exactMatcher struct{}
 
 func (exactMatcher) Name() string { return "exact" }
@@ -60,19 +89,42 @@ func (containsMatcher) Match(_ context.Context, ev core.Evidence, want, target s
 	}}, nil
 }
 
-type regexMatcher struct{}
+// regexMatcher matches against a pattern compiled once per expectation. The
+// registered prototype has a nil re; Compile returns an instance bound to the
+// compiled pattern, whose Match never compiles (*regexp.Regexp is documented
+// concurrency-safe for matching).
+type regexMatcher struct {
+	re *regexp.Regexp
+}
 
 func (regexMatcher) Name() string { return "regex" }
-func (regexMatcher) Match(_ context.Context, ev core.Evidence, want, target string) (core.Verdict, error) {
+
+// Compile compiles want once and returns a read-only matcher bound to it. An
+// invalid pattern is an authoring error surfaced at expectation construction.
+func (regexMatcher) Compile(want string) (core.Matcher, error) {
+	re, err := compileRegexp(want)
+	if err != nil {
+		return nil, fmt.Errorf("result: bad regex %q: %w", want, err)
+	}
+	return regexMatcher{re: re}, nil
+}
+
+// Match matches the target string against the bound pattern. A prototype used
+// directly (without Compile) compiles per call, preserving the core.Matcher
+// contract; the result comparator always compiles first.
+func (m regexMatcher) Match(ctx context.Context, ev core.Evidence, want, target string) (core.Verdict, error) {
+	if m.re == nil {
+		cm, err := m.Compile(want)
+		if err != nil {
+			return core.Verdict{}, err
+		}
+		return cm.Match(ctx, ev, want, target)
+	}
 	got, err := targetString(target, ev)
 	if err != nil {
 		return core.Verdict{}, err
 	}
-	re, err := regexp.Compile(want)
-	if err != nil {
-		return core.Verdict{}, fmt.Errorf("result: bad regex %q: %w", want, err)
-	}
-	if re.MatchString(got) {
+	if m.re.MatchString(got) {
 		return core.Verdict{Pass: true}, nil
 	}
 	return core.Verdict{Pass: false, Reasons: []string{
@@ -168,27 +220,49 @@ func cleanSchemaCompileErr(err error) string {
 	return strings.TrimPrefix(err.Error(), `"`+schemaResourceID+`#" is not valid against metaschema: `)
 }
 
-type schemaMatcher struct{}
+// schemaMatcher validates against a JSON Schema compiled once per expectation.
+// The registered prototype has a nil sch; Compile returns an instance bound to
+// the compiled schema, whose Match never compiles (compiled schemas are
+// documented concurrency-safe for validation).
+type schemaMatcher struct {
+	sch *jsonschema.Schema
+}
 
 func (schemaMatcher) Name() string { return "schema" }
 
-// Match validates the response body against the JSON Schema in want. The schema
-// is compiled fresh per call; an invalid schema is a hard error (never a silent
-// pass — invariant 4). An empty body validates as JSON null (a failure with a
-// descriptive reason, not an error); a non-empty body that is not valid JSON is
-// a hard error, mirroring the CEL `body` decision. Target is not consulted.
-func (schemaMatcher) Match(_ context.Context, ev core.Evidence, want, _ string) (core.Verdict, error) {
-	sch, err := compileSchema(want)
+// Compile compiles the JSON Schema in want once and returns a read-only
+// matcher bound to it. An invalid schema is a terminal user-facing config
+// error (the schema literal in the spec is wrong) surfaced at expectation
+// construction; it uses %s with a cleaned message so the internal resource id
+// is never surfaced.
+func (schemaMatcher) Compile(want string) (core.Matcher, error) {
+	sch, err := compileSchemaDoc(want)
 	if err != nil {
-		// Terminal user-facing config error (the schema literal in the spec is wrong);
-		// use %s with a cleaned message so the internal resource id is never surfaced.
-		return core.Verdict{}, fmt.Errorf("result: schema: invalid JSON Schema: %s", cleanSchemaCompileErr(err))
+		return nil, fmt.Errorf("result: schema: invalid JSON Schema: %s", cleanSchemaCompileErr(err))
+	}
+	return schemaMatcher{sch: sch}, nil
+}
+
+// Match validates the response body against the bound schema; an invalid
+// schema is a hard error at Compile (never a silent pass — invariant 4). An
+// empty body validates as JSON null (a failure with a descriptive reason, not
+// an error); a non-empty body that is not valid JSON is a hard error,
+// mirroring the CEL `body` decision. Target is not consulted. A prototype used
+// directly (without Compile) compiles per call, preserving the core.Matcher
+// contract; the result comparator always compiles first.
+func (m schemaMatcher) Match(ctx context.Context, ev core.Evidence, want, target string) (core.Verdict, error) {
+	if m.sch == nil {
+		cm, err := m.Compile(want)
+		if err != nil {
+			return core.Verdict{}, err
+		}
+		return cm.Match(ctx, ev, want, target)
 	}
 	inst, err := schemaInstance(ev.Output.Body)
 	if err != nil {
 		return core.Verdict{}, err
 	}
-	if verr := sch.Validate(inst); verr != nil {
+	if verr := m.sch.Validate(inst); verr != nil {
 		return core.Verdict{Pass: false, Reasons: schemaReasons(verr)}, nil
 	}
 	return core.Verdict{Pass: true}, nil
