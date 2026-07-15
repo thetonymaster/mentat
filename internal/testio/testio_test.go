@@ -58,7 +58,7 @@ func TestCaptureStdioReaderCompletesAfterPanicCleanup(t *testing.T) {
 	result, cleanup := captureStdioAsync(t)
 	func() {
 		defer func() { _ = recover() }()
-		defer cleanup() // models CaptureStdio's deferred cleanup during panic unwind
+		defer func() { _ = cleanup() }() // models CaptureStdio's deferred cleanup during panic unwind
 		panic("boom")
 	}()
 	select {

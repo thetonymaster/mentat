@@ -35,12 +35,17 @@ type captureResult struct {
 func CaptureStdio(t *testing.T, fn func()) string {
 	t.Helper()
 	result, cleanup := captureStdioAsync(t)
-	defer cleanup() // runs even if fn panics/Goexits: closes the writer + restores streams
+	// Panic/Goexit safety: still closes the writer + restores streams. The
+	// close error is moot during a panic unwind (no return value to report),
+	// so it is deliberately discarded here and surfaced only on the normal path.
+	defer func() { _ = cleanup() }()
 	fn()
-	cleanup() // normal path: close the writer so the reader reaches EOF and result can arrive
+	closeErr := cleanup() // normal path: close the writer so the reader reaches EOF and result can arrive
 	got := <-result
-	if got.err != nil {
-		t.Fatalf("CaptureStdio: draining captured output: %v", got.err)
+	// Join the writer-close error with the reader's drain error so a failed pipe
+	// finalization can't masquerade as a clean, but truncated, capture.
+	if err := errors.Join(closeErr, got.err); err != nil {
+		t.Fatalf("CaptureStdio: draining captured output: %v", err)
 	}
 	return got.out
 }
@@ -48,15 +53,15 @@ func CaptureStdio(t *testing.T, fn func()) string {
 // captureStdioAsync starts a capture: it redirects os.Stdout/os.Stderr into a pipe,
 // spawns a reader goroutine, and returns a buffered channel that receives the
 // captured bytes (and any drain error) once the reader drains the pipe, plus an
-// idempotent cleanup that closes the writer (unblocking the reader) and restores
-// the real streams.
+// idempotent cleanup that closes the writer (unblocking the reader), restores the
+// real streams, and returns the writer-close error so the caller can surface it.
 //
 // Callers MUST defer cleanup so the streams are restored — and the reader
 // unblocked — even if the code under capture panics or calls runtime.Goexit;
 // receive from result only after cleanup has closed the writer. Split out from
 // CaptureStdio so tests can observe reader-goroutine completion directly (a bounded
 // receive on result) instead of sampling the flappy process-wide goroutine count.
-func captureStdioAsync(t *testing.T) (result <-chan captureResult, cleanup func()) {
+func captureStdioAsync(t *testing.T) (result <-chan captureResult, cleanup func() error) {
 	t.Helper()
 	origOut, origErr := os.Stdout, os.Stderr
 	r, w, err := os.Pipe()
@@ -72,12 +77,19 @@ func captureStdioAsync(t *testing.T) (result <-chan captureResult, cleanup func(
 		// so a copy or close error reaches CaptureStdio rather than being discarded.
 		done <- captureResult{out: b.String(), err: errors.Join(copyErr, r.Close())}
 	}()
-	var once sync.Once
-	cleanup = func() {
+	var (
+		once     sync.Once
+		closeErr error
+	)
+	// Idempotent: the first call closes the writer (unblocking the reader) and
+	// restores the streams; both this and any later call return the same stored
+	// close error so CaptureStdio can surface it instead of swallowing it.
+	cleanup = func() error {
 		once.Do(func() {
-			_ = w.Close() // best-effort: the reader already owns/surfaces the drain result
+			closeErr = w.Close()
 			os.Stdout, os.Stderr = origOut, origErr
 		})
+		return closeErr
 	}
 	return done, cleanup
 }
