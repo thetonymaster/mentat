@@ -5,11 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -24,6 +22,7 @@ import (
 	"github.com/thetonymaster/mentat/internal/core/mocks"
 	"github.com/thetonymaster/mentat/internal/correlate"
 	"github.com/thetonymaster/mentat/internal/registry"
+	"github.com/thetonymaster/mentat/internal/testio"
 	"github.com/thetonymaster/mentat/internal/trace"
 )
 
@@ -1368,33 +1367,6 @@ func findLogLine(out, msg string) string {
 	return ""
 }
 
-// captureStdio redirects the process's real os.Stdout and os.Stderr to a pipe
-// for the duration of fn and returns everything written to them. It proves the
-// SC-005 silent-default contract at the unit level: with no injected logger the
-// drive path must reach neither real stream (a direct fmt.Print regression would
-// show up here even though the discard handler swallows logger records).
-func captureStdio(t *testing.T, fn func()) string {
-	t.Helper()
-	origOut, origErr := os.Stdout, os.Stderr
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
-	}
-	os.Stdout, os.Stderr = w, w
-	defer func() {
-		os.Stdout, os.Stderr = origOut, origErr
-	}()
-	done := make(chan string, 1)
-	go func() {
-		var b bytes.Buffer
-		_, _ = io.Copy(&b, r)
-		done <- b.String()
-	}()
-	fn()
-	_ = w.Close()
-	return <-done
-}
-
 // TestDriveOnceNarratesDriveStartAtInfo pins the engine half of US1: a live
 // drive emits an Info `drive.start` record carrying target, adapter and the
 // injected run_id — emitted only after Inject so run_id is known.
@@ -1457,7 +1429,7 @@ func TestDriveSilentByDefaultEmitsZeroBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	out := captureStdio(t, func() {
+	out := testio.CaptureStdio(t, func() {
 		if _, err := eng.Drive(context.Background(), "echo", nil); err != nil {
 			t.Errorf("Drive: %v", err)
 		}

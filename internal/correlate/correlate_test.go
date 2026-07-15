@@ -1,13 +1,10 @@
 package correlate
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -17,6 +14,7 @@ import (
 
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/core/mocks"
+	"github.com/thetonymaster/mentat/internal/testio"
 	"github.com/thetonymaster/mentat/internal/trace"
 )
 
@@ -1408,29 +1406,6 @@ func recByMsg(recs []logRecord, msg string) (logRecord, bool) {
 	return logRecord{}, false
 }
 
-// captureStdio redirects the process's real stdout+stderr for the duration of fn
-// and returns everything written to them — proving the SC-005 silent-default
-// contract: with no injected logger the correlator must reach neither stream.
-func captureStdio(t *testing.T, fn func()) string {
-	t.Helper()
-	origOut, origErr := os.Stdout, os.Stderr
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
-	}
-	os.Stdout, os.Stderr = w, w
-	done := make(chan string, 1)
-	go func() {
-		var b bytes.Buffer
-		_, _ = io.Copy(&b, r)
-		done <- b.String()
-	}()
-	fn()
-	_ = w.Close()
-	os.Stdout, os.Stderr = origOut, origErr
-	return <-done
-}
-
 // TestResolveNarratesLifecycle pins the correlate half of US1: a successful
 // stability-gated resolve narrates resolve.start (Info: run_id, store_endpoint,
 // query), one resolve.poll per round (Debug: round, spans_seen, stable_streak),
@@ -1557,7 +1532,7 @@ func TestResolveSilentByDefaultEmitsZeroBytes(t *testing.T) {
 
 	c := New(func() string { return "run-silent" },
 		PollConfig{Interval: time.Millisecond, StableFor: 2, Timeout: time.Second}) // no WithLogger
-	out := captureStdio(t, func() {
+	out := testio.CaptureStdio(t, func() {
 		if _, err := c.Resolve(context.Background(), st, "run-silent"); err != nil {
 			t.Errorf("resolve: %v", err)
 		}

@@ -4,14 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
 	"log/slog"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/testio"
 )
 
 func TestShellCapturesAnswerAndInjectsRunIDEnv(t *testing.T) {
@@ -452,33 +451,6 @@ func findDriverLogLine(out, msg string) string {
 	return ""
 }
 
-// captureStdio redirects the process's real stdout+stderr for the duration of fn
-// and returns everything written to them — proving the SC-005 silent-default
-// contract: with no injected logger the driver must reach neither stream. The
-// SUT subprocess writes into cmd's own buffers, never the real streams, so a
-// clean run captures nothing.
-func captureStdio(t *testing.T, fn func()) string {
-	t.Helper()
-	origOut, origErr := os.Stdout, os.Stderr
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
-	}
-	os.Stdout, os.Stderr = w, w
-	defer func() {
-		os.Stdout, os.Stderr = origOut, origErr
-	}()
-	done := make(chan string, 1)
-	go func() {
-		var b bytes.Buffer
-		_, _ = io.Copy(&b, r)
-		done <- b.String()
-	}()
-	fn()
-	_ = w.Close()
-	return <-done
-}
-
 // TestShellNarratesDriveEnvExcludesInheritedEnv pins the driver half of US1:
 // drive.env (Debug) logs ONLY Mentat-set environment — the spec.Env entries and
 // the computed OTEL_RESOURCE_ATTRIBUTES — never inherited os.Environ values, and
@@ -569,7 +541,7 @@ func TestShellSilentByDefaultEmitsZeroBytes(t *testing.T) {
 		Tags:    map[string]string{"test.run.id": "run-silent"},
 		RunID:   "run-silent",
 	}
-	out := captureStdio(t, func() {
+	out := testio.CaptureStdio(t, func() {
 		if _, err := NewShell().Run(context.Background(), spec); err != nil {
 			t.Errorf("Run: %v", err)
 		}
