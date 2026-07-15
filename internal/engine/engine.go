@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/thetonymaster/mentat/internal/comparator"
@@ -31,6 +32,7 @@ type Engine struct {
 	pinned   string                   // when set, Drive resolves this run id instead of driving
 	pricing  core.Pricing
 	patterns expectations.Patterns
+	logger   *slog.Logger // silent (discard) by default; emits drive.start lifecycle narration to stderr
 
 	// resolveSem gates cor.Resolve calls at maxConcurrentResolves. Lazily built on
 	// first use (sync.Once, race-free) rather than wired in Build: it is a fixed
@@ -137,6 +139,14 @@ func (e *Engine) driveOnce(ctx context.Context, target string, args []string) (c
 	// wins. A non-positive Timeout means no per-run bound (a zero-value budget from a
 	// hand-built config); "unbounded" is the explicit opt-out.
 	budget := t.Budget
+	// Only inject OTEL_EXPORTER_OTLP_ENDPOINT when one is configured (FR-006/SC-004).
+	// The shell driver appends spec.Env AFTER os.Environ(), so injecting an empty
+	// value would override the SUT's working ambient endpoint and export nowhere
+	// (audit D4). Absent key ⇒ ambient survives; configured value ⇒ config wins.
+	env := map[string]string{}
+	if e.cfg.OTLPEndpoint != "" {
+		env["OTEL_EXPORTER_OTLP_ENDPOINT"] = e.cfg.OTLPEndpoint
+	}
 	spec := core.RunSpec{
 		Target:  target,
 		Adapter: t.Adapter,
@@ -146,10 +156,11 @@ func (e *Engine) driveOnce(ctx context.Context, target string, args []string) (c
 			Method:  t.HTTP.Method,
 			Headers: t.HTTP.Headers,
 		},
-		Env:       map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": e.cfg.OTLPEndpoint},
+		Env:       env,
 		KillGrace: budget.KillGrace,
 	}
 	runID := e.cor.Inject(ctx, &spec)
+	e.logger.InfoContext(ctx, "drive.start", "target", target, "adapter", t.Adapter, "run_id", runID)
 
 	runCtx := ctx
 	if !budget.Unbounded && budget.Timeout > 0 {

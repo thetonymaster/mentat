@@ -5,20 +5,29 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/thetonymaster/mentat/internal/core"
 )
 
-type shell struct{}
+type shell struct{ logger *slog.Logger }
 
-func NewShell() core.Driver { return shell{} }
+// NewShell returns the shell driver adapter. Options are applied over a silent
+// (discard-handler) logger default so the seam narrates nothing unless a caller
+// opts in via WithLogger; the variadic keeps existing NewShell() call sites
+// compiling.
+func NewShell(opts ...Option) core.Driver {
+	logger := resolveOptions(opts).logger
+	return shell{logger: logger}
+}
 
-func (shell) Run(ctx context.Context, spec core.RunSpec) (core.RunResult, error) {
+func (s shell) Run(ctx context.Context, spec core.RunSpec) (core.RunResult, error) {
 	if len(spec.Command) == 0 {
 		return core.RunResult{}, fmt.Errorf("shell: empty command for target %q", spec.Target)
 	}
@@ -29,10 +38,42 @@ func (shell) Run(ctx context.Context, spec core.RunSpec) (core.RunResult, error)
 	for k, v := range spec.Env {
 		env = append(env, k+"="+v)
 	}
-	if ra := resourceAttrs(spec.Tags); ra != "" {
+	// Merge Mentat's correlation tags over any ambient OTEL_RESOURCE_ATTRIBUTES the
+	// SUT already carries (FR-006): the developer's resource attributes survive and
+	// Mentat wins key collisions so test.run.id correlation stays intact. A malformed
+	// ambient value is a hard error naming the run — never a silent drop (Constitution IV).
+	ambient := os.Getenv("OTEL_RESOURCE_ATTRIBUTES")
+	ra, err := mergeResourceAttrs(ambient, spec.Tags)
+	if err != nil {
+		return core.RunResult{}, fmt.Errorf("shell: merge OTEL_RESOURCE_ATTRIBUTES for run %q: %w", spec.RunID, err)
+	}
+	if ra != "" {
 		env = append(env, "OTEL_RESOURCE_ATTRIBUTES="+ra)
 	}
 	cmd.Env = env
+
+	// Narrate the Mentat-SET environment only (Debug): the spec.Env entries plus
+	// the merged OTEL_RESOURCE_ATTRIBUTES (which deliberately folds in the SUT's
+	// ambient resource attrs). No OTHER inherited os.Environ() value is logged, so
+	// ambient secrets in the runner's environment cannot leak into narration. The
+	// attr slice is built only when Debug is enabled (free at Info/discard). Keys
+	// are sorted for deterministic output.
+	if s.logger.Enabled(ctx, slog.LevelDebug) {
+		attrs := make([]any, 0, 2*len(spec.Env)+4)
+		attrs = append(attrs, "run_id", spec.RunID)
+		keys := make([]string, 0, len(spec.Env))
+		for k := range spec.Env {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			attrs = append(attrs, k, spec.Env[k])
+		}
+		if ra != "" {
+			attrs = append(attrs, "OTEL_RESOURCE_ATTRIBUTES", ra)
+		}
+		s.logger.DebugContext(ctx, "drive.env", attrs...)
+	}
 
 	// Run the SUT in its own process group so lifecycle control reaches the whole
 	// tree, not just the direct child (feature 003, FR-002/FR-003):
@@ -50,6 +91,7 @@ func (shell) Run(ctx context.Context, spec core.RunSpec) (core.RunResult, error)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	start := time.Now()
 	runErr := cmd.Run()
 
 	// Reap the whole process group on every exit path (normal exit, timeout, cancel).
@@ -85,6 +127,9 @@ func (shell) Run(ctx context.Context, spec core.RunSpec) (core.RunResult, error)
 		ExitCode: exit,
 		Answer:   core.ExtractAnswer(stdout.String()),
 	}
+	// Normal-completion narration (Debug): the exit code is known and the run is
+	// not a cancellation (those return early above, before this point).
+	s.logger.DebugContext(ctx, "drive.done", "run_id", spec.RunID, "exit_code", exit, "elapsed", time.Since(start))
 	return core.RunResult{RunID: spec.RunID, Output: out}, nil
 }
 
@@ -103,22 +148,48 @@ func signalGroup(cmd *exec.Cmd, sig syscall.Signal) error {
 	return nil
 }
 
-// resourceAttrs renders spec.Tags as the OTEL_RESOURCE_ATTRIBUTES value
-// (k=v,k=v) with sorted keys for determinism.
-func resourceAttrs(tags map[string]string) string {
-	if len(tags) == 0 {
+// encodeResourceAttrs renders a resource-attribute map as the
+// OTEL_RESOURCE_ATTRIBUTES value (k=v,k=v) with sorted keys for determinism and
+// each key/value percent-encoded via otelEncode. Empty map -> "".
+func encodeResourceAttrs(m map[string]string) string {
+	if len(m) == 0 {
 		return ""
 	}
-	keys := make([]string, 0, len(tags))
-	for k := range tags {
+	keys := make([]string, 0, len(m))
+	for k := range m {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 	parts := make([]string, 0, len(keys))
 	for _, k := range keys {
-		parts = append(parts, otelEncode(k)+"="+otelEncode(tags[k]))
+		parts = append(parts, otelEncode(k)+"="+otelEncode(m[k]))
 	}
 	return strings.Join(parts, ",")
+}
+
+// mergeResourceAttrs parses the ambient OTEL_RESOURCE_ATTRIBUTES value (k=v,k=v,
+// percent-encoded per the OTel resource spec), overlays the Mentat tags (Mentat
+// wins key collisions, incl. test.run.id — correlation integrity is the product),
+// and re-encodes in sorted order. A non-empty ambient segment without a '='
+// delimiter is a hard error naming the offending value (Constitution IV — never a
+// silent drop). Returns ("", nil) only when both ambient and tags are empty.
+func mergeResourceAttrs(ambient string, tags map[string]string) (string, error) {
+	merged := make(map[string]string, len(tags))
+	for _, seg := range strings.Split(ambient, ",") {
+		if seg == "" {
+			continue // stray/trailing comma is benign
+		}
+		kv := strings.SplitN(seg, "=", 2)
+		if len(kv) != 2 {
+			return "", fmt.Errorf("shell: malformed OTEL_RESOURCE_ATTRIBUTES segment %q (want k=v)", seg)
+		}
+		merged[otelDecode(kv[0])] = otelDecode(kv[1])
+	}
+	// Mentat's correlation tags overlay the ambient set — Mentat wins collisions.
+	for k, v := range tags {
+		merged[k] = v
+	}
+	return encodeResourceAttrs(merged), nil
 }
 
 // otelEncode percent-encodes the OTEL_RESOURCE_ATTRIBUTES reserved delimiters
@@ -129,5 +200,16 @@ func otelEncode(s string) string {
 	s = strings.ReplaceAll(s, "%", "%25")
 	s = strings.ReplaceAll(s, ",", "%2C")
 	s = strings.ReplaceAll(s, "=", "%3D")
+	return s
+}
+
+// otelDecode is the exact inverse of otelEncode. Ordering is load-bearing: because
+// otelEncode encodes '%'->'%25' FIRST, otelDecode must decode '%25'->'%' LAST, so a
+// literal "%2C" that was encoded to "%252C" round-trips back to "%2C" rather than a
+// comma. Used to parse an ambient OTEL_RESOURCE_ATTRIBUTES value the SUT already has.
+func otelDecode(s string) string {
+	s = strings.ReplaceAll(s, "%2C", ",")
+	s = strings.ReplaceAll(s, "%3D", "=")
+	s = strings.ReplaceAll(s, "%25", "%") // last: reverses the '%'->'%25' done first in otelEncode
 	return s
 }

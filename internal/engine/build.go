@@ -2,6 +2,8 @@ package engine
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/thetonymaster/mentat/internal/comparator"
 	"github.com/thetonymaster/mentat/internal/config"
@@ -22,14 +24,20 @@ import (
 // Register* outside a Build panics loudly. Concurrent readers (Engine.Drive,
 // Engine.Comparator) take the read lock, so the maps are safe to read while the
 // godog suite executes scenarios concurrently.
-func Build(cfg config.Config, st core.TraceStore, cor core.Correlator) (*Engine, error) {
+func Build(cfg config.Config, st core.TraceStore, cor core.Correlator, opts ...Option) (*Engine, error) {
+	// Resolve the injected logger (silent discard-handler default) and hand it to
+	// the drivers Build constructs. The correlator is a parameter Build never
+	// invokes (nil in tests), so its logger is injected upstream via
+	// correlate.WithLogger, not here.
+	o := resolveOptions(opts)
+
 	// Build is the composition root and is re-entrant: reopen the registry so a
 	// rebuild (tests build many engines) is not blocked by a previous seal, then
 	// seal again once wiring completes (FR-009). A stray Register* after this seal —
 	// outside a Build — panics loudly.
 	registry.Reopen()
-	registry.RegisterDriver("shell", driver.NewShell())
-	registry.RegisterDriver("http", driver.NewHTTP())
+	registry.RegisterDriver("shell", driver.NewShell(driver.WithLogger(o.logger)))
+	registry.RegisterDriver("http", driver.NewHTTP(driver.WithLogger(o.logger)))
 	pricing := toPricing(cfg.Pricing)
 	registry.RegisterComparator("sequence", comparator.NewSequence())
 	registry.RegisterComparator("budgets", comparator.NewBudgets(pricing))
@@ -76,6 +84,25 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator) (*Engine,
 		return nil, fmt.Errorf("load expectations from %q: %w", cfg.Expectations, err)
 	}
 
+	// Validate every target's adapter against the driver registry — the single
+	// runtime source of truth for which adapters exist (feature 005, D3/FR-005).
+	// This runs at Build (startup), before any scenario, so a phantom adapter (one
+	// with no registered driver) fails loudly here naming the target, the adapter,
+	// and the registered set, rather than as a silent no-op at drive time. The
+	// load-time concurrency allowlist is deliberately NOT a second, driftable truth.
+	// Targets is a map, so validate in sorted name order — when more than one target
+	// has a phantom adapter the surfaced error is deterministic run-to-run (SC-005).
+	names := make([]string, 0, len(cfg.Targets))
+	for name := range cfg.Targets {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if _, ok := registry.Driver(cfg.Targets[name].Adapter); !ok {
+			return nil, fmt.Errorf("engine: target %q: adapter %q has no registered driver (registered: %s)", name, cfg.Targets[name].Adapter, strings.Join(registry.Drivers(), ", "))
+		}
+	}
+
 	sems := map[string]chan struct{}{}
 	for name, t := range cfg.Targets {
 		n := t.MaxConcurrency
@@ -85,7 +112,7 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator) (*Engine,
 		sems[name] = make(chan struct{}, n)
 	}
 	registry.Seal() // wiring complete: post-build registration now fails loudly (FR-009)
-	return &Engine{cfg: cfg, cor: cor, st: st, sems: sems, pricing: pricing, patterns: pats}, nil
+	return &Engine{cfg: cfg, cor: cor, st: st, sems: sems, pricing: pricing, patterns: pats, logger: o.logger}, nil
 }
 
 // toPricing converts the YAML pricing table into the transport-free core.Pricing

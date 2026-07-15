@@ -1,9 +1,11 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -20,6 +22,7 @@ import (
 	"github.com/thetonymaster/mentat/internal/core/mocks"
 	"github.com/thetonymaster/mentat/internal/correlate"
 	"github.com/thetonymaster/mentat/internal/registry"
+	"github.com/thetonymaster/mentat/internal/testio"
 	"github.com/thetonymaster/mentat/internal/trace"
 )
 
@@ -101,6 +104,12 @@ func TestDriveUnknownTarget(t *testing.T) {
 	}
 }
 
+// TestDriveUnknownAdapter exercises driveOnce's defensive driver guard. Since
+// feature 005 (D3/FR-005) adapter existence is validated at engine.Build (see
+// TestBuildRejectsUnregisteredAdapter), so a phantom adapter can no longer reach
+// Drive through Build. This white-box test constructs the Engine directly to reach
+// the same descriptive Drive-time error, kept as defense-in-depth for an engine
+// built outside the composition root or a registry mutated after Build.
 func TestDriveUnknownAdapter(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -108,30 +117,22 @@ func TestDriveUnknownAdapter(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name:    "unknown adapter returns descriptive error",
+			name:    "missing driver returns descriptive error",
 			adapter: "unknownadapter",
 			wantErr: `no driver for adapter "unknownadapter"`,
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := config.Config{
-				OTLPEndpoint: "http://localhost:4318",
-				Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
-				Targets: map[string]config.Target{
-					"mytarget": {Adapter: tt.adapter, Command: []string{"echo"}, MaxConcurrency: 1},
+			eng := &Engine{
+				cfg: config.Config{
+					OTLPEndpoint: "http://localhost:4318",
+					Targets: map[string]config.Target{
+						"mytarget": {Adapter: tt.adapter, Command: []string{"echo"}, MaxConcurrency: 1},
+					},
 				},
 			}
-			ctrl := gomock.NewController(t)
-			st := mocks.NewMockTraceStore(ctrl)
-			cor := correlate.New(func() string { return "run-1" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
-
-			eng, err := Build(cfg, st, cor)
-			if err != nil {
-				t.Fatalf("Build: %v", err)
-			}
-			_, err = eng.Drive(context.Background(), "mytarget", nil)
+			_, err := eng.Drive(context.Background(), "mytarget", nil)
 			if err == nil {
 				t.Fatal("expected error, got nil")
 			}
@@ -1344,5 +1345,172 @@ func TestDriveResolveSlotWaitCancelledReturnsWrappedError(t *testing.T) {
 	}
 	if want := "wait for trace-resolution slot"; !strings.Contains(err.Error(), want) {
 		t.Fatalf("error %q does not contain %q", err.Error(), want)
+	}
+}
+
+// --- Feature 005 (US1): structured slog narration ---
+
+// debugBufLogger returns a *slog.Logger writing text records at Debug level into
+// buf, so a narration test can assert on the emitted attribute tokens.
+func debugBufLogger(buf *bytes.Buffer) *slog.Logger {
+	return slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+}
+
+// findLogLine returns the first line in out whose slog msg token equals msg, or
+// "" if no record carries that message.
+func findLogLine(out, msg string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "msg="+msg) {
+			return line
+		}
+	}
+	return ""
+}
+
+// TestDriveOnceNarratesDriveStartAtInfo pins the engine half of US1: a live
+// drive emits an Info `drive.start` record carrying target, adapter and the
+// injected run_id — emitted only after Inject so run_id is known.
+func TestDriveOnceNarratesDriveStartAtInfo(t *testing.T) {
+	cfg := config.Config{
+		OTLPEndpoint: "http://localhost:4318",
+		Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+		Targets: map[string]config.Target{
+			"echo": {Adapter: "shell", Command: []string{"sh", "-c", "echo hi"}, MaxConcurrency: 1},
+		},
+	}
+	tr := &trace.Trace{Spans: []*trace.Span{{Name: "root"}}, Roots: []*trace.Span{{Name: "root"}}}
+
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "run-1"}}, nil).AnyTimes()
+	stubStoredTrace(st, tr)
+	cor := correlate.New(func() string { return "run-1" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+
+	var buf bytes.Buffer
+	eng, err := Build(cfg, st, cor, WithLogger(debugBufLogger(&buf)))
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if _, err := eng.Drive(context.Background(), "echo", nil); err != nil {
+		t.Fatalf("Drive: %v", err)
+	}
+
+	line := findLogLine(buf.String(), "drive.start")
+	if line == "" {
+		t.Fatalf("no drive.start record emitted; full narration:\n%s", buf.String())
+	}
+	for _, want := range []string{"target=echo", "adapter=shell", "run_id=run-1"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("drive.start record %q missing %q", line, want)
+		}
+	}
+}
+
+// TestDriveSilentByDefaultEmitsZeroBytes pins SC-005 for the engine: with the
+// default (discard) logger a full happy-path drive must write nothing to the
+// process's real stdout/stderr.
+func TestDriveSilentByDefaultEmitsZeroBytes(t *testing.T) {
+	cfg := config.Config{
+		OTLPEndpoint: "http://localhost:4318",
+		Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+		Targets: map[string]config.Target{
+			"echo": {Adapter: "shell", Command: []string{"sh", "-c", "echo hi"}, MaxConcurrency: 1},
+		},
+	}
+	tr := &trace.Trace{Spans: []*trace.Span{{Name: "root"}}, Roots: []*trace.Span{{Name: "root"}}}
+
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "run-1"}}, nil).AnyTimes()
+	stubStoredTrace(st, tr)
+	cor := correlate.New(func() string { return "run-1" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+
+	eng, err := Build(cfg, st, cor) // no WithLogger: silent discard default
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	out := testio.CaptureStdio(t, func() {
+		if _, err := eng.Drive(context.Background(), "echo", nil); err != nil {
+			t.Errorf("Drive: %v", err)
+		}
+	})
+	if out != "" {
+		t.Fatalf("silent default must emit zero bytes, got:\n%q", out)
+	}
+}
+
+// --- Feature 005 (US3, D4): OTLP endpoint injection must not sabotage ambient telemetry ---
+
+// TestDriveOnceInjectsOTLPEndpointConditionally pins FR-006/SC-004: driveOnce may
+// inject OTEL_EXPORTER_OTLP_ENDPOINT into the run spec ONLY when the configured
+// value is non-empty. With no endpoint configured the key must be ABSENT from
+// spec.Env so the shell driver never appends an empty override after os.Environ()
+// — the SUT keeps its ambient endpoint. With one configured, the value is injected
+// and (appended last) wins over ambient. A registered gomock Driver captures the
+// spec the engine passes so we assert on spec.Env directly.
+func TestDriveOnceInjectsOTLPEndpointConditionally(t *testing.T) {
+	const otlpKey = "OTEL_EXPORTER_OTLP_ENDPOINT"
+	tests := []struct {
+		name         string
+		otlpEndpoint string
+		wantPresent  bool
+		wantValue    string
+	}{
+		{
+			name:         "empty config endpoint leaves ambient OTLP endpoint untouched",
+			otlpEndpoint: "",
+			wantPresent:  false,
+		},
+		{
+			name:         "configured endpoint is injected and wins over ambient",
+			otlpEndpoint: "http://collector:4318",
+			wantPresent:  true,
+			wantValue:    "http://collector:4318",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			registry.ResetForTest(t) // reopen the sealed registry to register a capturing seam
+			ctrl := gomock.NewController(t)
+			drv := mocks.NewMockDriver(ctrl)
+			var gotEnv map[string]string
+			drv.EXPECT().Run(gomock.Any(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, spec core.RunSpec) (core.RunResult, error) {
+					gotEnv = spec.Env
+					return core.RunResult{Output: core.Output{Answer: "ok"}}, nil
+				})
+			registry.RegisterDriver("otlp-capture", drv)
+
+			cfg := config.Config{
+				OTLPEndpoint: tt.otlpEndpoint,
+				Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+				Targets: map[string]config.Target{
+					"sut": {Adapter: "otlp-capture", Command: []string{"x"}, MaxConcurrency: 1},
+				},
+			}
+			tr := &trace.Trace{Spans: []*trace.Span{{Name: "root"}}, Roots: []*trace.Span{{Name: "root"}}}
+			st := mocks.NewMockTraceStore(ctrl)
+			cor := mocks.NewMockCorrelator(ctrl)
+			// A no-op Inject leaves spec.Env exactly as the engine built it, isolating
+			// the conditional-injection logic under test.
+			cor.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("run-1")
+			cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).Return(tr, nil)
+
+			eng, err := Build(cfg, st, cor)
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			if _, err := eng.driveOnce(context.Background(), "sut", nil); err != nil {
+				t.Fatalf("driveOnce: %v", err)
+			}
+
+			val, present := gotEnv[otlpKey]
+			if present != tt.wantPresent {
+				t.Fatalf("spec.Env[%q] present=%v, want %v (env=%v)", otlpKey, present, tt.wantPresent, gotEnv)
+			}
+			if tt.wantPresent && val != tt.wantValue {
+				t.Fatalf("spec.Env[%q]=%q, want %q", otlpKey, val, tt.wantValue)
+			}
+		})
 	}
 }

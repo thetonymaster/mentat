@@ -4,13 +4,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
-	"time"
 
-	"github.com/google/uuid"
 	"github.com/thetonymaster/mentat/internal/config"
 	"github.com/thetonymaster/mentat/internal/core"
-	"github.com/thetonymaster/mentat/internal/correlate"
 	"github.com/thetonymaster/mentat/internal/ctl"
 	"github.com/thetonymaster/mentat/internal/engine"
 )
@@ -79,10 +77,16 @@ func dispatch(domain, sub string, rest []string) error {
 	quiet := fs.Bool("quiet", false, "answer only")
 	save := fs.String("save", "", "save the run's trace as a fixture at this path")
 	feature := fs.String("feature", "", "feature file (replay)")
+	verbose := fs.Bool("v", false, "narrate at Info level to stderr")
+	debug := fs.Bool("vv", false, "narrate at Debug level to stderr (implies -v)")
 	_ = fs.Parse(rest)
 	args := fs.Args()
 
-	cfg, st, cor, err := deps(*cfgPath)
+	// Verbosity flags map to a stderr slog handler (discard by default, SC-005);
+	// the logger and the store endpoint are injected into the seams here.
+	logger := engine.NewLogger(os.Stderr, *verbose, *debug)
+
+	cfg, st, cor, err := deps(*cfgPath, logger)
 	if err != nil {
 		return err
 	}
@@ -99,7 +103,7 @@ func dispatch(domain, sub string, rest []string) error {
 
 	switch sub {
 	case "run":
-		eng, err := engine.Build(cfg, st, cor)
+		eng, err := engine.Build(cfg, st, cor, engine.WithLogger(logger))
 		if err != nil {
 			return err
 		}
@@ -149,7 +153,7 @@ func dispatch(domain, sub string, rest []string) error {
 		if *feature == "" {
 			return fmt.Errorf("replay: --feature is required to re-evaluate a run")
 		}
-		eng, err := engine.Build(cfg, st, cor)
+		eng, err := engine.Build(cfg, st, cor, engine.WithLogger(logger))
 		if err != nil {
 			return err
 		}
@@ -167,7 +171,7 @@ func dispatch(domain, sub string, rest []string) error {
 	}
 }
 
-func deps(cfgPath string) (config.Config, core.TraceStore, core.Correlator, error) {
+func deps(cfgPath string, logger *slog.Logger) (config.Config, core.TraceStore, core.Correlator, error) {
 	data, err := os.ReadFile(cfgPath)
 	if err != nil {
 		return config.Config{}, nil, nil, fmt.Errorf("mentatctl: read config %q: %w", cfgPath, err)
@@ -180,32 +184,9 @@ func deps(cfgPath string) (config.Config, core.TraceStore, core.Correlator, erro
 	if err != nil {
 		return config.Config{}, nil, nil, fmt.Errorf("mentatctl: build store: %w", err)
 	}
-	pc := correlate.PollConfig{
-		Interval:  parseDur(cfg.Poll.Interval, 200*time.Millisecond),
-		Timeout:   parseDur(cfg.Poll.Timeout, 30*time.Second),
-		StableFor: orDefault(cfg.Poll.StableFor, 3),
-	}
-	cor := correlate.New(func() string { return uuid.NewString() }, pc)
-	return cfg, st, cor, nil
-}
-
-// parseDur converts a duration string into time.Duration. An empty string
-// returns def (unset → default). A non-empty but malformed value is fatal.
-func parseDur(s string, def time.Duration) time.Duration {
-	if s == "" {
-		return def
-	}
-	d, err := time.ParseDuration(s)
+	cor, err := engine.BuildCorrelator(cfg, logger)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "mentatctl: invalid duration %q: %v\n", s, err)
-		os.Exit(1)
+		return config.Config{}, nil, nil, fmt.Errorf("mentatctl: build correlator: %w", err)
 	}
-	return d
-}
-
-func orDefault(n, def int) int {
-	if n == 0 {
-		return def
-	}
-	return n
+	return cfg, st, cor, nil
 }

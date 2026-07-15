@@ -1,7 +1,10 @@
 package config
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"strings"
 	"time"
@@ -101,11 +104,26 @@ type ModelRate struct {
 // Pricing maps a model name to its rate.
 type Pricing map[string]ModelRate
 
-var defaultConcurrency = map[string]int{"shell": 1, "mcp": 1, "http": 8, "grpc": 8}
+// defaultConcurrency holds per-adapter concurrency defaults keyed ONLY to adapters
+// that actually have a registered driver (feature 005, D3/FR-005). Adapter existence
+// is validated at engine.Build against the driver registry — the single runtime
+// source of truth — so this map must not grow into a second, driftable allowlist
+// (the pre-005 map listed mcp/grpc that no driver implements). An adapter absent
+// here is not rejected at load; it defaults to a conservative concurrency of 1.
+var defaultConcurrency = map[string]int{"shell": 1, "http": 8}
 
 func Load(data []byte) (Config, error) {
 	var c Config
-	if err := yaml.Unmarshal(data, &c); err != nil {
+	// Strict decode: an unknown key at any nesting level is a hard, named error
+	// rather than a silently-ignored typo that falls back to a default and quietly
+	// changes verdict semantics (FR-004, Constitution IV). Mirrors the expectations
+	// loader. yaml.v3 reports it as `field <name> not found in type config.<Type>`.
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	// io.EOF means an empty (or comment-only) document: the old yaml.Unmarshal
+	// treated that as a zero-value success, so preserve it here — defaults below
+	// still apply. Any other decode error (including an unknown key) is hard.
+	if err := dec.Decode(&c); err != nil && !errors.Is(err, io.EOF) {
 		return Config{}, fmt.Errorf("parse config: %w", err)
 	}
 	if c.Store == "" {
@@ -135,7 +153,7 @@ func Load(data []byte) (Config, error) {
 	for name, t := range c.Targets {
 		def, ok := defaultConcurrency[t.Adapter]
 		if !ok {
-			return Config{}, fmt.Errorf("target %q: unknown adapter %q", name, t.Adapter)
+			def = 1 // unknown-at-load adapter: existence is validated at engine.Build against the driver registry
 		}
 		if t.MaxConcurrency < 0 {
 			return Config{}, fmt.Errorf("target %q: max_concurrency must be >= 0, got %d", name, t.MaxConcurrency)

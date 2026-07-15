@@ -1427,20 +1427,28 @@ func TestResultAttrStep(t *testing.T) {
 func TestParseSpanSpec(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		slot    string
-		wantQ   comparator.Quant
-		wantIdx int
-		wantErr bool
+		slot            string
+		wantQ           comparator.Quant
+		wantIdx         int
+		wantErr         bool
+		wantErrContains []string
 	}{
-		{"", comparator.QuantOne, 0, false},
-		{"the first call", comparator.QuantFirst, 0, false},
-		{"the last call", comparator.QuantLast, 0, false},
-		{"the 2nd call", comparator.QuantNth, 2, false},
-		{"the 1st", comparator.QuantNth, 1, false},
-		{"every call", comparator.QuantEvery, 0, false},
-		{"any span", comparator.QuantAny, 0, false},
-		{"the 0th call", 0, 0, true},
-		{"sideways call", 0, 0, true},
+		{slot: "", wantQ: comparator.QuantOne},
+		{slot: "the first call", wantQ: comparator.QuantFirst},
+		{slot: "the last call", wantQ: comparator.QuantLast},
+		{slot: "the 2nd call", wantQ: comparator.QuantNth, wantIdx: 2},
+		{slot: "the 1st", wantQ: comparator.QuantNth, wantIdx: 1},
+		{slot: "every call", wantQ: comparator.QuantEvery},
+		{slot: "any span", wantQ: comparator.QuantAny},
+		{slot: "the 0th call", wantErr: true, wantErrContains: []string{">= 1", "0th"}},
+		{slot: "sideways call", wantErr: true},
+		// D5/FR-007: an ordinal too large for int must surface strconv's
+		// out-of-range error (naming the ordinal text), not be silently dropped.
+		{
+			slot:            "the 99999999999999999999th call",
+			wantErr:         true,
+			wantErrContains: []string{"99999999999999999999", "out of range"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.slot, func(t *testing.T) {
@@ -1450,6 +1458,11 @@ func TestParseSpanSpec(t *testing.T) {
 				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
 			}
 			if err != nil {
+				for _, sub := range tt.wantErrContains {
+					if !strings.Contains(err.Error(), sub) {
+						t.Errorf("err %q does not contain %q", err.Error(), sub)
+					}
+				}
 				return
 			}
 			if q != tt.wantQ || idx != tt.wantIdx {

@@ -15,7 +15,7 @@ All narration → **stderr**. stdout remains report/godog territory.
 | Where | Pinned |
 |-------|--------|
 | resolve timeout error | `store: <endpoint>`, `query: { .test.run.id = "<id>" }`, `checklist:` |
-| unknown config key | the key name and path (e.g. `poll.timout`) |
+| unknown config key | the offending key name (`timout`; yaml.v3 form `field timout not found in type config.PollSpec`) |
 | unregistered adapter | adapter name + `registered:` + sorted driver list |
 | ordinal parse error | the ordinal text |
 | log attributes | `run_id`, `store_endpoint`, `query`, `spans`, `round` |

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/core/mocks"
+	"github.com/thetonymaster/mentat/internal/testio"
 	"github.com/thetonymaster/mentat/internal/trace"
 )
 
@@ -270,6 +272,7 @@ func TestResolveDecodePayloadNilTrace(t *testing.T) {
 // arrived" (the zero-span case, which keeps its own error).
 func TestResolveDeadlineUnstableSpansIsHardError(t *testing.T) {
 	const runID = "unstable-run"
+	const endpoint = "http://localhost:3200"
 
 	ctrl := gomock.NewController(t)
 	st := mocks.NewMockTraceStore(ctrl)
@@ -304,7 +307,7 @@ func TestResolveDeadlineUnstableSpansIsHardError(t *testing.T) {
 		Interval:  time.Millisecond,
 		StableFor: 2,
 		Timeout:   25 * time.Millisecond,
-	})
+	}, WithEndpoint(endpoint))
 	tr, err := c.Resolve(context.Background(), st, runID)
 	if err == nil {
 		t.Fatalf("want hard error on unstable-at-deadline, got nil (tr=%v)", tr)
@@ -318,21 +321,37 @@ func TestResolveDeadlineUnstableSpansIsHardError(t *testing.T) {
 		fmt.Sprintf("%d spans", lastN), // last observed span count
 		"stable",                       // stability progress
 		"25ms",                         // the timeout
+		"unstable at deadline",         // feature-002 wording — must not regress
+		"store: " + endpoint,           // FR-003: names the queried store
+		`query: { .test.run.id = "unstable-run" }`, // FR-003: exact query shape
 	} {
 		if !strings.Contains(msg, want) {
-			t.Fatalf("deadline error missing %q: %q", want, msg)
+			t.Fatalf("deadline error missing %q:\n%s", want, msg)
 		}
+	}
+	// The trace EXISTS (spans present) — this is a stability problem, not a
+	// "where is it" problem, so the zero-span triage checklist must NOT appear.
+	if strings.Contains(msg, "checklist:") {
+		t.Fatalf("unstable-deadline error must NOT carry the zero-span checklist:\n%s", msg)
 	}
 }
 
+// TestResolveTimeoutZeroSpans pins the zero-span timeout error. Beyond the
+// feature-002 descriptive fields (run id, timeout, "0 spans"), FR-003 requires
+// the message be diagnosable from the text ALONE: it must name the store
+// endpoint the correlator queried, the exact TraceQL query shape (matching
+// store/tempo.go's `{ .%s = "%s" }`), and the curated triage checklist — no
+// trace was found at all, so "where is it" guidance is warranted.
 func TestResolveTimeoutZeroSpans(t *testing.T) {
+	const endpoint = "http://localhost:3200"
+
 	ctrl := gomock.NewController(t)
 	st := mocks.NewMockTraceStore(ctrl)
 	// Query always returns no refs — zero spans seen throughout
 	st.EXPECT().Query(gomock.Any(), gomock.Any()).
 		Return(nil, nil).AnyTimes()
 
-	c := New(func() string { return "run-3" }, PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: 25 * time.Millisecond})
+	c := New(func() string { return "run-3" }, PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: 25 * time.Millisecond}, WithEndpoint(endpoint))
 	_, err := c.Resolve(context.Background(), st, "run-3")
 	if err == nil {
 		t.Fatal("expected timeout error with zero spans, got nil")
@@ -341,6 +360,17 @@ func TestResolveTimeoutZeroSpans(t *testing.T) {
 	msg := err.Error()
 	if !strings.Contains(msg, "run-3") || !strings.Contains(msg, "0 spans") {
 		t.Fatalf("timeout error message not descriptive enough: %q", msg)
+	}
+	// FR-003 enrichment: store endpoint, exact query shape, and the checklist —
+	// each is a pinned substring users script against.
+	for _, want := range []string{
+		"store: " + endpoint,
+		`query: { .test.run.id = "run-3" }`,
+		"checklist:",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("zero-span timeout error missing enrichment %q:\n%s", want, msg)
+		}
 	}
 }
 
@@ -1301,5 +1331,213 @@ func TestResolveMultiTraceForestMerge(t *testing.T) {
 	}
 	if len(merged.Spans) != 3 {
 		t.Errorf("merged.Spans: want 3 (s1a, s1b, s2a), got %d", len(merged.Spans))
+	}
+}
+
+// --- Feature 005 (US1): structured slog narration ---
+
+// logRecord is one captured slog record: its level, message, and attribute
+// values rendered via slog.Value.String() (so the TraceQL query — which carries
+// spaces and quotes that render awkwardly through the text handler — is asserted
+// structurally rather than by fighting the text handler's escaping).
+type logRecord struct {
+	level slog.Level
+	msg   string
+	attrs map[string]string
+}
+
+// capturingHandler is a slog.Handler that records every enabled record for
+// structured assertion. Its Enabled honours the configured level so a test can
+// prove a Debug-only record (resolve.poll) is suppressed at Info.
+type capturingHandler struct {
+	mu    *sync.Mutex
+	recs  *[]logRecord
+	level slog.Level
+	pre   []slog.Attr
+}
+
+// newCapturingHandler returns a handler filtering at level and a snapshot getter
+// for the records it captured.
+func newCapturingHandler(level slog.Level) (*capturingHandler, func() []logRecord) {
+	var mu sync.Mutex
+	recs := &[]logRecord{}
+	h := &capturingHandler{mu: &mu, recs: recs, level: level}
+	return h, func() []logRecord {
+		mu.Lock()
+		defer mu.Unlock()
+		out := make([]logRecord, len(*recs))
+		copy(out, *recs)
+		return out
+	}
+}
+
+func (h *capturingHandler) Enabled(_ context.Context, l slog.Level) bool { return l >= h.level }
+
+func (h *capturingHandler) Handle(_ context.Context, r slog.Record) error {
+	attrs := map[string]string{}
+	for _, a := range h.pre {
+		attrs[a.Key] = a.Value.String()
+	}
+	r.Attrs(func(a slog.Attr) bool {
+		attrs[a.Key] = a.Value.String()
+		return true
+	})
+	h.mu.Lock()
+	*h.recs = append(*h.recs, logRecord{level: r.Level, msg: r.Message, attrs: attrs})
+	h.mu.Unlock()
+	return nil
+}
+
+func (h *capturingHandler) WithAttrs(as []slog.Attr) slog.Handler {
+	nh := *h
+	nh.pre = append(append([]slog.Attr{}, h.pre...), as...)
+	return &nh
+}
+
+func (h *capturingHandler) WithGroup(string) slog.Handler { return h }
+
+// recByMsg returns the first captured record whose message equals msg.
+func recByMsg(recs []logRecord, msg string) (logRecord, bool) {
+	for _, r := range recs {
+		if r.msg == msg {
+			return r, true
+		}
+	}
+	return logRecord{}, false
+}
+
+// TestResolveNarratesLifecycle pins the correlate half of US1: a successful
+// stability-gated resolve narrates resolve.start (Info: run_id, store_endpoint,
+// query), one resolve.poll per round (Debug: round, spans_seen, stable_streak),
+// and resolve.done (Info: run_id, spans, roots, rounds, elapsed) — done only on
+// the successful return.
+func TestResolveNarratesLifecycle(t *testing.T) {
+	const (
+		endpoint = "http://localhost:3200"
+		runID    = "run-cap"
+	)
+	ctrl := gomock.NewController(t)
+	st, _ := newCountingStore(ctrl, []storedTrace{{id: "t1", tr: nSpanTrace(2, nil)}})
+
+	h, records := newCapturingHandler(slog.LevelDebug)
+	c := New(func() string { return runID },
+		PollConfig{Interval: time.Millisecond, StableFor: 2, Timeout: time.Second},
+		WithEndpoint(endpoint), WithLogger(slog.New(h)))
+	got, err := c.Resolve(context.Background(), st, runID)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(got.Spans) != 2 || len(got.Roots) != 1 {
+		t.Fatalf("want 2 spans / 1 root, got %d / %d", len(got.Spans), len(got.Roots))
+	}
+	recs := records()
+
+	// resolve.start — Info, at the top of Resolve.
+	start, ok := recByMsg(recs, "resolve.start")
+	if !ok {
+		t.Fatalf("no resolve.start record; captured: %+v", recs)
+	}
+	if start.level != slog.LevelInfo {
+		t.Fatalf("resolve.start level = %v, want Info", start.level)
+	}
+	if start.attrs["run_id"] != runID {
+		t.Fatalf("resolve.start run_id = %q, want %q", start.attrs["run_id"], runID)
+	}
+	if start.attrs["store_endpoint"] != endpoint {
+		t.Fatalf("resolve.start store_endpoint = %q, want %q", start.attrs["store_endpoint"], endpoint)
+	}
+	if want := `{ .test.run.id = "run-cap" }`; start.attrs["query"] != want {
+		t.Fatalf("resolve.start query = %q, want %q", start.attrs["query"], want)
+	}
+
+	// resolve.poll — Debug, once per poll round, carrying round/spans_seen/stable_streak.
+	polls := 0
+	for _, r := range recs {
+		if r.msg != "resolve.poll" {
+			continue
+		}
+		polls++
+		if r.level != slog.LevelDebug {
+			t.Fatalf("resolve.poll level = %v, want Debug", r.level)
+		}
+		for _, k := range []string{"round", "spans_seen", "stable_streak"} {
+			if _, ok := r.attrs[k]; !ok {
+				t.Fatalf("resolve.poll missing %q: %+v", k, r)
+			}
+		}
+	}
+	if polls != 3 {
+		t.Fatalf("want 3 resolve.poll records (1 changed + StableFor=2 stable), got %d", polls)
+	}
+
+	// resolve.done — Info, only on the successful stable return.
+	done, ok := recByMsg(recs, "resolve.done")
+	if !ok {
+		t.Fatalf("no resolve.done record; captured: %+v", recs)
+	}
+	if done.level != slog.LevelInfo {
+		t.Fatalf("resolve.done level = %v, want Info", done.level)
+	}
+	if done.attrs["run_id"] != runID {
+		t.Fatalf("resolve.done run_id = %q, want %q", done.attrs["run_id"], runID)
+	}
+	if done.attrs["spans"] != "2" {
+		t.Fatalf("resolve.done spans = %q, want 2", done.attrs["spans"])
+	}
+	if done.attrs["roots"] != "1" {
+		t.Fatalf("resolve.done roots = %q, want 1", done.attrs["roots"])
+	}
+	if done.attrs["rounds"] != "3" {
+		t.Fatalf("resolve.done rounds = %q, want 3 (final round count)", done.attrs["rounds"])
+	}
+	if _, ok := done.attrs["elapsed"]; !ok {
+		t.Fatalf("resolve.done missing elapsed: %+v", done)
+	}
+}
+
+// TestResolveInfoLevelSuppressesPollDebug proves resolve.poll is a Debug record:
+// at an Info handler it must not be emitted, while the Info resolve.start and
+// resolve.done still are.
+func TestResolveInfoLevelSuppressesPollDebug(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	st, _ := newCountingStore(ctrl, []storedTrace{{id: "t1", tr: nSpanTrace(2, nil)}})
+
+	h, records := newCapturingHandler(slog.LevelInfo)
+	c := New(func() string { return "run-info" },
+		PollConfig{Interval: time.Millisecond, StableFor: 2, Timeout: time.Second},
+		WithEndpoint("http://localhost:3200"), WithLogger(slog.New(h)))
+	if _, err := c.Resolve(context.Background(), st, "run-info"); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	recs := records()
+	for _, r := range recs {
+		if r.msg == "resolve.poll" {
+			t.Fatalf("resolve.poll must be Debug; it leaked at Info: %+v", r)
+		}
+	}
+	if _, ok := recByMsg(recs, "resolve.start"); !ok {
+		t.Fatalf("resolve.start (Info) must still be emitted at Info level; captured: %+v", recs)
+	}
+	if _, ok := recByMsg(recs, "resolve.done"); !ok {
+		t.Fatalf("resolve.done (Info) must still be emitted at Info level; captured: %+v", recs)
+	}
+}
+
+// TestResolveSilentByDefaultEmitsZeroBytes pins SC-005 for the correlator: with
+// the default (discard) logger a successful resolve writes nothing to the
+// process's real stdout/stderr.
+func TestResolveSilentByDefaultEmitsZeroBytes(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	st, _ := newCountingStore(ctrl, []storedTrace{{id: "t1", tr: nSpanTrace(2, nil)}})
+
+	c := New(func() string { return "run-silent" },
+		PollConfig{Interval: time.Millisecond, StableFor: 2, Timeout: time.Second}) // no WithLogger
+	out := testio.CaptureStdio(t, func() {
+		if _, err := c.Resolve(context.Background(), st, "run-silent"); err != nil {
+			t.Errorf("resolve: %v", err)
+		}
+	})
+	if out != "" {
+		t.Fatalf("silent default must emit zero bytes, got:\n%q", out)
 	}
 }

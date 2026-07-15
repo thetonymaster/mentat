@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -90,6 +91,30 @@ func TestComparators(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("Comparators() = %v, want to contain %q", names, "listed")
+	}
+}
+
+// TestDrivers proves Drivers() returns the registered driver schemes in sorted
+// order (feature 005, D3): engine.Build uses this list to name the registered set
+// when it rejects a target whose adapter has no driver. Registration order is
+// deliberately unsorted to prove the accessor sorts rather than echoing map order.
+func TestDrivers(t *testing.T) {
+	resetRegistries(t)
+	RegisterDriver("shell", fakeDriver{})
+	RegisterDriver("http", fakeDriver{})
+	RegisterDriver("aaa", fakeDriver{})
+	got := Drivers()
+	if !sort.StringsAreSorted(got) {
+		t.Fatalf("Drivers() = %v, want sorted", got)
+	}
+	want := []string{"aaa", "http", "shell"}
+	if len(got) != len(want) {
+		t.Fatalf("Drivers() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("Drivers() = %v, want %v", got, want)
+		}
 	}
 }
 

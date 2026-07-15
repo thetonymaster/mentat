@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"sort"
 	"sync"
 	"testing"
 
@@ -124,6 +125,21 @@ func Comparators() []string {
 	for n := range comparators {
 		names = append(names, n)
 	}
+	return names
+}
+
+// Drivers returns all registered driver schemes, sorted. engine.Build validates
+// each target's adapter against this set — the driver registry is the single
+// runtime source of truth for which adapters exist (feature 005, D3/FR-005) — and
+// names the sorted set in its rejection error so a phantom adapter is diagnosable.
+func Drivers() []string {
+	mu.RLock()
+	defer mu.RUnlock()
+	names := make([]string, 0, len(drivers))
+	for n := range drivers {
+		names = append(names, n)
+	}
+	sort.Strings(names)
 	return names
 }
 
