@@ -410,6 +410,58 @@ func TestShellMergeMalformedAmbientIsHardError(t *testing.T) {
 	}
 }
 
+// --- Feature 005 (US3 scenario 3 / SC-004): config endpoint overrides ambient ---
+
+// TestShellConfigEndpointOverridesAmbient is the exec-level regression lock on the
+// injection-policy contract row "config endpoint set -> config value (overrides
+// ambient)". The shell driver builds the child env as append(os.Environ(),
+// spec.Env...) and cmd.Env = that slice; os/exec keeps the LAST value for a
+// duplicate key, so a Mentat-configured OTEL_EXPORTER_OTLP_ENDPOINT appended after
+// an ambient one wins in the SUT child process. This proves config-wins at the
+// exec seam (not just via mock spec.Env assertions). Sets the ambient value with
+// t.Setenv so os.Environ picks it up, and drives a child that prints its effective
+// endpoint. No t.Parallel: t.Setenv panics under parallel (documented exception).
+func TestShellConfigEndpointOverridesAmbient(t *testing.T) {
+	const (
+		ambientEndpoint = "http://ambient.invalid:4317"
+		configEndpoint  = "http://config.example:4318"
+	)
+	tests := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{
+			name: "config_set_overrides_ambient",
+			env:  map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": configEndpoint},
+			want: configEndpoint,
+		},
+		{
+			name: "no_config_ambient_passes_through",
+			env:  nil,
+			want: ambientEndpoint,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// No t.Parallel here: t.Setenv panics under parallel subtests.
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", ambientEndpoint)
+			spec := core.RunSpec{
+				Command: []string{"sh", "-c", `printf '%s\n' "${OTEL_EXPORTER_OTLP_ENDPOINT:-NONE}"`},
+				Env:     tt.env,
+				RunID:   "run-endpoint",
+			}
+			res, err := NewShell().Run(context.Background(), spec)
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if got := strings.TrimSpace(res.Output.Stdout); got != tt.want {
+				t.Fatalf("child OTEL_EXPORTER_OTLP_ENDPOINT = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // TestShellInjectsNoTraceparent is the shell-driver complement to the http
 // driver's no-traceparent assertion (http_test.go): correlation rides
 // OTEL_RESOURCE_ATTRIBUTES (a resource attribute), never a propagated

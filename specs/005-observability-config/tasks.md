@@ -119,3 +119,22 @@ go-test-writer C: T020→T021 (steps ordinal)  |  go-coder:        T001 golden c
 US1 and US2 are both P1: US2 is smaller and file-disjoint — land it first for an
 early win, then US1 (the diagnosis experience), then US3, US4. Golden-stdout
 parity (SC-005) is the regression tripwire for every narration task.
+
+---
+
+## Phase 8: Convergence
+
+**Purpose**: close residual gaps found by `/speckit-converge` assessing the merged
+code (#28) against spec/plan/tasks/contract. Four parallel cluster audits (US1, US2,
+US3, and US4 + cross-cutting) confirmed all 26 prior tasks present in code, coverage ≥80% on every
+touched package, and the contract's pinned substrings test-locked. Two `partial` gaps
+remain (ordered MEDIUM then LOW). Constitution I–V upheld (IV strengthened).
+
+- [X] T027 Add the driven command as a `command` (argv) attribute on the `drive.start` Info narration record in internal/engine/engine.go — it currently narrates target+adapter+run_id but omits the command, which FR-002 and US1 acceptance scenario 2 both require ("target **and command** driven"); the assembled command is already at engine.go:153. Add a buffer-handler test pinning the `command` attribute per FR-002 (partial) — DONE (TDD): added `"command", spec.Command` at engine.go:163; new table test `TestDriveStartNarratesCommand` (engine_test.go) pins `command="[...]"` for base argv + appended drive args; RED proven first, silent-default zero-byte guardrail still green; engine cover 95.0%.
+- [X] T028 Add a through-Run shell test in internal/driver/shell_test.go using `t.Setenv` to set an ambient `OTEL_EXPORTER_OTLP_ENDPOINT` alongside a configured endpoint, asserting the SUT child process receives the configured value (config-wins-over-ambient via exec dedupEnv last-wins) — this "configured value wins" behaviour is currently proven only by code reasoning + mock-level `spec.Env`, with no exec-level regression lock per US3/AS3 and SC-004 (partial) — DONE (TDD): added non-parallel table test `TestShellConfigEndpointOverridesAmbient` (shell_test.go) — execs real `sh -c` printing `OTEL_EXPORTER_OTLP_ENDPOINT`, rows: config overrides ambient / ambient passes through when no config; deliberate-failure sanity check confirmed it exercises the exec path; test-only, no prod change; driver cover 95.1%.
+
+_Not a task (needs a spec decision, outside converge's append-only code scope):_ US1
+acceptance scenario 2 places injected-env values and per-poll span counts under `-v`,
+but the authoritative contract (contracts/narration-and-errors.md) and the code gate
+them under `-vv` (Debug). Code matches the contract; reconcile spec.md only if AS2 is
+authoritative.
