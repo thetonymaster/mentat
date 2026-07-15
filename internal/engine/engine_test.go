@@ -1406,6 +1406,71 @@ func TestDriveOnceNarratesDriveStartAtInfo(t *testing.T) {
 	}
 }
 
+// TestDriveStartNarratesCommand pins FR-002 / US1 acceptance scenario 2: the
+// run lifecycle must narrate the target AND the command driven. The drive.start
+// Info record therefore carries a `command` attribute holding the full argv
+// (target base command with any drive args appended), so an operator reading
+// the narration sees exactly what was executed — not just which target ran.
+func TestDriveStartNarratesCommand(t *testing.T) {
+	tests := []struct {
+		name    string
+		command []string
+		args    []string
+		wantSub string // the rendered argv the drive.start record must carry
+	}{
+		{
+			name:    "narrates the base command argv",
+			command: []string{"sh", "-c", "echo hi"},
+			args:    nil,
+			wantSub: "command=\"[sh -c echo hi]\"",
+		},
+		{
+			name:    "narrates argv including appended drive args",
+			command: []string{"echo"},
+			args:    []string{"hello"},
+			wantSub: "command=\"[echo hello]\"",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.Config{
+				OTLPEndpoint: "http://localhost:4318",
+				Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+				Targets: map[string]config.Target{
+					"echo": {Adapter: "shell", Command: tt.command, MaxConcurrency: 1},
+				},
+			}
+			tr := &trace.Trace{Spans: []*trace.Span{{Name: "root"}}, Roots: []*trace.Span{{Name: "root"}}}
+
+			ctrl := gomock.NewController(t)
+			st := mocks.NewMockTraceStore(ctrl)
+			st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "run-1"}}, nil).AnyTimes()
+			stubStoredTrace(st, tr)
+			cor := correlate.New(func() string { return "run-1" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+
+			var buf bytes.Buffer
+			eng, err := Build(cfg, st, cor, WithLogger(debugBufLogger(&buf)))
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			if _, err := eng.Drive(context.Background(), "echo", tt.args); err != nil {
+				t.Fatalf("Drive: %v", err)
+			}
+
+			line := findLogLine(buf.String(), "drive.start")
+			if line == "" {
+				t.Fatalf("no drive.start record emitted; full narration:\n%s", buf.String())
+			}
+			if !strings.Contains(line, "command=") {
+				t.Fatalf("drive.start record %q missing a command attribute", line)
+			}
+			if !strings.Contains(line, tt.wantSub) {
+				t.Fatalf("drive.start record %q missing %q", line, tt.wantSub)
+			}
+		})
+	}
+}
+
 // TestDriveSilentByDefaultEmitsZeroBytes pins SC-005 for the engine: with the
 // default (discard) logger a full happy-path drive must write nothing to the
 // process's real stdout/stderr.

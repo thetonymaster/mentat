@@ -160,7 +160,7 @@ func (e *Engine) driveOnce(ctx context.Context, target string, args []string) (c
 		KillGrace: budget.KillGrace,
 	}
 	runID := e.cor.Inject(ctx, &spec)
-	e.logger.InfoContext(ctx, "drive.start", "target", target, "adapter", t.Adapter, "run_id", runID)
+	e.logger.InfoContext(ctx, "drive.start", "target", target, "adapter", t.Adapter, "command", spec.Command, "run_id", runID)
 
 	runCtx := ctx
 	if !budget.Unbounded && budget.Timeout > 0 {
