@@ -10,7 +10,7 @@ flag/doc/golden scaffolding via **go-coder**.
 
 ## Phase 1: Setup
 
-- [X] T001 Capture the golden happy-path stdout of a green `mentat run` (hermetic fixture suite) into cmd/mentat/testdata/golden-green.txt for SC-005 (go-coder) — DONE live: captured normalized default-verbosity stdout (only godog's duration line normalized to `<DURATION>`); golden-check in e2e/golden_test.go verified non-flaky over 3 runs.
+- [X] T001 Capture the golden happy-path stdout of a green `mentat run` against the live Tempo harness into cmd/mentat/testdata/golden-green.txt for SC-005 (go-coder) — DONE live: captured normalized default-verbosity stdout (only godog's duration line normalized to `<DURATION>`); golden-check in e2e/golden_test.go (`//go:build e2e`, live harness) verified non-flaky over 3 runs.
 
 ---
 
@@ -49,7 +49,7 @@ flag/doc/golden scaffolding via **go-coder**.
 
 **Independent Test**: misspelled key fails naming it; `adapter: grpc` fails at startup listing registered drivers.
 
-- [X] T011 [P] [US2] Failing table test: one typo'd key per config section (root, poll, judge, targets.<n>, reporters) → load error naming key+path; valid config loads unchanged; absent optional keys still fine in internal/config/config_test.go (go-test-writer, red)
+- [X] T011 [P] [US2] Failing table test: one typo'd key per config section (root, poll, judge, targets.<n>, reporters) → load error in the yaml.v3 strict form `field <key> not found in type config.<Type>` (names the unknown key and its containing config type, not a dotted full path); valid config loads unchanged; absent optional keys still fine in internal/config/config_test.go (go-test-writer, red)
 - [X] T012 [US2] Switch to strict decode (`yaml.Decoder.KnownFields(true)`, expectations-loader pattern) in internal/config/config.go (go-test-writer, green)
 - [X] T013 [US2] Failing tests: `registry.Drivers()` listing; `engine.Build` rejects targets whose adapter has no registered driver, error names target+adapter+registered set; `mcp`/`grpc` removed from `defaultConcurrency` in internal/registry/registry_test.go, internal/engine/build_test.go, internal/config/config_test.go (go-test-writer, red)
 - [X] T014 [US2] Implement Drivers() + Build-time validation + allowlist shrink in internal/registry/registry.go, internal/engine/build.go, internal/config/config.go (go-test-writer, green)

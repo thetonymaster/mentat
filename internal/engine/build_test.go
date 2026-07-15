@@ -183,6 +183,33 @@ func TestBuildRejectsUnregisteredAdapter(t *testing.T) {
 	}
 }
 
+// TestBuildRejectsUnregisteredAdapterDeterministicOrder pins the ordering half of
+// D3: cfg.Targets is a map, so when more than one target has a phantom adapter the
+// validation loop must surface the same error every run (sorted by target name),
+// not whichever target Go's randomized map iteration visits first. Without the
+// sort this test is flaky; with it, the alphabetically-first target always wins.
+//
+// No t.Parallel(): Build mutates the registry's package-global maps.
+func TestBuildRejectsUnregisteredAdapterDeterministicOrder(t *testing.T) {
+	cfg := config.Config{OTLPEndpoint: "x", Targets: map[string]config.Target{
+		"aaa": {Adapter: "aphantom"},
+		"zzz": {Adapter: "zphantom"},
+	}}
+	// Run several times: a nondeterministic loop would eventually surface "zzz".
+	for i := 0; i < 20; i++ {
+		_, err := Build(cfg, nil, nil)
+		if err == nil {
+			t.Fatal("Build() err = nil, want phantom-adapter error")
+		}
+		if !strings.Contains(err.Error(), "aaa") || !strings.Contains(err.Error(), "aphantom") {
+			t.Fatalf("Build() err = %q, want sorted-first target \"aaa\"/\"aphantom\"", err)
+		}
+		if strings.Contains(err.Error(), "zzz") || strings.Contains(err.Error(), "zphantom") {
+			t.Fatalf("Build() err = %q, want sorted-first target only, not \"zzz\"", err)
+		}
+	}
+}
+
 func TestToPricing(t *testing.T) {
 	t.Run("empty maps to nil", func(t *testing.T) {
 		if got := toPricing(nil); got != nil {

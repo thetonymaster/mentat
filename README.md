@@ -118,7 +118,7 @@ turn on narration, and **all narration goes to stderr**:
 | `-vv` | Debug | everything `-v` shows, plus the injected SUT env (`drive.env` — Mentat-set keys only, including the merged `OTEL_RESOURCE_ATTRIBUTES`) and per-poll rounds (`resolve.poll`: round, spans seen, stable streak) |
 
 ```bash
-go run ./cmd/mentat -vv run features/     # local debugging: injected env + poll rounds
+go run ./cmd/mentat run -vv features/     # local debugging: injected env + poll rounds
 go run ./cmd/mentatctl -v agent run --target research-agent --scenario happy
 ```
 
@@ -131,7 +131,7 @@ Correlation failures are **self-diagnosing without any verbosity flag**. When a 
 trace never appears within the poll timeout, the error names the store endpoint it
 queried, the exact TraceQL query it issued, and a three-item triage checklist:
 
-```
+```text
 correlate: no trace for run "…" within 30s (0 spans seen)
 	store: http://localhost:3200
 	query: { .test.run.id = "…" }

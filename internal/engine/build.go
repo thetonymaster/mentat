@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/thetonymaster/mentat/internal/comparator"
@@ -89,9 +90,16 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator, opts ...O
 	// with no registered driver) fails loudly here naming the target, the adapter,
 	// and the registered set, rather than as a silent no-op at drive time. The
 	// load-time concurrency allowlist is deliberately NOT a second, driftable truth.
-	for name, t := range cfg.Targets {
-		if _, ok := registry.Driver(t.Adapter); !ok {
-			return nil, fmt.Errorf("engine: target %q: adapter %q has no registered driver (registered: %s)", name, t.Adapter, strings.Join(registry.Drivers(), ", "))
+	// Targets is a map, so validate in sorted name order — when more than one target
+	// has a phantom adapter the surfaced error is deterministic run-to-run (SC-005).
+	names := make([]string, 0, len(cfg.Targets))
+	for name := range cfg.Targets {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if _, ok := registry.Driver(cfg.Targets[name].Adapter); !ok {
+			return nil, fmt.Errorf("engine: target %q: adapter %q has no registered driver (registered: %s)", name, cfg.Targets[name].Adapter, strings.Join(registry.Drivers(), ", "))
 		}
 	}
 

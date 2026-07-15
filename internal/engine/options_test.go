@@ -58,8 +58,19 @@ func TestBuildLoggerSeam(t *testing.T) {
 // silent default rather than installing a nil logger that would panic on first
 // use — callers may pass an unconditionally-resolved logger without a nil check.
 func TestWithLoggerNilIsSilentDefault(t *testing.T) {
-	cfg := config.Config{OTLPEndpoint: "x"}
-	eng, err := Build(cfg, nil, nil, WithLogger(nil))
+	// The contract lives in resolveOptions: a nil WithLogger must leave the
+	// discard-handler default in place, never a nil *slog.Logger. Assert the
+	// resolved logger is non-nil and actually usable — invoking it exercises the
+	// exact "panic on first use" failure mode the silent default exists to prevent,
+	// a path Build itself never reaches (it holds the logger but does not log here).
+	got := resolveOptions([]Option{WithLogger(nil)})
+	if got.logger == nil {
+		t.Fatal("resolveOptions(WithLogger(nil)) left a nil logger; want the discard default")
+	}
+	got.logger.Info("must not panic on first use", "k", "v") // discard handler: no output, no panic
+
+	// And the full composition root still succeeds end-to-end with the nil option.
+	eng, err := Build(config.Config{OTLPEndpoint: "x"}, nil, nil, WithLogger(nil))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}

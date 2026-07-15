@@ -1381,6 +1381,9 @@ func captureStdio(t *testing.T, fn func()) string {
 		t.Fatalf("os.Pipe: %v", err)
 	}
 	os.Stdout, os.Stderr = w, w
+	defer func() {
+		os.Stdout, os.Stderr = origOut, origErr
+	}()
 	done := make(chan string, 1)
 	go func() {
 		var b bytes.Buffer
@@ -1389,7 +1392,6 @@ func captureStdio(t *testing.T, fn func()) string {
 	}()
 	fn()
 	_ = w.Close()
-	os.Stdout, os.Stderr = origOut, origErr
 	return <-done
 }
 
