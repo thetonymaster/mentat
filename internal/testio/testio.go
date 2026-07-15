@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"sync"
 	"testing"
 )
 
@@ -23,26 +24,44 @@ import (
 // own cmd buffers — captures nothing.
 func CaptureStdio(t *testing.T, fn func()) string {
 	t.Helper()
+	out, cleanup := captureStdioAsync(t)
+	defer cleanup() // runs even if fn panics/Goexits: closes the writer + restores streams
+	fn()
+	cleanup() // normal path: close the writer so the reader reaches EOF and out can receive
+	return <-out
+}
+
+// captureStdioAsync starts a capture: it redirects os.Stdout/os.Stderr into a pipe,
+// spawns a reader goroutine, and returns a buffered channel that receives the
+// captured bytes once the reader drains the pipe, plus an idempotent cleanup that
+// closes the writer (unblocking the reader) and restores the real streams.
+//
+// Callers MUST defer cleanup so the streams are restored — and the reader
+// unblocked — even if the code under capture panics or calls runtime.Goexit;
+// receive from out only after cleanup has closed the writer. Split out from
+// CaptureStdio so tests can observe reader-goroutine completion directly (a bounded
+// receive on out) instead of sampling the flappy process-wide goroutine count.
+func captureStdioAsync(t *testing.T) (out <-chan string, cleanup func()) {
+	t.Helper()
 	origOut, origErr := os.Stdout, os.Stderr
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("os.Pipe: %v", err)
 	}
 	os.Stdout, os.Stderr = w, w
-	defer func() {
-		// Close w here too so the reader goroutine reaches EOF and exits even when
-		// fn panics or calls runtime.Goexit (t.Fatalf) — the normal path already
-		// closed it below, so this is a harmless double close (error discarded).
-		_ = w.Close()
-		os.Stdout, os.Stderr = origOut, origErr
-	}()
 	done := make(chan string, 1) // buffered: the reader never blocks on send, so it
-	go func() {                  // exits cleanly even on the panic path (no receiver)
+	go func() {                  // exits cleanly even with no receiver (panic path)
+		defer r.Close() // release the read end once drained so pipe fds don't leak
 		var b bytes.Buffer
 		_, _ = io.Copy(&b, r)
 		done <- b.String()
 	}()
-	fn()
-	_ = w.Close() // normal path: unblock the reader so <-done can receive
-	return <-done
+	var once sync.Once
+	cleanup = func() {
+		once.Do(func() {
+			_ = w.Close()
+			os.Stdout, os.Stderr = origOut, origErr
+		})
+	}
+	return done, cleanup
 }
