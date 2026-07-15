@@ -5,17 +5,27 @@ package testio
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"sync"
 	"testing"
 )
 
+// captureResult carries the drained output plus any failure the reader hit, so
+// CaptureStdio can surface a copy/close error instead of returning partial output
+// as success (no silent fallbacks).
+type captureResult struct {
+	out string
+	err error
+}
+
 // CaptureStdio redirects the process's real os.Stdout and os.Stderr to a pipe for
 // the duration of fn and returns everything written to them. Restoration is
 // deferred, so a panic or runtime.Goexit (e.g. a t.Fatalf inside fn) cannot leave
 // the real streams pointed at a closed pipe and silently swallow the output of
-// every later test in the binary.
+// every later test in the binary. A drain error (io.Copy / reader Close) fails the
+// test via t.Fatalf rather than being reported as a clean, but truncated, capture.
 //
 // It underpins the SC-005 silent-default contract across the seams: with no
 // injected logger a drive/resolve path must reach neither real stream, so a stray
@@ -24,24 +34,29 @@ import (
 // own cmd buffers — captures nothing.
 func CaptureStdio(t *testing.T, fn func()) string {
 	t.Helper()
-	out, cleanup := captureStdioAsync(t)
+	result, cleanup := captureStdioAsync(t)
 	defer cleanup() // runs even if fn panics/Goexits: closes the writer + restores streams
 	fn()
-	cleanup() // normal path: close the writer so the reader reaches EOF and out can receive
-	return <-out
+	cleanup() // normal path: close the writer so the reader reaches EOF and result can arrive
+	got := <-result
+	if got.err != nil {
+		t.Fatalf("CaptureStdio: draining captured output: %v", got.err)
+	}
+	return got.out
 }
 
 // captureStdioAsync starts a capture: it redirects os.Stdout/os.Stderr into a pipe,
 // spawns a reader goroutine, and returns a buffered channel that receives the
-// captured bytes once the reader drains the pipe, plus an idempotent cleanup that
-// closes the writer (unblocking the reader) and restores the real streams.
+// captured bytes (and any drain error) once the reader drains the pipe, plus an
+// idempotent cleanup that closes the writer (unblocking the reader) and restores
+// the real streams.
 //
 // Callers MUST defer cleanup so the streams are restored — and the reader
 // unblocked — even if the code under capture panics or calls runtime.Goexit;
-// receive from out only after cleanup has closed the writer. Split out from
+// receive from result only after cleanup has closed the writer. Split out from
 // CaptureStdio so tests can observe reader-goroutine completion directly (a bounded
-// receive on out) instead of sampling the flappy process-wide goroutine count.
-func captureStdioAsync(t *testing.T) (out <-chan string, cleanup func()) {
+// receive on result) instead of sampling the flappy process-wide goroutine count.
+func captureStdioAsync(t *testing.T) (result <-chan captureResult, cleanup func()) {
 	t.Helper()
 	origOut, origErr := os.Stdout, os.Stderr
 	r, w, err := os.Pipe()
@@ -49,17 +64,18 @@ func captureStdioAsync(t *testing.T) (out <-chan string, cleanup func()) {
 		t.Fatalf("os.Pipe: %v", err)
 	}
 	os.Stdout, os.Stderr = w, w
-	done := make(chan string, 1) // buffered: the reader never blocks on send, so it
-	go func() {                  // exits cleanly even with no receiver (panic path)
-		defer r.Close() // release the read end once drained so pipe fds don't leak
+	done := make(chan captureResult, 1) // buffered: the reader never blocks on send, so
+	go func() {                         // it exits cleanly even with no receiver (panic path)
 		var b bytes.Buffer
-		_, _ = io.Copy(&b, r)
-		done <- b.String()
+		_, copyErr := io.Copy(&b, r)
+		// Close the read end once drained so pipe fds don't leak; join both failures
+		// so a copy or close error reaches CaptureStdio rather than being discarded.
+		done <- captureResult{out: b.String(), err: errors.Join(copyErr, r.Close())}
 	}()
 	var once sync.Once
 	cleanup = func() {
 		once.Do(func() {
-			_ = w.Close()
+			_ = w.Close() // best-effort: the reader already owns/surfaces the drain result
 			os.Stdout, os.Stderr = origOut, origErr
 		})
 	}

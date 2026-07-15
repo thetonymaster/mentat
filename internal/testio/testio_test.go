@@ -11,8 +11,12 @@ import (
 // writes to BOTH real streams (stdout and stderr are redirected to one pipe).
 func TestCaptureStdioCapturesBothStreams(t *testing.T) {
 	got := CaptureStdio(t, func() {
-		fmt.Fprint(os.Stdout, "out-line ")
-		fmt.Fprint(os.Stderr, "err-line")
+		if _, err := fmt.Fprint(os.Stdout, "out-line "); err != nil {
+			t.Errorf("write to redirected stdout: %v", err)
+		}
+		if _, err := fmt.Fprint(os.Stderr, "err-line"); err != nil {
+			t.Errorf("write to redirected stderr: %v", err)
+		}
 	})
 	if want := "out-line err-line"; got != want {
 		t.Fatalf("CaptureStdio = %q, want %q", got, want)
@@ -48,17 +52,20 @@ func TestCaptureStdioRestoresAfterPanic(t *testing.T) {
 // TestCaptureStdioReaderCompletesAfterPanicCleanup pins the goroutine-leak fix with
 // a DIRECT completion signal instead of a process-wide goroutine count: once
 // cleanup closes the writer on the panic path, the reader must reach EOF and send
-// on out. If the writer-close were dropped, io.Copy would block forever and this
-// bounded receive would time out.
+// its result. If the writer-close were dropped, io.Copy would block forever and
+// this bounded receive would time out.
 func TestCaptureStdioReaderCompletesAfterPanicCleanup(t *testing.T) {
-	out, cleanup := captureStdioAsync(t)
+	result, cleanup := captureStdioAsync(t)
 	func() {
 		defer func() { _ = recover() }()
 		defer cleanup() // models CaptureStdio's deferred cleanup during panic unwind
 		panic("boom")
 	}()
 	select {
-	case <-out:
+	case got := <-result:
+		if got.err != nil {
+			t.Fatalf("reader reported a drain error: %v", got.err)
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("reader goroutine did not complete after panic-path cleanup")
 	}
