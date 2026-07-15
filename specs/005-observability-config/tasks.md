@@ -125,8 +125,8 @@ parity (SC-005) is the regression tripwire for every narration task.
 ## Phase 8: Convergence
 
 **Purpose**: close residual gaps found by `/speckit-converge` assessing the merged
-code (#28) against spec/plan/tasks/contract. Four parallel cluster audits (US1–US4 +
-cross-cutting) confirmed all 26 prior tasks present in code, coverage ≥80% on every
+code (#28) against spec/plan/tasks/contract. Four parallel cluster audits (US1, US2,
+US3, and US4 + cross-cutting) confirmed all 26 prior tasks present in code, coverage ≥80% on every
 touched package, and the contract's pinned substrings test-locked. Two `partial` gaps
 remain (ordered MEDIUM then LOW). Constitution I–V upheld (IV strengthened).
 

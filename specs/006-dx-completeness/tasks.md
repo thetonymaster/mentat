@@ -16,7 +16,7 @@
 
 ## Phase 2: Foundational (Blocking Prerequisites)
 
-**Purpose**: none — the nine slices are mutually independent by design; Phase 2 intentionally empty. (Config file `internal/config/config.go` is the only shared hotspot — serialize config-touching green tasks: T011, T013, T019, T022.)
+**Purpose**: none — the nine slices are file-disjoint by design except the shared `internal/config/config.go` and `internal/steps/steps.go` hotspots and the US2→US1 metadata-table dependency (all detailed under Dependencies & Execution Order); Phase 2 intentionally empty. (Config file `internal/config/config.go` is the primary shared hotspot — serialize config-touching green tasks: T011, T013, T019, T022.)
 
 ---
 
