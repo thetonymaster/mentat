@@ -3,7 +3,9 @@ package testio
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"testing"
+	"time"
 )
 
 // TestCaptureStdioCapturesBothStreams proves the helper returns everything fn
@@ -33,6 +35,7 @@ func TestCaptureStdioEmptyWhenSilent(t *testing.T) {
 // assert the originals are back.
 func TestCaptureStdioRestoresAfterPanic(t *testing.T) {
 	origOut, origErr := os.Stdout, os.Stderr
+	before := runtime.NumGoroutine()
 	func() {
 		defer func() {
 			if r := recover(); r == nil {
@@ -43,5 +46,16 @@ func TestCaptureStdioRestoresAfterPanic(t *testing.T) {
 	}()
 	if os.Stdout != origOut || os.Stderr != origErr {
 		t.Fatal("CaptureStdio did not restore os.Stdout/os.Stderr after fn panicked")
+	}
+	// The deferred w.Close() must let the reader goroutine reach EOF and exit even on
+	// the panic path — without it, io.Copy blocks forever and the goroutine leaks.
+	// Goroutine teardown is asynchronous, so poll (bounded) for the count to return
+	// to its pre-call baseline rather than sampling once.
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > before {
+		if time.Now().After(deadline) {
+			t.Fatalf("reader goroutine leaked after panic: %d goroutines > baseline %d", runtime.NumGoroutine(), before)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

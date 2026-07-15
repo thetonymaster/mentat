@@ -30,15 +30,19 @@ func CaptureStdio(t *testing.T, fn func()) string {
 	}
 	os.Stdout, os.Stderr = w, w
 	defer func() {
+		// Close w here too so the reader goroutine reaches EOF and exits even when
+		// fn panics or calls runtime.Goexit (t.Fatalf) — the normal path already
+		// closed it below, so this is a harmless double close (error discarded).
+		_ = w.Close()
 		os.Stdout, os.Stderr = origOut, origErr
 	}()
-	done := make(chan string, 1)
-	go func() {
+	done := make(chan string, 1) // buffered: the reader never blocks on send, so it
+	go func() {                  // exits cleanly even on the panic path (no receiver)
 		var b bytes.Buffer
 		_, _ = io.Copy(&b, r)
 		done <- b.String()
 	}()
 	fn()
-	_ = w.Close()
+	_ = w.Close() // normal path: unblock the reader so <-done can receive
 	return <-done
 }
