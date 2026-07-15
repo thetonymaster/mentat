@@ -16,7 +16,7 @@
 
 ## Phase 2: Foundational (Blocking Prerequisites)
 
-**Purpose**: none — the nine slices are mutually independent by design; Phase 2 intentionally empty. (Config file `internal/config/config.go` is the only shared hotspot — serialize config-touching green tasks: T011, T017, T024, T031.)
+**Purpose**: none — the nine slices are mutually independent by design; Phase 2 intentionally empty. (Config file `internal/config/config.go` is the only shared hotspot — serialize config-touching green tasks: T011, T013, T019, T022.)
 
 ---
 
@@ -118,7 +118,7 @@
 
 ## Dependencies & Execution Order
 
-- No foundational phase — stories are file-disjoint except `internal/config/config.go` (serialize T011, T013, T017, T019, T022 greens — or land as micro-PRs in that order) and `internal/steps/steps.go` (T003 before T007's precheck export; serialize T017/T021 steps edits).
+- No foundational phase — stories are file-disjoint except `internal/config/config.go` (serialize T011, T013, T019, T022 greens — or land as micro-PRs in that order) and `internal/steps/steps.go` (T003 before T007's precheck export; serialize T017/T021 steps edits).
 - US5 (file store) consumes feature 002's canonical vocabulary — land after 002 or include its spellings.
 - US2 depends on US1's metadata table for step binding (T007 after T003).
 - Priority order: US1, US2, US6 (P1) → US3, US4, US5, US8 (P2) → US7, US9 (P3). MVP = US1.
