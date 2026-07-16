@@ -30,6 +30,14 @@ func Derive(name string, tags []string, v core.Verdict, evs []core.Evidence, pri
 		Reasons:   v.Reasons,
 		Aggregate: v.Detail,
 	}
+	// Carry the judge-token ledger through unchanged (US6). Derive is an observer, so
+	// it does NOT price it here (an unknown-model pricing error would fail a scenario,
+	// violating A8); cost is filled later by report.Price at the render boundary. A
+	// copy avoids aliasing the scenario world's accumulator into the collected report.
+	if v.Judge != nil {
+		j := *v.Judge
+		sr.Judge = &j
+	}
 	var notes []string
 	for _, ev := range evs {
 		cost, err := comparator.CostOrZero(ev.Trace, pricing)

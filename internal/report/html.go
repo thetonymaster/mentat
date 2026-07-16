@@ -18,9 +18,11 @@ td,th{border:1px solid #ccc;padding:.25rem .5rem}.fail{color:#b00}.pass{color:#0
 {{if .Interrupted}}<p class="interrupted">⚠ suite interrupted — {{.Total}} scenario(s) completed before the signal</p>{{end}}
 <p>{{.Total}} scenarios — <span class="pass">{{.Passed}} passed</span>,
 <span class="fail">{{.Failed}} failed</span> — total cost ${{printf "%.4f" .TotalCost}}</p>
+{{if .JudgeTotal}}<p class="judge-total">judge total: {{.JudgeTotal.Calls}} call(s), {{.JudgeTotal.InputTokens}} in / {{.JudgeTotal.OutputTokens}} out tokens — cost ${{printf "%.4f" .JudgeTotal.CostUsd}}</p>{{end}}
 {{range .Scenarios}}
 <h2 class="{{if .Pass}}pass{{else}}fail{{end}}">{{.Name}}</h2>
 <p>cost ${{printf "%.4f" .Cost}}{{if .Sequence}} — sequence: {{range .Sequence}}{{.}} {{end}}{{end}}</p>
+{{if .Judge}}<p class="judge">judge: {{.Judge.Calls}} call(s), {{.Judge.InputTokens}} in / {{.Judge.OutputTokens}} out tokens — cost ${{printf "%.4f" .Judge.CostUsd}} ({{.Judge.Model}})</p>{{end}}
 {{if .DerivationNote}}<p class="derivation-note">derivation note: {{.DerivationNote}}</p>{{end}}
 {{if not .Pass}}<ul>{{range .Reasons}}<li>{{.}}</li>{{end}}</ul>{{end}}
 {{if .Aggregate}}<p>{{.Aggregate.Macro}} = {{printf "%.2f" .Aggregate.Computed}}, want {{.Aggregate.Op}} {{printf "%.2f" .Aggregate.Expected}}</p>{{end}}

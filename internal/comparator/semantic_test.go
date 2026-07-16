@@ -178,7 +178,7 @@ func TestSemanticVotes(t *testing.T) {
 				if tt.errSub != "" && !strings.Contains(err.Error(), tt.errSub) {
 					t.Fatalf("error %q missing %q", err.Error(), tt.errSub)
 				}
-				if v.Pass || len(v.Reasons) != 0 || v.Detail != nil {
+				if v.Pass || len(v.Reasons) != 0 || v.Detail != nil || v.Judge != nil {
 					t.Fatalf("want zero verdict on error, got %+v", v)
 				}
 				return
@@ -188,6 +188,80 @@ func TestSemanticVotes(t *testing.T) {
 			}
 			if !tt.wantPass && !reflect.DeepEqual(v.Reasons, tt.wantReasons) {
 				t.Fatalf("reasons=%v want %v", v.Reasons, tt.wantReasons)
+			}
+		})
+	}
+}
+
+// T008/US6 — judge usage aggregation: Match sums each completed vote's JudgeUsage
+// into Verdict.Judge (Calls summed, tokens summed, judge model carried) on BOTH the
+// pass and the fail(no-match) paths. The field is a pointer so a comparator that
+// makes no judge call leaves it nil (no fabricated zeros — judge-ledger contract).
+func TestSemanticJudgeUsage(t *testing.T) {
+	t.Parallel()
+	const (
+		candidate = "The capital of France is Paris."
+		want      = "Paris is the capital of France"
+		model     = "claude-haiku-4-5"
+	)
+	u := func(in, out int64) core.JudgeUsage {
+		return core.JudgeUsage{Calls: 1, InputTokens: in, OutputTokens: out, Model: model}
+	}
+	tests := []struct {
+		name      string
+		votes     int
+		returns   []vote
+		wantPass  bool
+		wantUsage core.JudgeUsage
+	}{
+		{
+			name:      "single passing vote attaches its usage",
+			votes:     1,
+			returns:   []vote{{v: core.JudgeVerdict{Match: true, Reason: "ok", Usage: u(100, 10)}}},
+			wantPass:  true,
+			wantUsage: core.JudgeUsage{Calls: 1, InputTokens: 100, OutputTokens: 10, Model: model},
+		},
+		{
+			name:  "three passing votes sum usage across calls",
+			votes: 3,
+			returns: []vote{
+				{v: core.JudgeVerdict{Match: true, Reason: "ok", Usage: u(100, 10)}},
+				{v: core.JudgeVerdict{Match: true, Reason: "ok", Usage: u(120, 12)}},
+				{v: core.JudgeVerdict{Match: true, Reason: "ok", Usage: u(130, 8)}},
+			},
+			wantPass:  true,
+			wantUsage: core.JudgeUsage{Calls: 3, InputTokens: 350, OutputTokens: 30, Model: model},
+		},
+		{
+			name:  "failing majority still attaches summed usage",
+			votes: 3,
+			returns: []vote{
+				{v: core.JudgeVerdict{Match: false, Reason: "no", Usage: u(50, 5)}},
+				{v: core.JudgeVerdict{Match: false, Reason: "no", Usage: u(60, 6)}},
+				{v: core.JudgeVerdict{Match: true, Reason: "ok", Usage: u(70, 7)}},
+			},
+			wantPass:  false,
+			wantUsage: core.JudgeUsage{Calls: 3, InputTokens: 180, OutputTokens: 18, Model: model},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			j := newScriptedJudge(t, candidate, want, tt.returns)
+			m := NewSemantic(j, tt.votes)
+			ev := core.Evidence{Output: core.Output{Answer: candidate}}
+			v, err := m.Match(context.Background(), ev, want, "")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if v.Pass != tt.wantPass {
+				t.Fatalf("Pass=%v want %v", v.Pass, tt.wantPass)
+			}
+			if v.Judge == nil {
+				t.Fatal("Verdict.Judge is nil; want aggregated judge usage")
+			}
+			if *v.Judge != tt.wantUsage {
+				t.Fatalf("judge usage = %+v, want %+v", *v.Judge, tt.wantUsage)
 			}
 		})
 	}
@@ -249,7 +323,7 @@ func TestSemanticErrors(t *testing.T) {
 			if tt.wantWrapped != nil && !errors.Is(err, tt.wantWrapped) {
 				t.Fatalf("error %v does not wrap %v", err, tt.wantWrapped)
 			}
-			if v.Pass || len(v.Reasons) != 0 || v.Detail != nil {
+			if v.Pass || len(v.Reasons) != 0 || v.Detail != nil || v.Judge != nil {
 				t.Fatalf("want zero verdict on error, got %+v", v)
 			}
 		})

@@ -51,16 +51,31 @@ type Config struct {
 	Budget RunBudget `yaml:"-"`
 }
 
+// DefaultJudgeModel is the pinned fast-tier default judge model (US6, judge-ledger
+// Defaults policy). Haiku-class: ~80% cheaper per input and output token than the
+// former Opus-tier default (SC-006 — Opus 4.8 $5/$25 per MTok vs Haiku 4.5 $1/$5 =
+// 80% input and 80% output reduction), and unlike Opus it accepts the temperature
+// knob best-of-N voting needs (see internal/judge/claude.go temperatureAcceptingFamilies,
+// which matches the "haiku" substring). To upgrade accuracy, set judge.model in config
+// — one line, documented in the README.
+const DefaultJudgeModel = "claude-haiku-4-5"
+
 // JudgeConfig configures the semantic (LLM-judge) result matcher. The whole block
 // is optional — a project that never writes `the result means` never needs it; the
 // defaults applied in Load make an omitted block valid.
 type JudgeConfig struct {
 	Backend string `yaml:"backend"` // default "claude"
-	Model   string `yaml:"model"`   // default "claude-opus-4-8"
+	Model   string `yaml:"model"`   // default DefaultJudgeModel (fast-tier haiku)
 	Votes   int    `yaml:"votes"`   // default 1; best-of-N majority (odd N required)
 	// Temperature is applied only on models that accept it (Sonnet 4.6 / Haiku 4.5);
 	// omitted on Opus-tier. Optional knob, default 0.
 	Temperature float64 `yaml:"temperature"`
+	// MaxCostUSD is the optional post-scenario judge-spend ceiling in USD (US6). Unset
+	// or 0 means unlimited — today's behaviour, no budget accounting. When positive,
+	// completed judge cost is summed after each scenario and the suite aborts once it
+	// is exceeded (judge-ledger budget contract). A negative value is rejected at load
+	// rather than silently treated as unlimited (Constitution IV).
+	MaxCostUSD float64 `yaml:"max_cost_usd"`
 }
 
 type Endpoint struct {
@@ -187,7 +202,7 @@ func Load(data []byte) (Config, error) {
 		c.Judge.Backend = "claude"
 	}
 	if c.Judge.Model == "" {
-		c.Judge.Model = "claude-opus-4-8"
+		c.Judge.Model = DefaultJudgeModel
 	}
 	if c.Judge.Votes == 0 {
 		c.Judge.Votes = 1
@@ -212,6 +227,16 @@ func validateJudge(j JudgeConfig) error {
 	}
 	if j.Temperature < 0 || math.IsNaN(j.Temperature) || math.IsInf(j.Temperature, 0) {
 		return fmt.Errorf("judge.temperature must be finite and >= 0, got %v", j.Temperature)
+	}
+	// votes>1 at temperature 0 sends near-identical calls, so best-of-N majority burns
+	// cost without diversity. Reject loudly, naming BOTH remedies, rather than silently
+	// auto-diversifying (Constitution IV): the human chooses a higher temperature or a
+	// single vote (judge-ledger Defaults policy).
+	if j.Votes > 1 && j.Temperature == 0 {
+		return fmt.Errorf("judge: votes=%d with temperature=0 sends near-identical calls; raise temperature (e.g. 0.7) or set votes: 1", j.Votes)
+	}
+	if j.MaxCostUSD < 0 || math.IsNaN(j.MaxCostUSD) || math.IsInf(j.MaxCostUSD, 0) {
+		return fmt.Errorf("judge.max_cost_usd must be finite and >= 0, got %v", j.MaxCostUSD)
 	}
 	return nil
 }

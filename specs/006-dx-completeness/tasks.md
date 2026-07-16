@@ -45,12 +45,12 @@ number; each independently shippable.
 
 **Independent Test**: fake judge with fixed usage → per-scenario + total ledger in JSON/HTML; 1-cent budget aborts; votes>1@temp0 fails at load.
 
-- [ ] T008 [US6] Failing tests: `core.JudgeUsage` captured per call (SDK usage fields), aggregated across votes by the semantic matcher into Verdict detail in internal/judge/claude_test.go, internal/comparator/semantic_test.go (go-test-writer, red)
-- [ ] T009 [US6] Implement usage capture + aggregation (core.JudgeUsage type, `go generate` mocks) in internal/core/core.go, internal/judge/claude.go, internal/comparator/semantic.go (go-test-writer, green)
-- [ ] T010 [US6] Failing tests: collector sums per-scenario + suite `judgeTotal` — FR-006's "suite summary" surface is this total rendered in the JSON report and the HTML summary block; Mentat emits no separate console total (godog's `pretty` stdout is not Mentat-formatted); JSON `judge{}` objects (absent when no calls — no fabricated zeros); HTML section incl. the suite-total row; cost via pricing table with ambiguous-model hard error in internal/report/collector_test.go, internal/report/report_test.go (go-test-writer, red)
-- [ ] T011 [US6] Implement ledger rendering + `judge.max_cost_usd` config + post-scenario budget check aborting with spent/budget/scenario named in internal/report/collector.go, internal/report/json.go, internal/report/html.go, internal/config/config.go, internal/steps/steps.go (go-test-writer, green)
-- [ ] T012 [US6] Failing tests: default judge model constant is fast tier; `votes>1 && temperature==0` → load error naming both remedies; L3 semantic meta-tests pass under new default in internal/config/config_test.go, internal/steps/semantic_meta_test.go (go-test-writer, red)
-- [ ] T013 [US6] Implement default swap + config guard; record price-sheet math for SC-006 in the PR description in internal/config/config.go (go-test-writer, green)
+- [X] T008 [US6] Failing tests: `core.JudgeUsage` captured per call (SDK usage fields), aggregated across votes by the semantic matcher into Verdict detail in internal/judge/claude_test.go, internal/comparator/semantic_test.go (go-test-writer, red)
+- [X] T009 [US6] Implement usage capture + aggregation (core.JudgeUsage type, `go generate` mocks) in internal/core/core.go, internal/judge/claude.go, internal/comparator/semantic.go (go-test-writer, green)
+- [X] T010 [US6] Failing tests: collector sums per-scenario + suite `judgeTotal` — FR-006's "suite summary" surface is this total rendered in the JSON report and the HTML summary block; Mentat emits no separate console total (godog's `pretty` stdout is not Mentat-formatted); JSON `judge{}` objects (absent when no calls — no fabricated zeros); HTML section incl. the suite-total row; cost via pricing table with ambiguous-model hard error in internal/report/collector_test.go, internal/report/report_test.go (go-test-writer, red)
+- [X] T011 [US6] Implement ledger rendering + `judge.max_cost_usd` config + post-scenario budget check aborting with spent/budget/scenario named in internal/report/collector.go, internal/report/json.go, internal/report/html.go, internal/config/config.go, internal/steps/steps.go (go-test-writer, green)
+- [X] T012 [US6] Failing tests: default judge model constant is fast tier; `votes>1 && temperature==0` → load error naming both remedies; L3 semantic meta-tests pass under new default in internal/config/config_test.go, internal/steps/semantic_meta_test.go (go-test-writer, red)
+- [X] T013 [US6] Implement default swap + config guard; record price-sheet math for SC-006 in the PR description in internal/config/config.go (go-test-writer, green)
 
 ---
 

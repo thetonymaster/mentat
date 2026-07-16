@@ -42,6 +42,17 @@ type world struct {
 	n          int
 	parallel   bool
 	lastDetail *core.AggregateDetail
+	// lastJudge accumulates the judge-token usage of every semantic check in the
+	// scenario (US6). The After hook is verdict-authoritative (it rebuilds the
+	// Verdict from stepErr, not the comparator's return), so — mirroring lastDetail —
+	// check() records each Verdict.Judge here so the usage still reaches report.Derive.
+	// Nil until a semantic check actually issues a judge call (no fabricated zeros).
+	lastJudge *core.JudgeUsage
+	// budget is the optional post-scenario judge-spend ceiling (US6); nil disables the
+	// check (today's behaviour). abort cancels the suite context when the budget trips,
+	// so no new scenario starts a judge call. Both are wired at the composition root.
+	budget *report.Budget
+	abort  context.CancelFunc
 }
 
 // Initializer binds the v1 grammar; results go to a discarded collector.
@@ -51,10 +62,20 @@ func Initializer(eng *engine.Engine) func(*godog.ScenarioContext) {
 }
 
 // InitializerWithCollector binds the v1 grammar and records one ScenarioResult per
-// scenario into col. Use this at the composition root to capture run reports.
+// scenario into col. Use this at the composition root to capture run reports. It runs
+// with no judge budget (unlimited) — today's behaviour.
 func InitializerWithCollector(eng *engine.Engine, col *report.Collector) func(*godog.ScenarioContext) {
+	return InitializerWithBudget(eng, col, nil, nil)
+}
+
+// InitializerWithBudget is InitializerWithCollector plus a post-scenario judge-spend
+// budget (US6). After each scenario's ledger is collected, the budget accounts its
+// completed judge cost; when the running total crosses the ceiling (or a usage cannot
+// be priced) abort cancels the suite context so no NEW scenario starts a judge call.
+// A nil budget disables the check (unlimited); a nil abort makes the trip advisory.
+func InitializerWithBudget(eng *engine.Engine, col *report.Collector, budget *report.Budget, abort context.CancelFunc) func(*godog.ScenarioContext) {
 	return func(sc *godog.ScenarioContext) {
-		w := &world{eng: eng, col: col}
+		w := &world{eng: eng, col: col, budget: budget, abort: abort}
 
 		// Registration is table-driven: registerSteps binds every pattern in the
 		// stepDefs metadata table (metadata.go), which is the single source of truth
@@ -84,7 +105,7 @@ func InitializerWithCollector(eng *engine.Engine, col *report.Collector) func(*g
 		})
 
 		sc.After(func(ctx context.Context, scenario *godog.Scenario, stepErr error) (context.Context, error) {
-			v := core.Verdict{Pass: stepErr == nil, Detail: w.lastDetail}
+			v := core.Verdict{Pass: stepErr == nil, Detail: w.lastDetail, Judge: w.lastJudge}
 			if stepErr != nil {
 				v.Reasons = []string{stepErr.Error()}
 			}
@@ -93,6 +114,16 @@ func InitializerWithCollector(eng *engine.Engine, col *report.Collector) func(*g
 			// error. The verdict comes only from stepErr, so the hook returns nil.
 			sr := report.Derive(scenario.Name, tagNames(scenario.Tags), v, w.evs, w.eng.Pricing())
 			w.col.Append(sr)
+			// Post-scenario judge budget (US6): account this scenario's completed judge
+			// cost. On a trip (or an unpriceable usage) abort the suite context so the
+			// next scenario starts no new judge call — in-flight votes already finished.
+			// The scenario verdict itself is untouched (the hook still returns nil): the
+			// budget gates SUBSEQUENT scenarios, it does not retroactively fail this one.
+			if w.budget != nil {
+				if err := w.budget.Add(sr); err != nil && w.abort != nil {
+					w.abort()
+				}
+			}
 			return ctx, nil
 		})
 	}
@@ -145,6 +176,12 @@ func (w *world) check(name string, exp core.Expectation) error {
 		return fmt.Errorf("no comparator %q", name)
 	}
 	v, err := c.Compare(w.ctx, w.ev, exp)
+	// Record any judge usage BEFORE the pass/fail branch: a failing semantic verdict
+	// still consumed judge tokens, and the ledger must account for it (US6). A
+	// non-semantic comparator leaves v.Judge nil, so this is a no-op for them.
+	if v.Judge != nil {
+		w.lastJudge = addJudge(w.lastJudge, v.Judge)
+	}
 	if err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}
@@ -152,6 +189,25 @@ func (w *world) check(name string, exp core.Expectation) error {
 		return fmt.Errorf("%s failed: %s", name, strings.Join(v.Reasons, "; "))
 	}
 	return nil
+}
+
+// addJudge folds add into acc field-wise, allocating acc on first use. It sums the
+// per-check judge usage across a scenario's semantic steps (US6). The judge model id
+// is carried (last non-empty wins — every vote goes to the same configured judge).
+func addJudge(acc, add *core.JudgeUsage) *core.JudgeUsage {
+	if add == nil {
+		return acc
+	}
+	if acc == nil {
+		acc = &core.JudgeUsage{}
+	}
+	acc.Calls += add.Calls
+	acc.InputTokens += add.InputTokens
+	acc.OutputTokens += add.OutputTokens
+	if add.Model != "" {
+		acc.Model = add.Model
+	}
+	return acc
 }
 
 func (w *world) toolsInOrder(tbl *godog.Table) error {

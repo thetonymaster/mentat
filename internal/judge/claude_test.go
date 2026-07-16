@@ -42,6 +42,25 @@ func messageJSON(stopReason, text string) string {
 	return string(b)
 }
 
+// messageJSONUsage renders a success body whose usage block carries the given
+// input/output token counts, so a test can assert per-call usage capture against
+// known values (the body's own "model" stays fixed to prove the judge records the
+// CONFIGURED model, not the response's).
+func messageJSONUsage(stopReason, text string, inTok, outTok int64) string {
+	m := map[string]any{
+		"id":            "msg_1",
+		"type":          "message",
+		"role":          "assistant",
+		"model":         "claude-opus-4-8",
+		"content":       []map[string]any{{"type": "text", "text": text}},
+		"stop_reason":   stopReason,
+		"stop_sequence": nil,
+		"usage":         map[string]any{"input_tokens": inTok, "output_tokens": outTok},
+	}
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
 // messageJSONNoContent renders a success body with an empty content array.
 func messageJSONNoContent(stopReason string) string {
 	m := map[string]any{
@@ -120,7 +139,7 @@ func TestClaudeJudge(t *testing.T) {
 			resp:        fakeResp{status: 200, body: okBody},
 			model:       "claude-opus-4-8",
 			wantCalls:   1,
-			wantVerdict: core.JudgeVerdict{Match: true, Reason: "the candidate restates the expected answer"},
+			wantVerdict: core.JudgeVerdict{Match: true, Reason: "the candidate restates the expected answer", Usage: core.JudgeUsage{Calls: 1, InputTokens: 1, OutputTokens: 1, Model: "claude-opus-4-8"}},
 		},
 		{
 			name:        "valid no-match verdict",
@@ -128,7 +147,7 @@ func TestClaudeJudge(t *testing.T) {
 			resp:        fakeResp{status: 200, body: noMatchBody},
 			model:       "claude-opus-4-8",
 			wantCalls:   1,
-			wantVerdict: core.JudgeVerdict{Match: false, Reason: "the candidate contradicts the expected answer"},
+			wantVerdict: core.JudgeVerdict{Match: false, Reason: "the candidate contradicts the expected answer", Usage: core.JudgeUsage{Calls: 1, InputTokens: 1, OutputTokens: 1, Model: "claude-opus-4-8"}},
 		},
 		{
 			name:       "malformed verdict json",
@@ -217,6 +236,41 @@ func TestClaudeJudge(t *testing.T) {
 			}
 			if n := atomic.LoadInt32(&calls); n != tt.wantCalls {
 				t.Fatalf("server calls = %d, want %d", n, tt.wantCalls)
+			}
+		})
+	}
+}
+
+// TestClaudeJudge_UsageCapture asserts a single successful Judge call records the
+// SDK's token usage plus the CONFIGURED model, with Calls=1 (T008/US6). The model
+// asserted is the one passed to newTestJudge, not the response body's "model", so
+// this pins that the ledger prices by the model Mentat asked for.
+func TestClaudeJudge_UsageCapture(t *testing.T) {
+	tests := []struct {
+		name   string
+		model  string
+		inTok  int64
+		outTok int64
+	}{
+		{name: "typical usage", model: "claude-haiku-4-5", inTok: 1250, outTok: 90},
+		{name: "zero output tokens still captured", model: "claude-sonnet-4-6", inTok: 42, outTok: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Serial by design: t.Setenv panics under t.Parallel().
+			t.Setenv("ANTHROPIC_API_KEY", "test-key")
+			body := messageJSONUsage("end_turn", `{"match":true,"reason":"ok"}`, tt.inTok, tt.outTok)
+			var calls int32
+			srv := newServer(t, &calls, fakeResp{status: 200, body: body})
+			j := newTestJudge(t, srv.URL, tt.model, 0)
+
+			got, err := j.Judge(context.Background(), core.JudgeRequest{Candidate: "c", Expected: "e"})
+			if err != nil {
+				t.Fatalf("Judge returned error: %v", err)
+			}
+			want := core.JudgeUsage{Calls: 1, InputTokens: tt.inTok, OutputTokens: tt.outTok, Model: tt.model}
+			if got.Usage != want {
+				t.Fatalf("usage = %+v, want %+v", got.Usage, want)
 			}
 		})
 	}

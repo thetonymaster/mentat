@@ -295,26 +295,26 @@ func TestLoadJudgeDefaults(t *testing.T) {
 		wantTemp    float64
 	}{
 		{
-			name:        "block omitted entirely applies all defaults",
+			name:        "block omitted entirely applies all defaults (model is fast-tier haiku)",
 			yaml:        "store: tempo\n",
 			wantBackend: "claude",
-			wantModel:   "claude-opus-4-8",
+			wantModel:   "claude-haiku-4-5",
 			wantVotes:   1,
 			wantTemp:    0,
 		},
 		{
-			name:        "empty backend defaults to claude",
-			yaml:        "judge:\n  model: claude-haiku-4-5\n  votes: 3\n",
+			name:        "empty backend defaults to claude (temperature set so votes>1 is valid)",
+			yaml:        "judge:\n  model: claude-haiku-4-5\n  votes: 3\n  temperature: 0.7\n",
 			wantBackend: "claude",
 			wantModel:   "claude-haiku-4-5",
 			wantVotes:   3,
-			wantTemp:    0,
+			wantTemp:    0.7,
 		},
 		{
-			name:        "empty model defaults to claude-opus-4-8",
+			name:        "empty model defaults to fast-tier haiku",
 			yaml:        "judge:\n  backend: claude\n  votes: 1\n",
 			wantBackend: "claude",
-			wantModel:   "claude-opus-4-8",
+			wantModel:   "claude-haiku-4-5",
 			wantVotes:   1,
 			wantTemp:    0,
 		},
@@ -385,13 +385,13 @@ func TestLoadRejectsInvalidJudge(t *testing.T) {
 			errSub:  "judge.votes must be odd, got 4",
 		},
 		{
-			name:    "odd votes 3 allowed",
-			yaml:    "judge:\n  votes: 3\n",
+			name:    "odd votes 3 with temperature allowed",
+			yaml:    "judge:\n  votes: 3\n  temperature: 0.7\n",
 			wantErr: false,
 		},
 		{
-			name:    "odd votes 5 allowed",
-			yaml:    "judge:\n  votes: 5\n",
+			name:    "odd votes 5 with temperature allowed",
+			yaml:    "judge:\n  votes: 5\n  temperature: 0.7\n",
 			wantErr: false,
 		},
 		{
@@ -417,6 +417,17 @@ func TestLoadRejectsInvalidJudge(t *testing.T) {
 			yaml:    "judge:\n  votes: 1\n  temperature: 0\n",
 			wantErr: false,
 		},
+		{
+			name:    "negative max_cost_usd rejected (no silent unlimited fallback)",
+			yaml:    "judge:\n  votes: 1\n  max_cost_usd: -0.01\n",
+			wantErr: true,
+			errSub:  "judge.max_cost_usd must be finite and >= 0",
+		},
+		{
+			name:    "zero max_cost_usd allowed (unlimited)",
+			yaml:    "judge:\n  votes: 1\n  max_cost_usd: 0\n",
+			wantErr: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -428,6 +439,133 @@ func TestLoadRejectsInvalidJudge(t *testing.T) {
 				}
 				if !strings.Contains(err.Error(), tt.errSub) {
 					t.Fatalf("error %q does not contain %q", err.Error(), tt.errSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+		})
+	}
+}
+
+// TestLoadJudgeMaxCostUSD proves the optional judge.max_cost_usd budget knob loads
+// (US6): an explicit ceiling round-trips, and an omitted one defaults to 0 —
+// unlimited, today's behaviour (no budget accounting).
+func TestLoadJudgeMaxCostUSD(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		yaml    string
+		wantMax float64
+	}{
+		{
+			name:    "omitted defaults to unlimited (0)",
+			yaml:    "judge:\n  votes: 1\n",
+			wantMax: 0,
+		},
+		{
+			name:    "explicit ceiling round-trips",
+			yaml:    "judge:\n  votes: 1\n  max_cost_usd: 0.05\n",
+			wantMax: 0.05,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c, err := Load([]byte(tt.yaml))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if c.Judge.MaxCostUSD != tt.wantMax {
+				t.Errorf("Judge.MaxCostUSD = %v, want %v", c.Judge.MaxCostUSD, tt.wantMax)
+			}
+		})
+	}
+}
+
+// TestLoadDefaultsJudgeModelToFastTier proves the US6 default swap (judge-ledger
+// contract, Defaults policy): an omitted or empty judge.model resolves to the
+// pinned fast-tier default (Haiku-class). The fast tier is >=80% cheaper per token
+// than the former Opus-tier default (SC-006, price-sheet math in the PR) and,
+// unlike Opus, accepts the temperature knob best-of-N voting needs.
+func TestLoadDefaultsJudgeModelToFastTier(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{name: "judge block omitted entirely", yaml: "store: tempo\n"},
+		{name: "judge block present but model empty", yaml: "judge:\n  backend: claude\n  votes: 1\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c, err := Load([]byte(tt.yaml))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if c.Judge.Model != "claude-haiku-4-5" {
+				t.Fatalf("Judge.Model = %q, want fast-tier default %q", c.Judge.Model, "claude-haiku-4-5")
+			}
+		})
+	}
+}
+
+// TestLoadRejectsVotesWithoutTemperature proves the US6 best-of-N guard (judge-ledger
+// contract, Defaults policy): votes>1 at temperature 0 sends near-identical calls, so
+// majority voting is pointless. Load fails loudly with a message naming BOTH remedies
+// — raise temperature OR drop to votes: 1 — rather than silently running a useless
+// best-of-N (Constitution IV: no silent fallback). votes==1 (the default) and votes>1
+// with a positive temperature both load clean.
+func TestLoadRejectsVotesWithoutTemperature(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		yaml    string
+		wantErr bool
+		errSubs []string // all must appear when wantErr
+	}{
+		{
+			name:    "votes 3 at temperature 0 rejected naming both remedies",
+			yaml:    "judge:\n  votes: 3\n",
+			wantErr: true,
+			errSubs: []string{"votes=3", "temperature=0", "raise temperature", "set votes: 1"},
+		},
+		{
+			name:    "votes 5 at temperature 0 rejected naming both remedies",
+			yaml:    "judge:\n  votes: 5\n",
+			wantErr: true,
+			errSubs: []string{"votes=5", "raise temperature", "set votes: 1"},
+		},
+		{
+			name:    "votes 3 with temperature 0.7 loads clean",
+			yaml:    "judge:\n  votes: 3\n  temperature: 0.7\n",
+			wantErr: false,
+		},
+		{
+			name:    "votes 1 at temperature 0 (the defaults) loads clean",
+			yaml:    "judge:\n  votes: 1\n  temperature: 0\n",
+			wantErr: false,
+		},
+		{
+			name:    "omitted judge block (votes defaults to 1) loads clean",
+			yaml:    "store: tempo\n",
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Load([]byte(tt.yaml))
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				for _, sub := range tt.errSubs {
+					if !strings.Contains(err.Error(), sub) {
+						t.Fatalf("error %q does not contain %q", err.Error(), sub)
+					}
 				}
 				return
 			}
@@ -726,8 +864,8 @@ func TestLoadAbsentOptionalKeysApplyDefaults(t *testing.T) {
 			if cfg.Poll.SearchLimit != 100 {
 				t.Errorf("Poll.SearchLimit = %d, want 100 (default)", cfg.Poll.SearchLimit)
 			}
-			if cfg.Judge.Backend != "claude" || cfg.Judge.Model != "claude-opus-4-8" || cfg.Judge.Votes != 1 {
-				t.Errorf("Judge = %+v, want defaults {claude claude-opus-4-8 1 0}", cfg.Judge)
+			if cfg.Judge.Backend != "claude" || cfg.Judge.Model != "claude-haiku-4-5" || cfg.Judge.Votes != 1 {
+				t.Errorf("Judge = %+v, want defaults {claude claude-haiku-4-5 1 0}", cfg.Judge)
 			}
 			wantSuite := RunBudget{Timeout: DefaultRunTimeout, Unbounded: false, KillGrace: DefaultKillGrace}
 			if cfg.Budget != wantSuite {

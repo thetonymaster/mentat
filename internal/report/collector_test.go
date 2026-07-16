@@ -90,6 +90,75 @@ func TestCollector_Scenarios(t *testing.T) {
 	}
 }
 
+// TestCollector_JudgeTotal proves the collector folds each scenario's judge usage
+// into a suite JudgeTotal (US6 / judge-ledger contract): calls, input and output
+// tokens sum field-wise across scenarios that made judge calls, and the total is
+// nil when NO scenario made a judge call — absence of usage is not a fabricated
+// all-zero total (FR-006, "no fabricated zeros"). Cost is filled later by Price;
+// the collector sums only the raw token counts.
+func TestCollector_JudgeTotal(t *testing.T) {
+	tests := []struct {
+		name      string
+		appends   []core.ScenarioResult
+		wantNil   bool
+		wantCalls int
+		wantIn    int64
+		wantOut   int64
+	}{
+		{
+			name: "no judge calls yields a nil total (no fabricated zeros)",
+			appends: []core.ScenarioResult{
+				{Name: "a", Pass: true, Cost: 0.01},
+				{Name: "b", Pass: false},
+			},
+			wantNil: true,
+		},
+		{
+			name: "sums judge usage across the scenarios that called the judge",
+			appends: []core.ScenarioResult{
+				{Name: "a", Pass: true, Judge: &core.JudgeUsage{Calls: 3, InputTokens: 1250, OutputTokens: 90, Model: "judge-model"}},
+				{Name: "b", Pass: true}, // made no judge call — contributes nothing
+				{Name: "c", Pass: true, Judge: &core.JudgeUsage{Calls: 9, InputTokens: 3750, OutputTokens: 270, Model: "judge-model"}},
+			},
+			wantCalls: 12,
+			wantIn:    5000,
+			wantOut:   360,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := NewCollector()
+			for _, sr := range tt.appends {
+				c.Append(sr)
+			}
+			rep := c.Report(time.Now(), time.Second, false)
+			if tt.wantNil {
+				if rep.JudgeTotal != nil {
+					t.Fatalf("JudgeTotal = %+v, want nil (no judge calls => no fabricated total)", rep.JudgeTotal)
+				}
+				return
+			}
+			if rep.JudgeTotal == nil {
+				t.Fatal("JudgeTotal is nil, want the summed judge usage")
+			}
+			if rep.JudgeTotal.Calls != tt.wantCalls {
+				t.Errorf("JudgeTotal.Calls = %d, want %d", rep.JudgeTotal.Calls, tt.wantCalls)
+			}
+			if rep.JudgeTotal.InputTokens != tt.wantIn {
+				t.Errorf("JudgeTotal.InputTokens = %d, want %d", rep.JudgeTotal.InputTokens, tt.wantIn)
+			}
+			if rep.JudgeTotal.OutputTokens != tt.wantOut {
+				t.Errorf("JudgeTotal.OutputTokens = %d, want %d", rep.JudgeTotal.OutputTokens, tt.wantOut)
+			}
+			// The suite total is not attributed to one model (the contract's judgeTotal
+			// carries no model key), so the collector leaves Model empty.
+			if rep.JudgeTotal.Model != "" {
+				t.Errorf("JudgeTotal.Model = %q, want empty (total is not per-model)", rep.JudgeTotal.Model)
+			}
+		})
+	}
+}
+
 func TestCollector_ConcurrentAppend(t *testing.T) {
 	c := NewCollector()
 	const n = 100

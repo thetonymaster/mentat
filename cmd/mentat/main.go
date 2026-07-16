@@ -115,6 +115,15 @@ func runMain(args []string) {
 		stop() // a second signal now terminates the process by default
 	}()
 
+	// Judge-spend budget (feature 006, US6): once the post-scenario judge cost crosses
+	// cfg.Judge.MaxCostUSD, the After hook cancels budgetCtx so no new scenario starts a
+	// judge call. It is a CHILD of sigCtx (a signal still cancels everything) so that a
+	// budget trip does NOT mark the run interrupted (interrupted keys off sigCtx alone).
+	// An unset/0 ceiling disables accounting — byte-identical to the pre-006 flow.
+	budgetCtx, budgetCancel := context.WithCancel(sigCtx)
+	defer budgetCancel()
+	budget := report.NewBudget(cfg.Judge.MaxCostUSD, eng.Pricing())
+
 	opts := godog.Options{
 		Format:         "pretty",
 		Paths:          paths,
@@ -122,11 +131,11 @@ func runMain(args []string) {
 		Concurrency:    *concurrency,
 		Output:         os.Stdout,
 		StopOnFailure:  *failFast,
-		DefaultContext: sigCtx,
+		DefaultContext: budgetCtx,
 	}
 
 	col := report.NewCollector()
-	suite := godog.TestSuite{ScenarioInitializer: steps.InitializerWithCollector(eng, col), Options: &opts}
+	suite := godog.TestSuite{ScenarioInitializer: steps.InitializerWithBudget(eng, col, budget, budgetCancel), Options: &opts}
 	started := time.Now()
 	code := suite.Run()
 	interrupted := sigCtx.Err() != nil
@@ -146,11 +155,31 @@ func runMain(args []string) {
 		targets["junit"] = *junit
 	}
 	if len(targets) > 0 {
-		if err := report.EmitReports(col.Report(started, time.Since(started), interrupted), targets); err != nil {
+		// Price fills the judge-ledger cost (US6) before rendering. An unknown/ambiguous
+		// judge model is a hard error here (never a fabricated $0 for a real call): print
+		// it and skip emission rather than write a lie. A run with no judge calls prices
+		// to a no-op, so the emitted bytes are byte-identical to the pre-006 flow.
+		rep := col.Report(started, time.Since(started), interrupted)
+		if err := report.Price(&rep, eng.Pricing()); err != nil {
 			fmt.Fprintln(os.Stderr, "mentat:", err)
 			if code == 0 {
 				code = 1
 			}
+		} else if err := report.EmitReports(rep, targets); err != nil {
+			fmt.Fprintln(os.Stderr, "mentat:", err)
+			if code == 0 {
+				code = 1
+			}
+		}
+	}
+
+	// A tripped judge budget is a hard failure (US6): report it (naming spent, budget,
+	// and the crossing scenario) and exit non-zero. The reports above already emitted
+	// with the ledger, so the operator still gets the full accounting.
+	if err := budget.Err(); err != nil {
+		fmt.Fprintln(os.Stderr, "mentat:", err)
+		if code == 0 {
+			code = 1
 		}
 	}
 
