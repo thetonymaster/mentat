@@ -104,8 +104,8 @@ number; each independently shippable.
 
 **Independent Test**: `make labs` builds binaries, rebuilds on source change; report-meta tests use mentatBin + t.Parallel.
 
-- [ ] T025 [P] [US9] Add `make labs` (bin/researchbot, bin/orderflow, captures) with Go-source prerequisites; `harness-up` depends on it; point mentat.yaml + e2e configs at binaries in Makefile, mentat.yaml, e2e/ configs (go-coder)
-- [ ] T026 [P] [US9] Fix e2e/report_meta_test.go: `go run` → `mentatBin`, add `t.Parallel()` (top + subtests); verify suite green (go-test-writer)
+- [X] T025 [P] [US9] Add `make labs` (bin/researchbot, bin/orderflow, captures) with Go-source prerequisites; `harness-up` depends on it; point mentat.yaml + e2e configs at binaries in Makefile, mentat.yaml, e2e/ configs (go-coder)
+- [X] T026 [P] [US9] Fix e2e/report_meta_test.go: `go run` → `mentatBin`, add `t.Parallel()` (top + subtests); verify suite green (go-test-writer)
 
 ---
 
