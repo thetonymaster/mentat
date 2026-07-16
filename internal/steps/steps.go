@@ -56,49 +56,11 @@ func InitializerWithCollector(eng *engine.Engine, col *report.Collector) func(*g
 	return func(sc *godog.ScenarioContext) {
 		w := &world{eng: eng, col: col}
 
-		sc.Step(`^the (?:agent|service) target "([^"]+)"$`, w.target_)
-		sc.Step(`^I run scenario "([^"]+)"$`, w.runScenario)
-		sc.Step(`^I run the agent with prompt "([^"]*)"$`, w.runPrompt)
-		sc.Step(`^the agent calls tools in order:$`, w.toolsInOrder)
-		sc.Step(`^the tool "([^"]+)" is never called$`, w.toolNeverCalled)
-		sc.Step(`^the tool "([^"]+)" is called at most (\d+) times$`, w.toolCalledAtMost)
-		sc.Step(`^total tokens are under (\d+)$`, w.tokensUnder)
-		sc.Step(`^total cost is under ([0-9.]+) USD$`, w.costUnder)
-		sc.Step(`^total latency is under (\d+) ms$`, w.latencyUnder)
-		sc.Step(`^no span has status "ERROR"$`, w.noErrorSpans)
-		sc.Step(`^the result contains "([^"]*)"$`, w.resultContains)
-		sc.Step(`^the result equals "([^"]*)"$`, w.resultEquals)
-		sc.Step(`^the response status is (\d+)$`, w.responseStatus)
-		sc.Step(`^the result matches regex "([^"]*)"$`, w.resultMatchesRegex)
-		sc.Step(`^the result means "([^"]*)"$`, w.resultMeans)
-		sc.Step(`^the result means:$`, w.resultMeansDoc)
-		sc.Step(`^the services are called in order:$`, w.servicesInOrder)
-		sc.Step(`^the service "([^"]+)" is never called$`, w.serviceNeverCalled)
-		sc.Step(`^the response body json-contains:$`, w.responseBodyJSONContains)
-		sc.Step(`^the response body matches schema:$`, w.responseBodyMatchesSchema)
-		sc.Step(`^the run satisfies "([^"]*)"$`, w.runSatisfies)
-		sc.Step(`^the run satisfies:$`, w.runSatisfiesDoc)
-		sc.Step(`^the runs satisfy "([^"]*)"$`, w.runsSatisfies)
-		sc.Step(`^the runs satisfy:$`, w.runsSatisfiesDoc)
-
-		sc.Step(`^a span matching "([^"]*)" exists$`, w.shapeExists)
-		sc.Step(`^no span matching "([^"]*)" exists$`, w.shapeAbsent)
-		sc.Step(`^at least (\d+) spans? match(?:es)? "([^"]*)"$`, w.shapeAtLeast)
-		sc.Step(`^exactly (\d+) spans? match(?:es)? "([^"]*)"$`, w.shapeExactly)
-		sc.Step(`^a span matching "([^"]*)" is a child of a span matching "([^"]*)"$`, w.shapeChildOf)
-		sc.Step(`^a span matching "([^"]*)" is a descendant of a span matching "([^"]*)"$`, w.shapeDescendantOf)
-		sc.Step(`^a span matching "([^"]*)" has at least (\d+) children matching "([^"]*)"$`, w.shapeFanoutAtLeast)
-		sc.Step(`^a span matching "([^"]*)" has exactly (\d+) children matching "([^"]*)"$`, w.shapeFanoutExactly)
-
-		sc.Step(`^the run matches shape "([^"]*)"$`, w.matchesShape)
-
-		// §4.1 span-attribute result source — tool convenience form
-		sc.Step(`^the result of (?:(the (?:first|last|\d+(?:st|nd|rd|th)) call|every call|any call) to )?tool "([^"]+)" (contains|equals|matches regex) "([^"]*)"$`, w.resultToolValue)
-		sc.Step(`^the result of (?:(the (?:first|last|\d+(?:st|nd|rd|th)) call|every call|any call) to )?tool "([^"]+)" (json-contains|matches schema):$`, w.resultToolDoc)
-
-		// §4.2 span-attribute result source — general selector form
-		sc.Step(`^attribute "([^"]+)" of (?:(the (?:first|last|\d+(?:st|nd|rd|th))|every|any) )?(?:the )?span matching "([^"]+)" (contains|equals|matches regex) "([^"]*)"$`, w.resultAttrValue)
-		sc.Step(`^attribute "([^"]+)" of (?:(the (?:first|last|\d+(?:st|nd|rd|th))|every|any) )?(?:the )?span matching "([^"]+)" (json-contains|matches schema):$`, w.resultAttrDoc)
+		// Registration is table-driven: registerSteps binds every pattern in the
+		// stepDefs metadata table (metadata.go), which is the single source of truth
+		// shared by `mentat steps` / docs/steps.md. A drift test fails if any step is
+		// registered outside this table (see metadata_test.go).
+		registerSteps(sc, w)
 
 		// §7: compile every CEL expression in the scenario before any step runs,
 		// so a malformed expectation fails before an expensive SUT is driven.

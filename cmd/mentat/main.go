@@ -16,11 +16,39 @@ import (
 	"github.com/thetonymaster/mentat/internal/steps"
 )
 
+// main dispatches to a subcommand. `run` drives behaviour scenarios (its flow is
+// byte-stable — SC-005); `steps` prints/generates the step reference. Unknown or
+// missing subcommands print usage and exit 2, matching the pre-subcommand CLI.
 func main() {
-	if len(os.Args) < 2 || os.Args[1] != "run" {
-		fmt.Fprintln(os.Stderr, "usage: mentat run [paths...] [flags]")
+	if len(os.Args) < 2 {
+		usage()
 		os.Exit(2)
 	}
+	switch os.Args[1] {
+	case "run":
+		runMain(os.Args[2:])
+	case "steps":
+		if err := stepsCmd(os.Args[2:], os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "mentat:", err)
+			os.Exit(1)
+		}
+	default:
+		usage()
+		os.Exit(2)
+	}
+}
+
+func usage() {
+	fmt.Fprintln(os.Stderr, "usage: mentat <command> [flags]")
+	fmt.Fprintln(os.Stderr, "commands:")
+	fmt.Fprintln(os.Stderr, "  run    [paths...] [flags]     run behaviour scenarios")
+	fmt.Fprintln(os.Stderr, "  steps  [--format md|text]     print the step reference")
+}
+
+// runMain is the unchanged `mentat run` flow (feature 003/005): its stdout is the
+// byte-stable happy path (SC-005), so this body must stay identical to the
+// pre-subcommand version — only its arg source moved from os.Args[2:] to args.
+func runMain(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	cfgPath := fs.String("config", "mentat.yaml", "config file")
 	concurrency := fs.Int("concurrency", 1, "scenario scheduler width")
@@ -31,7 +59,7 @@ func main() {
 	failFast := fs.Bool("fail-fast", false, "stop on first failure")
 	verbose := fs.Bool("v", false, "narrate the run at Info level to stderr")
 	debug := fs.Bool("vv", false, "narrate the run at Debug level to stderr (implies -v)")
-	_ = fs.Parse(os.Args[2:])
+	_ = fs.Parse(args)
 	paths := fs.Args()
 	if len(paths) == 0 {
 		paths = []string{"features"}
