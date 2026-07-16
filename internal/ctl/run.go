@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/engine"
@@ -49,17 +50,20 @@ func Run(ctx context.Context, eng *engine.Engine, opts RunOpts, w io.Writer) (co
 			return ev, fmt.Errorf("ctl: encode json: %w", err)
 		}
 	default:
-		if _, err := fmt.Fprintf(w, "run %s\n", ev.RunID); err != nil {
-			return ev, fmt.Errorf("ctl: write run id for run %s: %w", ev.RunID, err)
+		summary, err := RenderSummary(ev, eng.Pricing())
+		if err != nil {
+			return ev, err
 		}
-		if _, err := fmt.Fprintf(w, "tools: %v\n", toolNames(ev)); err != nil {
-			return ev, fmt.Errorf("ctl: write tools for run %s: %w", ev.RunID, err)
+		if _, err := fmt.Fprint(w, summary); err != nil {
+			return ev, fmt.Errorf("ctl: write summary for run %s: %w", ev.RunID, err)
 		}
-		if _, err := fmt.Fprintf(w, "spans: %d\n", len(ev.Trace.Spans)); err != nil {
-			return ev, fmt.Errorf("ctl: write spans for run %s: %w", ev.RunID, err)
-		}
-		if _, err := fmt.Fprintf(w, "answer: %s\n", ev.Output.Answer); err != nil {
-			return ev, fmt.Errorf("ctl: write answer for run %s: %w", ev.RunID, err)
+	}
+
+	// -o writes the answer (and only the answer) to a file, in addition to the
+	// stdout output above. An unwritable target is a hard, descriptive error.
+	if opts.Output != "" {
+		if err := os.WriteFile(opts.Output, []byte(ev.Output.Answer+"\n"), 0o644); err != nil {
+			return ev, fmt.Errorf("ctl: write answer file %q for run %s: %w", opts.Output, ev.RunID, err)
 		}
 	}
 

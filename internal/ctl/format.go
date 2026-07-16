@@ -6,9 +6,61 @@ import (
 	"strings"
 
 	"github.com/thetonymaster/mentat/internal/comparator"
+	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/genai"
 	"github.com/thetonymaster/mentat/internal/trace"
 )
+
+// RenderSummary renders the human `mentatctl agent run` summary for ev. The first
+// four lines (run/tools/spans/answer) are byte-identical to the pre-US7 format;
+// US7 appends tokens (in/out), cost, latency envelope (ms) and the root trace ids.
+// Every metric reuses the single-source Evidence derivation — comparator.TokensInOut,
+// comparator.CostOrZero (pricing table, same unknown/ambiguous-model rules) and
+// Trace.Envelope — so the summary never disagrees with comparators or reports.
+// A malformed token/cost value is a hard, wrapped error, never a fabricated number.
+func RenderSummary(ev core.Evidence, pricing core.Pricing) (string, error) {
+	in, out, err := comparator.TokensInOut(ev.Trace)
+	if err != nil {
+		return "", fmt.Errorf("ctl: derive tokens for run %s: %w", ev.RunID, err)
+	}
+	cost, err := comparator.CostOrZero(ev.Trace, pricing)
+	if err != nil {
+		return "", fmt.Errorf("ctl: derive cost for run %s: %w", ev.RunID, err)
+	}
+	var b strings.Builder
+	// Pre-US7 lines — must stay byte-identical (byte-stability contract, T023).
+	fmt.Fprintf(&b, "run %s\n", ev.RunID)
+	fmt.Fprintf(&b, "tools: %v\n", toolNames(ev))
+	fmt.Fprintf(&b, "spans: %d\n", spanCount(ev.Trace))
+	fmt.Fprintf(&b, "answer: %s\n", ev.Output.Answer)
+	// US7 additive lines.
+	fmt.Fprintf(&b, "tokens: in %d out %d\n", in, out)
+	fmt.Fprintf(&b, "cost: $%.4f\n", cost)
+	fmt.Fprintf(&b, "latency: %d ms\n", latencyMS(ev.Trace))
+	fmt.Fprintf(&b, "traces: %s\n", strings.Join(traceIDs(ev.Trace), " "))
+	return b.String(), nil
+}
+
+func spanCount(tr *trace.Trace) int {
+	if tr == nil {
+		return 0
+	}
+	return len(tr.Spans)
+}
+
+func latencyMS(tr *trace.Trace) int64 {
+	if tr == nil {
+		return 0
+	}
+	return tr.Envelope().Milliseconds()
+}
+
+func traceIDs(tr *trace.Trace) []string {
+	if tr == nil {
+		return nil
+	}
+	return tr.TraceIDs
+}
 
 // FormatForest renders the span forest as an indented tree, highlighting gen_ai attrs.
 func FormatForest(tr *trace.Trace, w io.Writer) error {

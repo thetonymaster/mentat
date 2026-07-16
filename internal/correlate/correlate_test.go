@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -1331,6 +1332,59 @@ func TestResolveMultiTraceForestMerge(t *testing.T) {
 	}
 	if len(merged.Spans) != 3 {
 		t.Errorf("merged.Spans: want 3 (s1a, s1b, s2a), got %d", len(merged.Spans))
+	}
+}
+
+// TestResolveMergesTraceIDs proves the run's merged forest records the (canonical,
+// sorted-by-TraceID) trace ids it was assembled from (US7 FR-009): the mentatctl
+// summary's `traces:` line reads them. Both live (Resolve) and known-complete
+// (ResolveComplete) paths populate the field identically.
+func TestResolveMergesTraceIDs(t *testing.T) {
+	const runID = "traceids-run"
+
+	newStore := func(t *testing.T, refs []core.TraceRef) *mocks.MockTraceStore {
+		t.Helper()
+		ctrl := gomock.NewController(t)
+		st := mocks.NewMockTraceStore(ctrl)
+		st.EXPECT().Query(gomock.Any(), gomock.Any()).Return(refs, nil).AnyTimes()
+		st.EXPECT().FetchPayload(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, id string) ([]byte, error) { return []byte("payload-" + id), nil }).AnyTimes()
+		st.EXPECT().DecodePayload(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(id string, _ []byte) (*trace.Trace, error) {
+				return &trace.Trace{RunID: id, Roots: []*trace.Span{{Name: id}}, Spans: []*trace.Span{{Name: id}}}, nil
+			}).AnyTimes()
+		return st
+	}
+
+	tests := []struct {
+		name string
+		refs []core.TraceRef
+		want []string
+	}{
+		{name: "single ref", refs: []core.TraceRef{{TraceID: "aaa"}}, want: []string{"aaa"}},
+		// Refs arrive out of order; canonicalRefs sorts, so TraceIDs is deterministic.
+		{name: "multi ref sorted canonically", refs: []core.TraceRef{{TraceID: "ccc"}, {TraceID: "bbb"}}, want: []string{"bbb", "ccc"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := New(func() string { return runID }, PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+
+			live, err := c.Resolve(context.Background(), newStore(t, tt.refs), runID)
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if !reflect.DeepEqual(live.TraceIDs, tt.want) {
+				t.Fatalf("Resolve TraceIDs = %v, want %v", live.TraceIDs, tt.want)
+			}
+
+			done, err := c.ResolveComplete(context.Background(), newStore(t, tt.refs), runID)
+			if err != nil {
+				t.Fatalf("ResolveComplete: %v", err)
+			}
+			if !reflect.DeepEqual(done.TraceIDs, tt.want) {
+				t.Fatalf("ResolveComplete TraceIDs = %v, want %v", done.TraceIDs, tt.want)
+			}
+		})
 	}
 }
 

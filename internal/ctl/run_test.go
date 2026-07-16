@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/thetonymaster/mentat/internal/core/mocks"
 	"github.com/thetonymaster/mentat/internal/correlate"
 	"github.com/thetonymaster/mentat/internal/engine"
+	"github.com/thetonymaster/mentat/internal/genai"
 	"github.com/thetonymaster/mentat/internal/trace"
 )
 
@@ -229,4 +231,150 @@ func TestRun(t *testing.T) {
 			t.Fatalf("error missing 'ctl: write' prefix, got: %v", err)
 		}
 	})
+
+	t.Run("output flag writes answer-only to file alongside the stdout summary", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		eng := buildTestEngine(t, runID, tr)
+
+		outPath := filepath.Join(t.TempDir(), "answer.txt")
+		var b bytes.Buffer
+		if _, err := Run(context.Background(), eng, RunOpts{Target: "bot", Output: outPath}, &b); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		data, err := os.ReadFile(outPath)
+		if err != nil {
+			t.Fatalf("read output file: %v", err)
+		}
+		if string(data) != "hi\n" {
+			t.Fatalf("output file = %q, want %q (answer + newline only)", data, "hi\n")
+		}
+		// -o is additive: the full stdout summary is still produced.
+		if !strings.Contains(b.String(), runID) {
+			t.Fatalf("stdout summary missing run id with -o set:\n%s", b.String())
+		}
+	})
+
+	t.Run("output flag unwritable target is a hard error", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		eng := buildTestEngine(t, runID, tr)
+
+		badPath := filepath.Join(t.TempDir(), "no-such-dir", "answer.txt")
+		var b bytes.Buffer
+		_, err := Run(context.Background(), eng, RunOpts{Target: "bot", Output: badPath}, &b)
+		if err == nil {
+			t.Fatal("expected error writing answer to a nonexistent directory, got nil")
+		}
+		if !strings.Contains(err.Error(), "ctl: write answer file") {
+			t.Fatalf("error missing 'ctl: write answer file' prefix, got: %v", err)
+		}
+	})
+}
+
+// canonicalEvidence is the fixed Evidence the run-golden.txt contract renders
+// from: known run id, tools, span count, answer, tokens, cost, latency and a
+// two-trace forest (multi-root, invariant §2). Its rendered summary is committed
+// as the golden and must stay byte-stable.
+func canonicalEvidence() core.Evidence {
+	base := time.Unix(1700000000, 0)
+	root1 := &trace.Span{
+		ID:    "r1",
+		Name:  "invoke_agent",
+		Start: base,
+		End:   base.Add(1500 * time.Millisecond),
+		Attrs: map[string]string{
+			genai.Op:        genai.OpInvokeAgent,
+			genai.InTokens:  "1200",
+			genai.OutTokens: "340",
+			genai.CostUSD:   "0.0105",
+		},
+	}
+	tool1 := &trace.Span{
+		ID: "t1", ParentID: "r1", Name: "execute_tool",
+		Start: base.Add(100 * time.Millisecond), End: base.Add(200 * time.Millisecond),
+		Attrs: map[string]string{genai.Op: genai.OpExecuteTool, genai.ToolName: "search"},
+	}
+	tool2 := &trace.Span{
+		ID: "t2", ParentID: "r1", Name: "execute_tool",
+		Start: base.Add(300 * time.Millisecond), End: base.Add(400 * time.Millisecond),
+		Attrs: map[string]string{genai.Op: genai.OpExecuteTool, genai.ToolName: "fetch"},
+	}
+	root2 := &trace.Span{
+		ID: "r2", Name: "invoke_agent",
+		Start: base.Add(500 * time.Millisecond), End: base.Add(600 * time.Millisecond),
+		Attrs: map[string]string{genai.Op: genai.OpInvokeAgent},
+	}
+	return core.Evidence{
+		RunID: "run-canonical",
+		Trace: &trace.Trace{
+			RunID:    "run-canonical",
+			TraceIDs: []string{"trace-aaa", "trace-bbb"},
+			Roots:    []*trace.Span{root1, root2},
+			Spans:    []*trace.Span{root1, tool1, tool2, root2},
+		},
+		Output: core.Output{Answer: "The canonical answer."},
+	}
+}
+
+// TestRenderSummaryGolden asserts the enriched summary equals the committed
+// golden byte-for-byte (US7 additive-lines contract, T001/T023).
+func TestRenderSummaryGolden(t *testing.T) {
+	got, err := RenderSummary(canonicalEvidence(), nil)
+	if err != nil {
+		t.Fatalf("RenderSummary: %v", err)
+	}
+	want, err := os.ReadFile(filepath.Join("testdata", "run-golden.txt"))
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	if got != string(want) {
+		t.Fatalf("summary != golden\n--- got ---\n%s\n--- want ---\n%s", got, string(want))
+	}
+}
+
+// TestRenderSummaryExistingLinesByteStable pins the byte-stability contract: the
+// four pre-US7 lines (run/tools/spans/answer) are unchanged by a single byte,
+// reproduced here from the exact legacy format strings and asserted as a prefix.
+func TestRenderSummaryExistingLinesByteStable(t *testing.T) {
+	ev := canonicalEvidence()
+	got, err := RenderSummary(ev, nil)
+	if err != nil {
+		t.Fatalf("RenderSummary: %v", err)
+	}
+	prefix := fmt.Sprintf("run %s\ntools: %v\nspans: %d\nanswer: %s\n",
+		ev.RunID, toolNames(ev), len(ev.Trace.Spans), ev.Output.Answer)
+	if !strings.HasPrefix(got, prefix) {
+		t.Fatalf("enriched summary must start with byte-identical pre-US7 lines\nwant prefix:\n%q\ngot:\n%q", prefix, got)
+	}
+}
+
+// TestRenderSummaryDerivationErrors proves a malformed metric surfaces a wrapped
+// error rather than a fabricated value (no silent fallback, invariant IV).
+func TestRenderSummaryDerivationErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		ev      core.Evidence
+		wantSub string
+	}{
+		{
+			name:    "malformed tokens",
+			ev:      core.Evidence{RunID: "x", Trace: &trace.Trace{Spans: []*trace.Span{{Name: "s", Attrs: map[string]string{genai.InTokens: "abc"}}}}},
+			wantSub: "tokens",
+		},
+		{
+			name:    "malformed cost",
+			ev:      core.Evidence{RunID: "x", Trace: &trace.Trace{Spans: []*trace.Span{{Name: "s", Attrs: map[string]string{genai.CostUSD: "notanumber"}}}}},
+			wantSub: "cost",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := RenderSummary(tt.ev, nil)
+			if err == nil {
+				t.Fatalf("expected error for %s, got nil", tt.name)
+			}
+			if !strings.Contains(err.Error(), tt.wantSub) {
+				t.Fatalf("error %q missing substring %q", err.Error(), tt.wantSub)
+			}
+		})
+	}
 }

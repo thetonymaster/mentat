@@ -182,6 +182,45 @@ func TestBudgetsName(t *testing.T) {
 	}
 }
 
+// TestTokensInOut pins the exported in/out split accessor (US7): it reuses the
+// same per-span domain check as tokenSum (non-negative int, hard error on
+// malformed) but reports input and output separately for the mentatctl summary.
+func TestTokensInOut(t *testing.T) {
+	multi := &trace.Trace{Spans: []*trace.Span{
+		{Name: "a", Attrs: map[string]string{genai.InTokens: "100", genai.OutTokens: "40"}},
+		{Name: "b", Attrs: map[string]string{genai.InTokens: "25", genai.OutTokens: "5"}},
+		{Name: "tool", Attrs: map[string]string{genai.Op: genai.OpExecuteTool}}, // no tokens
+	}}
+	tests := []struct {
+		name    string
+		tr      *trace.Trace
+		wantIn  int
+		wantOut int
+		wantErr bool
+	}{
+		{name: "single span splits in and out", tr: tokenTrace(1200, 340), wantIn: 1200, wantOut: 340},
+		{name: "sums across spans, non-llm spans contribute zero", tr: multi, wantIn: 125, wantOut: 45},
+		{name: "nil trace is zero not error", tr: nil, wantIn: 0, wantOut: 0},
+		{name: "empty trace is zero", tr: &trace.Trace{}, wantIn: 0, wantOut: 0},
+		{name: "malformed input token is a hard error", tr: rawAttrTrace(genai.InTokens, "abc"), wantErr: true},
+		{name: "malformed output token is a hard error", tr: rawAttrTrace(genai.OutTokens, "-3"), wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			in, out, err := TokensInOut(tt.tr)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if in != tt.wantIn || out != tt.wantOut {
+				t.Fatalf("TokensInOut = (in=%d,out=%d), want (in=%d,out=%d)", in, out, tt.wantIn, tt.wantOut)
+			}
+		})
+	}
+}
+
 // A malformed cost_usd as the ONLY cost-bearing span must surface the parse
 // error ("invalid"), not fall through to the "cost not available" guard: the
 // ParseFloat runs before the seen-check, so the bad value is caught first.

@@ -1,0 +1,8 @@
+run run-canonical
+tools: [search fetch]
+spans: 4
+answer: The canonical answer.
+tokens: in 1200 out 340
+cost: $0.0105
+latency: 1500 ms
+traces: trace-aaa trace-bbb

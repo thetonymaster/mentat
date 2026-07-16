@@ -265,6 +265,7 @@ func mergeRefs(runID string, refs []core.TraceRef, cache map[string]*refObservat
 		obs := cache[ref.TraceID]
 		m.Roots = append(m.Roots, obs.forest.Roots...)
 		m.Spans = append(m.Spans, obs.forest.Spans...)
+		m.TraceIDs = append(m.TraceIDs, ref.TraceID)
 	}
 	return m
 }

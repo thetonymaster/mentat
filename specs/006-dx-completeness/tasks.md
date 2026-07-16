@@ -11,7 +11,7 @@ number; each independently shippable.
 
 ## Phase 1: Setup
 
-- [ ] T001 Baseline: `make ci` green; capture `mentatctl agent run` golden output (US7 additive-lines contract) in internal/ctl/testdata/run-golden.txt (go-coder)
+- [X] T001 Baseline: `make ci` green; capture `mentatctl agent run` golden output (US7 additive-lines contract) in internal/ctl/testdata/run-golden.txt (go-coder)
 
 ---
 
@@ -95,8 +95,8 @@ number; each independently shippable.
 
 **Independent Test**: run summary shows tokens/cost/latency/trace ids; prompt-file/stdin/-o/--timeout work.
 
-- [ ] T023 [P] [US7] Failing tests: summary gains additive lines (tokens in/out, cost, latency ms, root trace ids) with existing lines byte-stable vs T001 golden prefix; `--prompt-file` (`-`=stdin), `-o` (answer only), `--timeout` in internal/ctl/run_test.go, cmd/mentatctl/main_test.go (go-test-writer, red)
-- [ ] T024 [US7] Implement summary enrichment + flags in internal/ctl/run.go, internal/ctl/format.go, cmd/mentatctl/main.go (go-test-writer, green)
+- [X] T023 [P] [US7] Failing tests: summary gains additive lines (tokens in/out, cost, latency ms, root trace ids) with existing lines byte-stable vs T001 golden prefix; `--prompt-file` (`-`=stdin), `-o` (answer only), `--timeout` in internal/ctl/run_test.go, cmd/mentatctl/main_test.go (go-test-writer, red)
+- [X] T024 [US7] Implement summary enrichment + flags in internal/ctl/run.go, internal/ctl/format.go, cmd/mentatctl/main.go (go-test-writer, green)
 
 ---
 

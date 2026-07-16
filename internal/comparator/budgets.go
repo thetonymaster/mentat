@@ -192,6 +192,30 @@ func costSum(t *trace.Trace, pricing core.Pricing) (float64, error) {
 	return cost, nil
 }
 
+// TokensInOut returns the total gen_ai input and output tokens across all spans,
+// reported separately for the mentatctl summary (US7). It delegates to the same
+// per-span tokenAttr parser the cost derivation uses, so the domain check is
+// single-sourced (non-negative int; malformed → hard error) and in+out equals
+// tokenSum. A nil trace yields (0, 0, nil), consistent with CostOrZero.
+func TokensInOut(t *trace.Trace) (in, out int, err error) {
+	if t == nil {
+		return 0, 0, nil
+	}
+	for i, s := range t.Spans {
+		n, _, inErr := tokenAttr(s, genai.InTokens)
+		if inErr != nil {
+			return 0, 0, fmt.Errorf("budgets: span[%d] (%q) %w", i, s.Name, inErr)
+		}
+		in += n
+		m, _, outErr := tokenAttr(s, genai.OutTokens)
+		if outErr != nil {
+			return 0, 0, fmt.Errorf("budgets: span[%d] (%q) %w", i, s.Name, outErr)
+		}
+		out += m
+	}
+	return in, out, nil
+}
+
 // CostOrZero is the reporter-facing cost: absent cost (incl. a nil trace) yields 0;
 // malformed/ambiguous/out-of-range values still error (no silent fallback on corruption).
 func CostOrZero(t *trace.Trace, pricing core.Pricing) (float64, error) {
