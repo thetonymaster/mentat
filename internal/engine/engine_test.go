@@ -455,7 +455,7 @@ func TestDriveOnceFailureEvidence(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Build: %v", err)
 			}
-			ev, err := eng.driveOnce(context.Background(), "sut", nil)
+			ev, err := eng.driveOnce(context.Background(), "sut", nil, "")
 			if err == nil {
 				t.Fatal("expected error, got nil")
 			}
@@ -927,7 +927,7 @@ func TestDriveOnceRunBudget(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Build: %v", err)
 			}
-			ev, err := eng.driveOnce(context.Background(), "sut", nil)
+			ev, err := eng.driveOnce(context.Background(), "sut", nil, "")
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("expected error, got nil (ev=%+v)", ev)
@@ -1565,7 +1565,7 @@ func TestDriveOnceInjectsOTLPEndpointConditionally(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Build: %v", err)
 			}
-			if _, err := eng.driveOnce(context.Background(), "sut", nil); err != nil {
+			if _, err := eng.driveOnce(context.Background(), "sut", nil, ""); err != nil {
 				t.Fatalf("driveOnce: %v", err)
 			}
 

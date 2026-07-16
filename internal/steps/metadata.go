@@ -102,6 +102,20 @@ var stepDefs = []stepDef{
 		example: `When I run the agent with prompt "Summarize Q3 revenue"`,
 		handler: func(w *world) any { return w.runPrompt },
 	},
+	{
+		group:   "Drive",
+		pattern: `^I send the request with body:$`,
+		summary: "Drives an HTTP target, sending the docstring as the request body.",
+		example: "When I send the request with body:\n  \"\"\"\n  {\"amount\": 42}\n  \"\"\"",
+		handler: func(w *world) any { return w.sendRequestBodyDoc },
+	},
+	{
+		group:   "Drive",
+		pattern: `^I send the request with body fixture "([^"]+)"$`,
+		summary: "Drives an HTTP target, sending a fixture file (relative to the feature dir, or absolute) as the request body.",
+		example: `When I send the request with body fixture "bodies/order.json"`,
+		handler: func(w *world) any { return w.sendRequestBodyFixture },
+	},
 
 	// --- sequence ---
 	{

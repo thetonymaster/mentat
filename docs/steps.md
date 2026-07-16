@@ -37,6 +37,25 @@ Drives the target with a free-text prompt argument.
 When I run the agent with prompt "Summarize Q3 revenue"
 ```
 
+#### `^I send the request with body:$`
+
+Drives an HTTP target, sending the docstring as the request body.
+
+```gherkin
+When I send the request with body:
+  """
+  {"amount": 42}
+  """
+```
+
+#### `^I send the request with body fixture "([^"]+)"$`
+
+Drives an HTTP target, sending a fixture file (relative to the feature dir, or absolute) as the request body.
+
+```gherkin
+When I send the request with body fixture "bodies/order.json"
+```
+
 ### Sequence
 
 #### `^the agent calls tools in order:$`

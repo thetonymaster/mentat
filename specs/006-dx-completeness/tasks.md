@@ -58,8 +58,8 @@ number; each independently shippable.
 
 **Independent Test**: one run with `--junit` → file exists AND console non-empty.
 
-- [ ] T014 [P] [US3] Failing test: `--junit` adds the junit formatter (godog multi-format `pretty,junit:file`) with console preserved; junit write failure still fails the run in cmd/mentat/main_test.go (go-test-writer, red)
-- [ ] T015 [US3] Implement multi-formatter wiring in cmd/mentat/main.go (go-test-writer, green)
+- [X] T014 [P] [US3] Failing test: `--junit` adds the junit formatter (godog multi-format `pretty,junit:file`) with console preserved; junit write failure still fails the run in cmd/mentat/main_test.go (go-test-writer, red)
+- [X] T015 [US3] Implement multi-formatter wiring in cmd/mentat/main.go (go-test-writer, green) — NO-OP: E3 already resolved (console `pretty` unconditional + collector JUnit carries interrupted marker); godog multi-format rejected as it would regress that invariant. Locked in by T014's coexistence test.
 
 ---
 
@@ -67,8 +67,8 @@ number; each independently shippable.
 
 **Independent Test**: httptest server receives the doc-string body verbatim; missing fixture fails naming resolved path.
 
-- [ ] T016 [P] [US4] Failing tests: `I send the request with body:` (doc-string) and `... with body fixture "<path>"` (relative to feature dir; absolute ok) set `RunSpec.Input`; http driver sends non-empty Input; missing fixture → error naming resolved path in internal/steps/steps_test.go, internal/driver/http_test.go (go-test-writer, red)
-- [ ] T017 [US4] Implement body steps + Input plumbing + http driver send in internal/steps/steps.go, internal/engine/engine.go, internal/driver/http.go (go-test-writer, green)
+- [X] T016 [P] [US4] Failing tests: `I send the request with body:` (doc-string) and `... with body fixture "<path>"` (relative to feature dir; absolute ok) set `RunSpec.Input`; http driver sends non-empty Input; missing fixture → error naming resolved path in internal/steps/steps_test.go, internal/driver/http_test.go (go-test-writer, red)
+- [X] T017 [US4] Implement body steps + Input plumbing + http driver send in internal/steps/steps.go, internal/engine/engine.go, internal/driver/http.go (go-test-writer, green)
 
 ---
 

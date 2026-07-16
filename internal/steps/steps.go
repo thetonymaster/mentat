@@ -3,6 +3,8 @@ package steps
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -35,7 +37,12 @@ type world struct {
 	// budget/cancellation bounds them all (feature 003, FR-004). A fresh background
 	// context is banned in this file (a ctx_guard test enforces it) to prevent the
 	// audit-B2 regression of discarding the scenario context.
-	ctx        context.Context
+	ctx context.Context
+	// uri is the feature file's path, captured in sc.Before from scenario.Uri. The
+	// body-fixture step resolves a relative fixture path against filepath.Dir(uri)
+	// so a body lives next to the .feature that references it; absolute paths are
+	// used as-is.
+	uri        string
 	target     string
 	ev         core.Evidence
 	evs        []core.Evidence
@@ -90,6 +97,9 @@ func InitializerWithBudget(eng *engine.Engine, col *report.Collector, budget *re
 			// under it (FR-004). godog cancels it on suite interruption, so a signal
 			// or scenario timeout reaches all scenario-scoped work.
 			w.ctx = ctx
+			// Capture the feature file path so the body-fixture step can resolve a
+			// relative fixture against the feature's own directory.
+			w.uri = scenario.Uri
 			n, parallel, err := parseRunsTag(scenario.Tags)
 			if err != nil {
 				return ctx, err
@@ -140,10 +150,37 @@ func tagNames(tags []*messages.PickleTag) []string {
 
 func (w *world) target_(name string) error { w.target = name; return nil }
 
-func (w *world) runScenario(name string) error { return w.drive([]string{"--scenario", name}) }
-func (w *world) runPrompt(p string) error      { return w.drive([]string{"--prompt", p}) }
+func (w *world) runScenario(name string) error { return w.drive([]string{"--scenario", name}, "") }
+func (w *world) runPrompt(p string) error      { return w.drive([]string{"--prompt", p}, "") }
 
-func (w *world) drive(args []string) error {
+// sendRequestBodyDoc drives the target with the doc-string as the request body
+// (RunSpec.Input), the HTTP analogue of runPrompt. A missing doc-string is a hard
+// error rather than a silently-empty body (No Silent Fallbacks).
+func (w *world) sendRequestBodyDoc(doc *godog.DocString) error {
+	if doc == nil {
+		return fmt.Errorf("I send the request with body: expected a docstring body, got none")
+	}
+	return w.drive(nil, doc.Content)
+}
+
+// sendRequestBodyFixture reads a fixture file and drives the target with its
+// contents as the request body (RunSpec.Input). A relative path resolves against
+// the feature directory (filepath.Dir(w.uri)); an absolute path is used as-is. An
+// unreadable fixture is a hard error naming the RESOLVED path, raised before any
+// drive so a bad fixture never sends an empty body (No Silent Fallbacks).
+func (w *world) sendRequestBodyFixture(path string) error {
+	resolved := path
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(filepath.Dir(w.uri), resolved)
+	}
+	body, err := os.ReadFile(resolved)
+	if err != nil {
+		return fmt.Errorf("read request body fixture %q: %w", resolved, err)
+	}
+	return w.drive(nil, string(body))
+}
+
+func (w *world) drive(args []string, input string) error {
 	if w.target == "" {
 		return fmt.Errorf("no target set; use a Given ... target step first")
 	}
@@ -151,7 +188,7 @@ func (w *world) drive(args []string) error {
 	if n < 1 {
 		n = 1
 	}
-	evs, err := w.eng.DriveN(w.ctx, w.target, args, n, w.parallel)
+	evs, err := w.eng.DriveNInput(w.ctx, w.target, args, input, n, w.parallel)
 	if err != nil {
 		return err
 	}

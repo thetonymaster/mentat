@@ -112,7 +112,7 @@ func (e *Engine) Drive(ctx context.Context, target string, args []string) (core.
 		}
 		return core.Evidence{RunID: e.pinned, Trace: tr}, nil
 	}
-	ev, err := e.driveOnce(ctx, target, args)
+	ev, err := e.driveOnce(ctx, target, args, "")
 	if err != nil {
 		return core.Evidence{}, err
 	}
@@ -123,7 +123,7 @@ func (e *Engine) Drive(ctx context.Context, target string, args []string) (core.
 // flagged Failed (with RunID + FailureKind) AND the wrapped error, so single-run
 // Drive can surface the error while multi-run DriveN can record the sample.
 // Structural errors (unknown target/adapter) carry an empty RunID.
-func (e *Engine) driveOnce(ctx context.Context, target string, args []string) (core.Evidence, error) {
+func (e *Engine) driveOnce(ctx context.Context, target string, args []string, input string) (core.Evidence, error) {
 	t, ok := e.cfg.Targets[target]
 	if !ok {
 		return core.Evidence{}, fmt.Errorf("engine: unknown target %q", target)
@@ -151,6 +151,7 @@ func (e *Engine) driveOnce(ctx context.Context, target string, args []string) (c
 		Target:  target,
 		Adapter: t.Adapter,
 		Command: append(append([]string{}, t.Command...), args...),
+		Input:   input,
 		HTTP: core.HTTPSpec{
 			URL:     t.HTTP.URL,
 			Method:  t.HTTP.Method,
@@ -230,11 +231,22 @@ func budgetTimeout(parent, run context.Context, target, phase string, budget con
 	return fmt.Errorf("engine: %s %q: run timeout after %s (phase: %s): %w", phase, target, budget.Timeout, phase, context.DeadlineExceeded)
 }
 
-// DriveN runs the scenario n times and returns one Evidence per run. A harness
-// failure on an iteration becomes a typed failed sample (not an aborted batch);
-// a structural error aborts. Serial by default; parallel iterations each acquire
-// the existing per-target semaphore, with results collected by index.
+// DriveN runs the scenario n times and returns one Evidence per run, driving with
+// an empty request body/Input. It is the stable entry point for the prompt/scenario
+// drive steps, which carry their argument via Command, not the body. Body-bearing
+// steps (US4's HTTP request body) call DriveNInput.
 func (e *Engine) DriveN(ctx context.Context, target string, args []string, n int, parallel bool) ([]core.Evidence, error) {
+	return e.DriveNInput(ctx, target, args, "", n, parallel)
+}
+
+// DriveNInput is DriveN with an explicit request body/Input threaded into each
+// run's RunSpec.Input (US4). A non-empty input is the HTTP request body the
+// driver sends verbatim; the shell driver ignores Input, so prompt/scenario runs
+// pass "" and are byte-identical to before. Semantics are otherwise DriveN's: a
+// harness failure on an iteration becomes a typed failed sample (not an aborted
+// batch); a structural error aborts. Serial by default; parallel iterations each
+// acquire the existing per-target semaphore, with results collected by index.
+func (e *Engine) DriveNInput(ctx context.Context, target string, args []string, input string, n int, parallel bool) ([]core.Evidence, error) {
 	if n < 1 {
 		return nil, fmt.Errorf("engine: DriveN needs n>=1, got %d", n)
 	}
@@ -256,7 +268,7 @@ func (e *Engine) DriveN(ctx context.Context, target string, args []string, n int
 	}
 	evs := make([]core.Evidence, n)
 	collect := func(ctx context.Context, i int) error {
-		ev, err := e.driveOnce(ctx, target, args)
+		ev, err := e.driveOnce(ctx, target, args, input)
 		if err != nil && ev.RunID == "" {
 			return err // structural error: abort
 		}
