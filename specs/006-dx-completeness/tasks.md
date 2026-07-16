@@ -36,8 +36,8 @@ number; each independently shippable.
 
 **Independent Test**: seeded corpus (unbound step, bad CEL, unknown target, bad shape pattern) → 4 findings, one run, exit 1, no SUT/store/judge contact.
 
-- [ ] T006 [US2] Failing tests: validate collects ALL findings {file, line, class, message} across the four seeded defect classes + expectations/config classes; clean corpus exit 0; zero feature files → finding+exit 1; `--format json`; no network possible (noop store/driver injected) in cmd/mentat/validate_test.go (go-test-writer, red)
-- [ ] T007 [US2] Implement `mentat validate [paths...]`: gherkin parse → step binding vs metadata table → CEL precompile → shape-pattern + expectations + target checks (reusing the scenario-init precheck funcs) in cmd/mentat/validate.go, exported prechecks in internal/steps/precheck.go (go-test-writer, green)
+- [X] T006 [US2] Failing tests: validate collects ALL findings {file, line, class, message} across the four seeded defect classes + expectations/config classes; clean corpus exit 0; zero feature files → finding+exit 1; `--format json`; no network possible (noop store/driver injected) in cmd/mentat/validate_test.go (go-test-writer, red)
+- [X] T007 [US2] Implement `mentat validate [paths...]`: gherkin parse → step binding vs metadata table → CEL precompile → shape-pattern + expectations + target checks (reusing the scenario-init precheck funcs) in cmd/mentat/validate.go, exported prechecks in internal/steps/precheck.go (go-test-writer, green)
 
 ---
 

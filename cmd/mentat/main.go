@@ -32,6 +32,12 @@ func main() {
 			fmt.Fprintln(os.Stderr, "mentat:", err)
 			os.Exit(1)
 		}
+	case "validate":
+		code, err := validateCmd(os.Args[2:], os.Stdout)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "mentat:", err)
+		}
+		os.Exit(code)
 	default:
 		usage()
 		os.Exit(2)
@@ -41,8 +47,9 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: mentat <command> [flags]")
 	fmt.Fprintln(os.Stderr, "commands:")
-	fmt.Fprintln(os.Stderr, "  run    [paths...] [flags]     run behaviour scenarios")
-	fmt.Fprintln(os.Stderr, "  steps  [--format md|text]     print the step reference")
+	fmt.Fprintln(os.Stderr, "  run      [paths...] [flags]        run behaviour scenarios")
+	fmt.Fprintln(os.Stderr, "  steps    [--format md|text]        print the step reference")
+	fmt.Fprintln(os.Stderr, "  validate [paths...] [--format ...]  statically check the feature corpus")
 }
 
 // runMain is the unchanged `mentat run` flow (feature 003/005): its stdout is the

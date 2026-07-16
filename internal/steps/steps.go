@@ -539,52 +539,24 @@ func (w *world) matchesShape(name string) error {
 }
 
 // precheckShapePatterns fails a scenario at init if it references a shape pattern that was
-// not loaded — before the SUT is driven, mirroring precompileScenario for CEL (§7).
+// not loaded — before the SUT is driven, mirroring precompileScenario for CEL (§7). It
+// delegates to the collect-all ShapePatternFindings (shared with `mentat validate`) and
+// surfaces the FIRST finding as the scenario-init error, so behaviour is unchanged.
 func (w *world) precheckShapePatterns(steps []*messages.PickleStep) error {
-	for _, st := range steps {
-		m := reMatchesShape.FindStringSubmatch(st.Text)
-		if m == nil {
-			continue
-		}
-		if _, ok := w.eng.ShapePattern(m[1]); !ok {
-			return fmt.Errorf("scenario-init: unknown shape pattern %q (no such pattern under the expectations dir)", m[1])
-		}
+	if fs := ShapePatternFindings(w.eng, steps, Source{}); len(fs) > 0 {
+		return fmt.Errorf("scenario-init: %s", fs[0].Message)
 	}
 	return nil
 }
 
 // precompileScenario compiles every "the run satisfies" and "the runs satisfy"
 // expression in the scenario before any step executes (§7). A syntax/type/unknown-var
-// error fails the scenario at init, before the SUT is driven.
+// error fails the scenario at init, before the SUT is driven. It delegates to the
+// collect-all CELFindings (shared with `mentat validate`) and surfaces the FIRST
+// finding as the scenario-init error, so behaviour is unchanged.
 func (w *world) precompileScenario(steps []*messages.PickleStep) error {
-	for _, st := range steps {
-		if expr, ok := satisfiesExpr(st); ok {
-			c, ok := w.eng.Comparator("cel")
-			if !ok {
-				return fmt.Errorf("scenario-init: 'the run satisfies' requires the cel comparator, which is not registered")
-			}
-			pc, ok := c.(interface{ Compile(string) error })
-			if !ok {
-				return fmt.Errorf("scenario-init: cel comparator %T does not support pre-compilation", c)
-			}
-			if err := pc.Compile(expr); err != nil {
-				return fmt.Errorf("scenario-init: %w", err)
-			}
-			continue
-		}
-		if expr, ok := runsSatisfiesExpr(st); ok {
-			c, ok := w.eng.AggregateComparator("aggregate-cel")
-			if !ok {
-				return fmt.Errorf("scenario-init: 'the runs satisfy' requires the aggregate-cel comparator, which is not registered")
-			}
-			pc, ok := c.(interface{ Compile(string) error })
-			if !ok {
-				return fmt.Errorf("scenario-init: aggregate comparator %T does not support pre-compilation", c)
-			}
-			if err := pc.Compile(expr); err != nil {
-				return fmt.Errorf("scenario-init: %w", err)
-			}
-		}
+	if fs := CELFindings(w.eng, steps, Source{}); len(fs) > 0 {
+		return fmt.Errorf("scenario-init: %s", fs[0].Message)
 	}
 	return nil
 }
@@ -613,21 +585,14 @@ func runsSatisfiesExpr(st *messages.PickleStep) (string, bool) {
 }
 
 // parseRunsTag reads @runs(N) / @runs(N,parallel). Absent -> (1, false, nil). A tag
-// that begins "@runs(" but does not match the strict form is a hard error.
+// that begins "@runs(" but does not match the strict form is a hard error. It wraps
+// the shared parseRunsTagRaw (precheck.go) — the same parser RunsTagFindings uses for
+// collect-all validation — prefixing "scenario-init:" so the fail-fast error text is
+// unchanged.
 func parseRunsTag(tags []*messages.PickleTag) (int, bool, error) {
-	for _, tag := range tags {
-		if !strings.HasPrefix(tag.Name, "@runs(") {
-			continue
-		}
-		m := reRunsTag.FindStringSubmatch(tag.Name)
-		if m == nil {
-			return 0, false, fmt.Errorf("scenario-init: malformed @runs tag %q (want @runs(N) or @runs(N,parallel))", tag.Name)
-		}
-		n, err := strconv.Atoi(m[1])
-		if err != nil || n < 1 {
-			return 0, false, fmt.Errorf("scenario-init: @runs requires N>=1, got %q", tag.Name)
-		}
-		return n, m[2] == "parallel", nil
+	n, parallel, _, msg := parseRunsTagRaw(tags)
+	if msg != "" {
+		return 0, false, fmt.Errorf("scenario-init: %s", msg)
 	}
-	return 1, false, nil
+	return n, parallel, nil
 }
