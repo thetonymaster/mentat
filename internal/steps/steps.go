@@ -158,7 +158,7 @@ func (w *world) runPrompt(p string) error      { return w.drive([]string{"--prom
 // error rather than a silently-empty body (No Silent Fallbacks).
 func (w *world) sendRequestBodyDoc(doc *godog.DocString) error {
 	if doc == nil {
-		return fmt.Errorf("I send the request with body: expected a docstring body, got none")
+		return fmt.Errorf("send-request-body step: expected a docstring body, got none")
 	}
 	return w.drive(nil, doc.Content)
 }

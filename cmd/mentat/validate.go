@@ -52,7 +52,9 @@ func validateCmd(args []string, stdout io.Writer) (int, error) {
 			return 2, fmt.Errorf("validate: render json: %w", err)
 		}
 	default:
-		renderText(stdout, findings)
+		if err := renderText(stdout, findings); err != nil {
+			return 2, fmt.Errorf("validate: render text: %w", err)
+		}
 	}
 
 	if len(findings) > 0 {
@@ -287,15 +289,18 @@ func dedupeSort(fs []steps.Finding) []steps.Finding {
 	return out
 }
 
-func renderText(w io.Writer, fs []steps.Finding) {
+func renderText(w io.Writer, fs []steps.Finding) error {
 	if len(fs) == 0 {
-		fmt.Fprintln(w, "validate: no issues found")
-		return
+		_, err := fmt.Fprintln(w, "validate: no issues found")
+		return err
 	}
 	for _, f := range fs {
-		fmt.Fprintf(w, "%s:%d: [%s] %s\n", f.File, f.Line, f.Class, f.Message)
+		if _, err := fmt.Fprintf(w, "%s:%d: [%s] %s\n", f.File, f.Line, f.Class, f.Message); err != nil {
+			return err
+		}
 	}
-	fmt.Fprintf(w, "validate: %d issue(s) found\n", len(fs))
+	_, err := fmt.Fprintf(w, "validate: %d issue(s) found\n", len(fs))
+	return err
 }
 
 func renderJSON(w io.Writer, fs []steps.Finding) error {
