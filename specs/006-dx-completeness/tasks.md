@@ -76,9 +76,9 @@ number; each independently shippable.
 
 **Independent Test**: saved run replays to identical verdicts, network disabled; absent id errors; `@runs(2)` hard-errors.
 
-- [ ] T018 [P] [US5] Failing tests: file store `Query` scans storePath for run-id-tagged fixtures (absent → not-found naming dir+id), `GetByID` loads by trace id with canonical vocabulary (feature 002), `@runs(N>1)` → hard error in internal/store/filestore_test.go (go-test-writer, red)
-- [ ] T019 [US5] Implement directory-backed file store + register `"file"` factory + `storePath` config in internal/store/filestore.go, internal/engine/store.go, internal/config/config.go (go-test-writer, green)
-- [ ] T020 [US5] Offline e2e-style test: saved fixture suite runs green via file store with no docker (hermetic — lives in unit tier) in internal/steps/filestore_replay_test.go (go-test-writer)
+- [X] T018 [P] [US5] Failing tests: file store `Query` scans storePath for run-id-tagged fixtures (absent → not-found naming dir+id), `GetByID` loads by trace id with canonical vocabulary (feature 002), `@runs(N>1)` → hard error in internal/store/filestore_test.go (go-test-writer, red)
+- [X] T019 [US5] Implement directory-backed file store + register `"file"` factory + `storePath` config in internal/store/filestore.go, internal/engine/store.go, internal/config/config.go (go-test-writer, green)
+- [X] T020 [US5] Offline e2e-style test: saved fixture suite runs green via file store with no docker (hermetic — lives in unit tier) in internal/steps/filestore_replay_test.go (go-test-writer)
 
 ---
 

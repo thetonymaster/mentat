@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/trace"
@@ -167,3 +170,158 @@ func (s *InMemStore) Query(_ context.Context, q core.TraceQuery) ([]core.TraceRe
 }
 
 func (s *InMemStore) Caps() core.StoreCaps { return core.StoreCaps{StructuralQuery: false} }
+
+// FileStore is a directory-backed TraceStore for OFFLINE replay (US5). It serves
+// captured fixtures — the LoadFixture / ctl.WriteFixture format — from a directory,
+// keyed by each fixture's recorded `runScenario` field (the run id a saved run
+// carries). It closes the write-only fixture loop: a saved run replays with no
+// Tempo, no Docker, no network — just local file reads.
+//
+// It targets the PINNED replay path (`mentatctl agent replay <id>` / `--last`),
+// which SUPPLIES the run id rather than injecting a fresh one, so Query(run id)
+// matches the fixture's recorded runScenario. The live `mentat run` path injects a
+// FRESH run id per run, which no recorded fixture carries; its Query then returns
+// the descriptive not-found error below (a loud miss, never a wrong trace).
+type FileStore struct {
+	dir string
+	// byRunID maps a recorded runScenario to its fixture entries. More than one
+	// entry for an id is an ambiguity surfaced (naming both files) only when that id
+	// is looked up — never silently resolved to an arbitrary sample (constitution IV).
+	byRunID map[string][]fileEntry
+}
+
+type fileEntry struct {
+	path    string
+	payload []byte
+}
+
+// NewFileStore scans dir for *.json fixtures, validates each via LoadFixture, and
+// indexes them by recorded runScenario. A dir that cannot be read, a fixture that
+// fails to parse, or a fixture with no runScenario is a hard error at construction
+// (constitution IV — a corrupt replay corpus fails loudly at build, not with a
+// wrong verdict later). Two fixtures sharing a runScenario are NOT rejected here —
+// the ambiguity is surfaced only when that id is queried (naming both files).
+func NewFileStore(dir string) (*FileStore, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("file store: read dir %q: %w", dir, err)
+	}
+	byRunID := map[string][]fileEntry{}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		payload, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("file store: read fixture %q: %w", path, err)
+		}
+		// Validate the fixture (parentage, cycles, canonical vocabulary) so a broken
+		// fixture fails at build, not at replay.
+		if _, err := LoadFixture(payload); err != nil {
+			return nil, fmt.Errorf("file store: parse fixture %q: %w", path, err)
+		}
+		var fx fixture
+		if err := json.Unmarshal(payload, &fx); err != nil {
+			return nil, fmt.Errorf("file store: read runScenario from %q: %w", path, err)
+		}
+		if strings.TrimSpace(fx.RunScenario) == "" {
+			return nil, fmt.Errorf("file store: fixture %q has no runScenario (cannot key it by run id)", path)
+		}
+		byRunID[fx.RunScenario] = append(byRunID[fx.RunScenario], fileEntry{path: path, payload: payload})
+	}
+	return &FileStore{dir: dir, byRunID: byRunID}, nil
+}
+
+// lookup resolves a run id to its single fixture entry. Zero matches → a
+// descriptive not-found error naming BOTH the dir and the id (unlike InMemStore's
+// (nil,nil): a replay against a file store is a deliberate "this exact id lives
+// here", so its absence is an error, not an empty result). More than one match →
+// an ambiguity error naming every candidate file (constitution IV — never guess
+// which sample the author meant).
+func (s *FileStore) lookup(id string) (fileEntry, error) {
+	ents := s.byRunID[id]
+	switch len(ents) {
+	case 0:
+		return fileEntry{}, fmt.Errorf("file store: no fixture for run %q in dir %q", id, s.dir)
+	case 1:
+		return ents[0], nil
+	default:
+		paths := make([]string, len(ents))
+		for i, e := range ents {
+			paths[i] = e.path
+		}
+		return fileEntry{}, fmt.Errorf("file store: run %q is ambiguous in dir %q: %s", id, s.dir, strings.Join(paths, ", "))
+	}
+}
+
+// Query resolves a test.run.id tag query against the recorded fixtures. A hit
+// returns exactly one ref (TraceID == the run id); absent/ambiguous is the hard
+// error lookup names. Only test.run.id is supported — the file store is a
+// tag-first replay store, not a structural query engine (Caps.StructuralQuery=false).
+func (s *FileStore) Query(_ context.Context, q core.TraceQuery) ([]core.TraceRef, error) {
+	if q.Tag != "test.run.id" {
+		return nil, fmt.Errorf("file store: only test.run.id queries supported, got %q", q.Tag)
+	}
+	if _, err := s.lookup(q.Value); err != nil {
+		return nil, err
+	}
+	return []core.TraceRef{{TraceID: q.Value}}, nil
+}
+
+// FetchPayload returns the recorded fixture bytes for id — the change-detection
+// signal of the stability poll. The bytes are the file's own content (deterministic
+// across fetches), so repeated fetches are byte-identical. Unknown/ambiguous id is
+// the hard error lookup names, never (nil, nil).
+func (s *FileStore) FetchPayload(_ context.Context, id string) ([]byte, error) {
+	ent, err := s.lookup(id)
+	if err != nil {
+		return nil, err
+	}
+	return ent.payload, nil
+}
+
+// DecodePayload decodes payload bytes previously returned by FetchPayload — the
+// raw fixture bytes — back into a Trace forest via LoadFixture (feature-002
+// canonical status/kind vocabulary). It decodes THESE bytes (the fetch/decode
+// contract): the id names the run for the error message only. Malformed bytes are
+// a hard, wrapped error (constitution IV).
+func (s *FileStore) DecodePayload(id string, payload []byte) (*trace.Trace, error) {
+	tr, err := LoadFixture(payload)
+	if err != nil {
+		return nil, fmt.Errorf("file store: decode payload for run %q: %w", id, err)
+	}
+	return tr, nil
+}
+
+// GetByID loads the fixture recorded for id and returns its Trace forest (feature-002
+// canonical vocabulary via LoadFixture). Unknown/ambiguous id is the same hard error
+// as Query. Mirrors InMemStore.GetByID for symmetric L1-store use; the TraceStore
+// interface itself resolves via FetchPayload + DecodePayload, which this composes.
+func (s *FileStore) GetByID(_ context.Context, id string) (*trace.Trace, error) {
+	ent, err := s.lookup(id)
+	if err != nil {
+		return nil, err
+	}
+	tr, err := LoadFixture(ent.payload)
+	if err != nil {
+		return nil, fmt.Errorf("file store: load fixture %q: %w", ent.path, err)
+	}
+	return tr, nil
+}
+
+// RejectMultiRun is the file store's @runs(N>1) guard (research R5, constitution
+// IV). A recorded fixture is ONE deterministic sample per run id, so N independent
+// samples cannot be fabricated from it — a multi-run request against a file store
+// must fail loudly rather than silently correlate one sample N times. n<=1 is fine;
+// n>1 returns the R5 error, naming the dir. Runtime enforcement of replay multi-run
+// is provided by the engine's pinned path (a pinned/saved run rejects n>1); this is
+// the file store's own, dir-named statement of the same invariant.
+func (s *FileStore) RejectMultiRun(n int) error {
+	if n <= 1 {
+		return nil
+	}
+	return fmt.Errorf("file store %q: serves one recorded sample per run id; multi-run (@runs(%d)) requires a live store", s.dir, n)
+}
+
+func (s *FileStore) Caps() core.StoreCaps { return core.StoreCaps{StructuralQuery: false} }

@@ -35,7 +35,10 @@ type RunBudget struct {
 }
 
 type Config struct {
-	Store        string            `yaml:"store"`
+	Store string `yaml:"store"`
+	// StorePath is the fixture directory the "file" store replays from (US5). It is
+	// REQUIRED when Store == "file" (validated in Load) and ignored otherwise.
+	StorePath    string            `yaml:"storePath"`
 	Tempo        Endpoint          `yaml:"tempo"`
 	OTLPEndpoint string            `yaml:"otlpEndpoint"`
 	Poll         PollSpec          `yaml:"poll"`
@@ -143,6 +146,12 @@ func Load(data []byte) (Config, error) {
 	}
 	if c.Store == "" {
 		c.Store = "tempo"
+	}
+	// The file store (US5) replays fixtures from storePath, so an empty storePath is
+	// a hard load error rather than a silent default that would later scan the process
+	// working directory (Constitution IV). For any other store storePath is ignored.
+	if c.Store == "file" && strings.TrimSpace(c.StorePath) == "" {
+		return Config{}, fmt.Errorf("storePath is required when store is %q", "file")
 	}
 	if c.Expectations == "" {
 		c.Expectations = "expectations"

@@ -127,6 +127,53 @@ func TestLoadStore(t *testing.T) {
 	}
 }
 
+// TestLoadStorePath pins the file-store config contract (US5): storePath is
+// REQUIRED when store is "file" (empty → a hard load error naming the field) and
+// carried through to Config; when store is anything else, storePath is ignored.
+func TestLoadStorePath(t *testing.T) {
+	tests := []struct {
+		name       string
+		yaml       string
+		wantPath   string
+		wantErr    bool
+		wantErrSub string
+	}{
+		{
+			name:     "file store keeps storePath",
+			yaml:     "store: file\nstorePath: ./captures\n",
+			wantPath: "./captures",
+		},
+		{
+			name:       "file store without storePath errors naming the field",
+			yaml:       "store: file\n",
+			wantErr:    true,
+			wantErrSub: "storePath",
+		},
+		{
+			name:     "non-file store ignores absent storePath",
+			yaml:     "store: tempo\ntempo:\n  endpoint: http://localhost:3200\n",
+			wantPath: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, err := Load([]byte(tt.yaml))
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				if !strings.Contains(err.Error(), tt.wantErrSub) {
+					t.Fatalf("error %q does not contain %q", err.Error(), tt.wantErrSub)
+				}
+				return
+			}
+			if c.StorePath != tt.wantPath {
+				t.Fatalf("StorePath = %q, want %q", c.StorePath, tt.wantPath)
+			}
+		})
+	}
+}
+
 func TestLoadPricing(t *testing.T) {
 	data := []byte(`
 store: tempo
