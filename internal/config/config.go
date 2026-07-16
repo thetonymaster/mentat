@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"regexp"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/thetonymaster/mentat/internal/core"
 )
 
 // Run-lifecycle defaults (feature 003). Generous enough not to break a slow-but-
@@ -102,6 +105,31 @@ type Target struct {
 	// target (override → suite → default), populated by Load.
 	RunTimeout string    `yaml:"run_timeout"`
 	Budget     RunBudget `yaml:"-"`
+	// Extract is the target's answer-extraction policy (US8); the block is optional
+	// and an absent one means whole (today's TrimSpace behaviour). Validated in Load,
+	// which precompiles the pattern once so the compiled regexp rides the policy.
+	Extract ExtractConfig `yaml:"extract"`
+}
+
+// ExtractConfig is the YAML form of a target's answer-extraction policy (US8,
+// config-`extract` row). Mode is whole|marker|pattern (empty → whole). Marker is
+// required for marker mode; Pattern is required for pattern mode and must compile
+// with at least one capture group. Load validates the block and precompiles the
+// pattern into the unexported compiled field so Policy() never recompiles per run.
+type ExtractConfig struct {
+	Mode    string `yaml:"mode"`
+	Marker  string `yaml:"marker"`
+	Pattern string `yaml:"pattern"`
+	// compiled is the precompiled Pattern regexp, populated by Load for pattern mode
+	// (nil for whole/marker). It is the single compile of the pattern for the whole run.
+	compiled *regexp.Regexp
+}
+
+// Policy converts the validated config into the transport-free core.ExtractPolicy
+// the driver applies. The compiled regexp (built once at Load) rides along, so the
+// engine never recompiles the pattern per run.
+func (e ExtractConfig) Policy() core.ExtractPolicy {
+	return core.ExtractPolicy{Mode: e.Mode, Marker: e.Marker, Pattern: e.compiled}
 }
 
 // HTTP is the per-target request config used when adapter is "http".
@@ -202,6 +230,11 @@ func Load(data []byte) (Config, error) {
 			return Config{}, terr
 		}
 		t.Budget = RunBudget{Timeout: tt, Unbounded: tu, KillGrace: killGrace}
+		re, eerr := validateExtract(name, t.Extract)
+		if eerr != nil {
+			return Config{}, eerr
+		}
+		t.Extract.compiled = re
 		c.Targets[name] = t
 	}
 	if err := validatePricing(c.Pricing); err != nil {
@@ -248,6 +281,39 @@ func validateJudge(j JudgeConfig) error {
 		return fmt.Errorf("judge.max_cost_usd must be finite and >= 0, got %v", j.MaxCostUSD)
 	}
 	return nil
+}
+
+// validateExtract validates a target's extract block and, for pattern mode,
+// returns the compiled regexp so Load can cache it on the target (compile once,
+// not per run). Whole (the default, empty mode) and marker modes return a nil
+// regexp. Every failure is a hard, named load error — a marker/pattern mode
+// missing its required field, a pattern that will not compile, or a pattern with
+// no capture group (there would be nothing to extract), and an unknown mode value.
+// No silent fallback to whole (Constitution IV).
+func validateExtract(target string, e ExtractConfig) (*regexp.Regexp, error) {
+	switch e.Mode {
+	case "", core.ExtractWhole:
+		return nil, nil
+	case core.ExtractMarker:
+		if e.Marker == "" {
+			return nil, fmt.Errorf("target %q: extract marker is required when mode is %q", target, core.ExtractMarker)
+		}
+		return nil, nil
+	case core.ExtractPattern:
+		if e.Pattern == "" {
+			return nil, fmt.Errorf("target %q: extract pattern is required when mode is %q", target, core.ExtractPattern)
+		}
+		re, err := regexp.Compile(e.Pattern)
+		if err != nil {
+			return nil, fmt.Errorf("target %q: extract pattern %q does not compile: %w", target, e.Pattern, err)
+		}
+		if re.NumSubexp() < 1 {
+			return nil, fmt.Errorf("target %q: extract pattern %q must contain at least one capture group", target, e.Pattern)
+		}
+		return re, nil
+	default:
+		return nil, fmt.Errorf("target %q: unknown extract mode %q (want %q, %q, or %q)", target, e.Mode, core.ExtractWhole, core.ExtractMarker, core.ExtractPattern)
+	}
 }
 
 // validatePricing rejects pricing entries that would silently skew the cost a

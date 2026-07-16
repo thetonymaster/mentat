@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/thetonymaster/mentat/internal/core"
 )
 
 func TestLoadAppliesPerAdapterConcurrencyDefaults(t *testing.T) {
@@ -169,6 +171,160 @@ func TestLoadStorePath(t *testing.T) {
 			}
 			if c.StorePath != tt.wantPath {
 				t.Fatalf("StorePath = %q, want %q", c.StorePath, tt.wantPath)
+			}
+		})
+	}
+}
+
+// TestLoadExtract pins the targets.<n>.extract config contract (US8, data-model
+// config-`extract` row): default (absent) is whole; marker requires a marker;
+// pattern must compile AND carry at least one capture group; an unknown mode is a
+// load error. Valid configs convert to the right core.ExtractPolicy, and the
+// pattern is precompiled once at load (the compiled regexp rides the policy).
+func TestLoadExtract(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name         string
+		yaml         string
+		wantErr      bool
+		errSub       string
+		assertPolicy func(t *testing.T, p core.ExtractPolicy)
+	}{
+		{
+			name: "absent extract defaults to whole (empty mode, nil pattern)",
+			yaml: `targets:
+  a: { adapter: shell, command: ["true"] }
+`,
+			assertPolicy: func(t *testing.T, p core.ExtractPolicy) {
+				if p.Mode != "" {
+					t.Fatalf("Mode = %q, want empty (whole default)", p.Mode)
+				}
+				if p.Pattern != nil {
+					t.Fatalf("Pattern = %v, want nil for whole", p.Pattern)
+				}
+			},
+		},
+		{
+			name: "explicit whole mode loads",
+			yaml: `targets:
+  a:
+    adapter: shell
+    command: ["true"]
+    extract: { mode: whole }
+`,
+			assertPolicy: func(t *testing.T, p core.ExtractPolicy) {
+				if p.Mode != core.ExtractWhole {
+					t.Fatalf("Mode = %q, want %q", p.Mode, core.ExtractWhole)
+				}
+			},
+		},
+		{
+			name: "marker mode with marker loads and converts",
+			yaml: `targets:
+  a:
+    adapter: shell
+    command: ["true"]
+    extract: { mode: marker, marker: "ANSWER:" }
+`,
+			assertPolicy: func(t *testing.T, p core.ExtractPolicy) {
+				if p.Mode != core.ExtractMarker || p.Marker != "ANSWER:" {
+					t.Fatalf("policy = %+v, want mode=marker marker=ANSWER:", p)
+				}
+			},
+		},
+		{
+			name: "marker mode without marker errors naming the requirement",
+			yaml: `targets:
+  a:
+    adapter: shell
+    command: ["true"]
+    extract: { mode: marker }
+`,
+			wantErr: true,
+			errSub:  "marker is required",
+		},
+		{
+			name: "pattern mode with a valid single-group regex loads, compiles, and converts",
+			yaml: `targets:
+  a:
+    adapter: shell
+    command: ["true"]
+    extract: { mode: pattern, pattern: 'id=(\w+)' }
+`,
+			assertPolicy: func(t *testing.T, p core.ExtractPolicy) {
+				if p.Mode != core.ExtractPattern {
+					t.Fatalf("Mode = %q, want %q", p.Mode, core.ExtractPattern)
+				}
+				if p.Pattern == nil {
+					t.Fatal("Pattern is nil, want a precompiled regexp riding the policy")
+				}
+				m := p.Pattern.FindStringSubmatch("id=xyz")
+				if len(m) < 2 || m[1] != "xyz" {
+					t.Fatalf("compiled pattern did not capture as expected: %v", m)
+				}
+			},
+		},
+		{
+			name: "pattern mode without pattern errors naming the requirement",
+			yaml: `targets:
+  a:
+    adapter: shell
+    command: ["true"]
+    extract: { mode: pattern }
+`,
+			wantErr: true,
+			errSub:  "pattern is required",
+		},
+		{
+			name: "pattern that does not compile errors naming the pattern",
+			yaml: `targets:
+  a:
+    adapter: shell
+    command: ["true"]
+    extract: { mode: pattern, pattern: 'id=(' }
+`,
+			wantErr: true,
+			errSub:  "id=(",
+		},
+		{
+			name: "pattern with zero capture groups errors",
+			yaml: `targets:
+  a:
+    adapter: shell
+    command: ["true"]
+    extract: { mode: pattern, pattern: 'id=\w+' }
+`,
+			wantErr: true,
+			errSub:  "capture group",
+		},
+		{
+			name: "unknown mode errors naming the mode",
+			yaml: `targets:
+  a:
+    adapter: shell
+    command: ["true"]
+    extract: { mode: telepathy }
+`,
+			wantErr: true,
+			errSub:  "telepathy",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := Load([]byte(tt.yaml))
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Load err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				if !strings.Contains(err.Error(), tt.errSub) {
+					t.Fatalf("error %q does not contain %q", err.Error(), tt.errSub)
+				}
+				return
+			}
+			p := cfg.Targets["a"].Extract.Policy()
+			if tt.assertPolicy != nil {
+				tt.assertPolicy(t, p)
 			}
 		})
 	}

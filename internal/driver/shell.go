@@ -121,11 +121,18 @@ func (s shell) Run(ctx context.Context, spec core.RunSpec) (core.RunResult, erro
 		return core.RunResult{}, fmt.Errorf("shell: exec %v: %w (stderr: %s)", spec.Command, runErr, stderr.String())
 	}
 
+	answer, err := core.ExtractAnswer(stdout.String(), spec.Extract)
+	if err != nil {
+		// An unresolvable marker/pattern is a hard run failure naming the offending
+		// marker/pattern, never a silent empty answer (Constitution IV). Same shape
+		// as the exec-failure returns above.
+		return core.RunResult{}, fmt.Errorf("shell: extract answer for run %q: %w", spec.RunID, err)
+	}
 	out := core.Output{
 		Stdout:   stdout.String(),
 		Stderr:   stderr.String(),
 		ExitCode: exit,
-		Answer:   core.ExtractAnswer(stdout.String()),
+		Answer:   answer,
 	}
 	// Normal-completion narration (Debug): the exit code is known and the run is
 	// not a cancellation (those return early above, before this point).

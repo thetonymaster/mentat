@@ -4,7 +4,9 @@ package core
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"time"
 
@@ -121,6 +123,11 @@ type RunSpec struct {
 	// driver honours the lifecycle policy without importing config. Zero means the
 	// driver applies no extra grace/WaitDelay (the pre-feature-003 behaviour).
 	KillGrace time.Duration
+	// Extract is the answer-extraction policy the driver applies to stdout (US8).
+	// The zero value is ExtractWhole (TrimSpace), so a spec built without it keeps
+	// today's behaviour byte-for-byte. Only the shell adapter consults it — an
+	// http adapter's answer is its response body, not a stdout concept.
+	Extract ExtractPolicy
 }
 
 // HTTPSpec is the http adapter's per-target request config (mirrors config.HTTP,
@@ -232,8 +239,57 @@ type JudgeVerdict struct {
 	Usage JudgeUsage
 }
 
-// ExtractAnswer applies the project-wide convention: stdout is the result.
-func ExtractAnswer(stdout string) string { return strings.TrimSpace(stdout) }
+// Extraction modes (US8, data-model "Answer extraction"). The zero value ("")
+// is treated as ExtractWhole so a hand-built RunSpec and a target with no
+// `extract` config keep today's TrimSpace behaviour byte-for-byte.
+const (
+	ExtractWhole   = "whole"   // trimmed full stdout (default; never fails)
+	ExtractMarker  = "marker"  // text after the LAST occurrence of Marker, trimmed
+	ExtractPattern = "pattern" // first capture group of the first Pattern match
+)
+
+// ExtractPolicy parameterizes ExtractAnswer (US8). It is a value type: the zero
+// value (Mode == "") behaves as ExtractWhole. Marker is required for ExtractMarker;
+// Pattern is a precompiled regexp with at least one capture group, required for
+// ExtractPattern. The config layer compiles Pattern once at load and rides the
+// compiled regexp here so extraction never recompiles per run.
+type ExtractPolicy struct {
+	Mode    string
+	Marker  string
+	Pattern *regexp.Regexp
+}
+
+// ExtractAnswer derives the run's answer from stdout under policy. The default
+// (whole) mode never fails. A marker or pattern that cannot be resolved is a hard,
+// descriptive error naming the offending marker/pattern — never a silent empty
+// answer (Constitution IV): an unresolvable extraction is a run failure, not an
+// empty-string success.
+func ExtractAnswer(stdout string, policy ExtractPolicy) (string, error) {
+	switch policy.Mode {
+	case "", ExtractWhole:
+		return strings.TrimSpace(stdout), nil
+	case ExtractMarker:
+		idx := strings.LastIndex(stdout, policy.Marker)
+		if idx < 0 {
+			return "", fmt.Errorf("extract: marker %q not found in output", policy.Marker)
+		}
+		return strings.TrimSpace(stdout[idx+len(policy.Marker):]), nil
+	case ExtractPattern:
+		if policy.Pattern == nil {
+			return "", fmt.Errorf("extract: pattern mode requires a compiled pattern")
+		}
+		m := policy.Pattern.FindStringSubmatch(stdout)
+		if m == nil {
+			return "", fmt.Errorf("extract: pattern \"%s\" found no match in output", policy.Pattern.String())
+		}
+		if len(m) < 2 {
+			return "", fmt.Errorf("extract: pattern \"%s\" has no capture group", policy.Pattern.String())
+		}
+		return m[1], nil
+	default:
+		return "", fmt.Errorf("extract: unknown mode %q (want %q, %q, or %q)", policy.Mode, ExtractWhole, ExtractMarker, ExtractPattern)
+	}
+}
 
 // RunReport is the whole-run artifact a Reporter renders. Pure data.
 type RunReport struct {

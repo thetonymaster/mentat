@@ -86,8 +86,8 @@ number; each independently shippable.
 
 **Independent Test**: marker config extracts after last marker; absent marker fails naming it; default unchanged.
 
-- [ ] T021 [P] [US8] Failing table tests: extraction modes whole (today's behaviour), marker (last occurrence; absent → run failure naming marker), pattern (first capture group; no match → failure naming pattern); config validation (marker/pattern required per mode, pattern must compile with ≥1 group) in internal/core/core_test.go, internal/config/config_test.go (go-test-writer, red)
-- [ ] T022 [US8] Implement policy-parameterized `ExtractAnswer` + `targets.<n>.extract` config + driver application in internal/core/core.go, internal/config/config.go, internal/driver/shell.go (go-test-writer, green)
+- [X] T021 [P] [US8] Failing table tests: extraction modes whole (today's behaviour), marker (last occurrence; absent → run failure naming marker), pattern (first capture group; no match → failure naming pattern); config validation (marker/pattern required per mode, pattern must compile with ≥1 group) in internal/core/core_test.go, internal/config/config_test.go (go-test-writer, red)
+- [X] T022 [US8] Implement policy-parameterized `ExtractAnswer` + `targets.<n>.extract` config + driver application in internal/core/core.go, internal/config/config.go, internal/driver/shell.go (go-test-writer, green)
 
 ---
 

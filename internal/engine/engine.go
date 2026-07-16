@@ -159,6 +159,10 @@ func (e *Engine) driveOnce(ctx context.Context, target string, args []string, in
 		},
 		Env:       env,
 		KillGrace: budget.KillGrace,
+		// The target's answer-extraction policy (US8), converted from validated
+		// config (pattern precompiled once at load). The shell driver applies it to
+		// stdout; the zero value is whole, so targets without `extract` are unchanged.
+		Extract: t.Extract.Policy(),
 	}
 	runID := e.cor.Inject(ctx, &spec)
 	e.logger.InfoContext(ctx, "drive.start", "target", target, "adapter", t.Adapter, "command", spec.Command, "run_id", runID)
