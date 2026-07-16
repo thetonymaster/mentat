@@ -36,10 +36,29 @@ Expected highlights per slice:
 
 ## Offline replay proof (no infrastructure)
 
-```sh
-make harness-down   # docker stopped on purpose
-mentat run features/smoke.feature --config mentat-file-store.yaml
+The `file` store replays saved run fixtures from a directory with **no Docker and no
+network**. It resolves a trace by the fixture's recorded `runScenario` (the run id a
+run was saved under, via `mentatctl agent run --save` / `ctl.WriteFixture`), so replay
+runs on the **pinned** path — `mentatctl agent replay <saved-run-id>` — which resolves
+that exact id from the store without driving anything. The live `mentat run` path
+injects a *fresh* run id per run that matches no saved fixture, so it deliberately
+fails loud (not-found naming dir + id) rather than serving the wrong trace; use the
+pinned path for offline replay. Configure a `file`-backed suite:
+
+```yaml
+store: file
+storePath: <fixtures dir>   # directory of saved-run fixtures
 ```
+
+```sh
+mentatctl agent replay <saved-run-id> --feature <feature file> --config <file-store config>
+```
+
+Proven hermetically (no Docker, no network) by
+`internal/steps/filestore_replay_test.go`: a saved fixture is resolved entirely from a
+directory-backed `store.FileStore` (keyed by its recorded run id) and drives a suite
+green through the real steps → engine → correlator pipeline. A `@runs(N>1)` scenario is
+a hard error — the file store holds one recorded sample per id.
 
 Expected: green verdicts from the saved fixture, zero network.
 

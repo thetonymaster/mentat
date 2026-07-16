@@ -111,9 +111,9 @@ number; each independently shippable.
 
 ## Phase 12: Polish & Cross-Cutting
 
-- [ ] T027 [P] Coverage gate `/coverage` ≥80% touched packages (go-coder)
-- [ ] T028 [P] Full quickstart.md validation: offline replay proof (docker down), doc walkthrough note for SC-001, `make ci` (SC-008) (go-coder)
-- [ ] T029 Sync both contract docs with implementation (flag spellings, JSON field names, price math); README updates (steps ref, validate, file store, judge budget); changelog for `--junit` behaviour change (go-coder)
+- [X] T027 [P] Coverage gate `/coverage` ≥80% touched packages (go-coder)
+- [X] T028 [P] Full quickstart.md validation: offline replay proof (docker down), doc walkthrough note for SC-001, `make ci` (SC-008) (go-coder)
+- [X] T029 Sync both contract docs with implementation (flag spellings, JSON field names, price math); README updates (steps ref, validate, file store, judge budget); changelog for `--junit` behaviour change (go-coder)
 
 ---
 
