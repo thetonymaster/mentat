@@ -5,8 +5,9 @@
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/cli-surface.md, contracts/judge-ledger.md
 
 **Tests**: MANDATORY (constitution Principle V) — red→green pairs via
-**go-test-writer**; Makefile/docs/goldens via **go-coder**. Nine stories (US1–US9
-= audit E1–E9 reordered by priority); each independently shippable.
+**go-test-writer**; Makefile/docs/goldens via **go-coder**. Nine stories (US_n ↔
+audit E_n); the phases below are ordered by priority (P1→P3), not by story
+number; each independently shippable.
 
 ## Phase 1: Setup
 
@@ -24,10 +25,10 @@
 
 **Independent Test**: `mentat steps` lists every registered step; drift test fails on missing metadata.
 
-- [ ] T002 [US1] Failing tests: step metadata table — every registration carries `{pattern, summary, example}`; drift test (registered pattern without metadata → fail); count matches registration list in internal/steps/metadata_test.go (go-test-writer, red)
-- [ ] T003 [US1] Restructure registration into the metadata table consumed by `RegisterSteps` in internal/steps/steps.go, internal/steps/metadata.go (go-test-writer, green)
-- [ ] T004 [US1] Failing tests: `mentat steps [--format md|text]` renders grouped steps + selector/quantifier/ordinal grammar + CEL variables; md output == committed docs/steps.md (regeneration-clean) in cmd/mentat/steps_cmd_test.go (go-test-writer, red)
-- [ ] T005 [US1] Implement `steps` subcommand + generator + commit generated docs/steps.md (go:generate wiring) in cmd/mentat/main.go, cmd/mentat/steps_cmd.go, docs/steps.md (go-test-writer, green)
+- [X] T002 [US1] Failing tests: step metadata table — every registration carries `{pattern, summary, example}`; drift test (registered pattern without metadata → fail); count matches registration list in internal/steps/metadata_test.go (go-test-writer, red)
+- [X] T003 [US1] Restructure registration into the metadata table consumed by `RegisterSteps` in internal/steps/steps.go, internal/steps/metadata.go (go-test-writer, green)
+- [X] T004 [US1] Failing tests: `mentat steps [--format md|text]` renders grouped steps + selector/quantifier/ordinal grammar + CEL variables; md output == committed docs/steps.md (regeneration-clean) in cmd/mentat/steps_cmd_test.go (go-test-writer, red)
+- [X] T005 [US1] Implement `steps` subcommand + generator + commit generated docs/steps.md (go:generate wiring) in cmd/mentat/main.go, cmd/mentat/steps_cmd.go, docs/steps.md (go-test-writer, green)
 
 ---
 
@@ -46,7 +47,7 @@
 
 - [ ] T008 [US6] Failing tests: `core.JudgeUsage` captured per call (SDK usage fields), aggregated across votes by the semantic matcher into Verdict detail in internal/judge/claude_test.go, internal/comparator/semantic_test.go (go-test-writer, red)
 - [ ] T009 [US6] Implement usage capture + aggregation (core.JudgeUsage type, `go generate` mocks) in internal/core/core.go, internal/judge/claude.go, internal/comparator/semantic.go (go-test-writer, green)
-- [ ] T010 [US6] Failing tests: collector sums per-scenario + suite `judgeTotal`; JSON `judge{}` objects (absent when no calls — no fabricated zeros); HTML section; cost via pricing table with ambiguous-model hard error in internal/report/collector_test.go, internal/report/report_test.go (go-test-writer, red)
+- [ ] T010 [US6] Failing tests: collector sums per-scenario + suite `judgeTotal` — FR-006's "suite summary" surface is this total rendered in the JSON report and the HTML summary block; Mentat emits no separate console total (godog's `pretty` stdout is not Mentat-formatted); JSON `judge{}` objects (absent when no calls — no fabricated zeros); HTML section incl. the suite-total row; cost via pricing table with ambiguous-model hard error in internal/report/collector_test.go, internal/report/report_test.go (go-test-writer, red)
 - [ ] T011 [US6] Implement ledger rendering + `judge.max_cost_usd` config + post-scenario budget check aborting with spent/budget/scenario named in internal/report/collector.go, internal/report/json.go, internal/report/html.go, internal/config/config.go, internal/steps/steps.go (go-test-writer, green)
 - [ ] T012 [US6] Failing tests: default judge model constant is fast tier; `votes>1 && temperature==0` → load error naming both remedies; L3 semantic meta-tests pass under new default in internal/config/config_test.go, internal/steps/semantic_meta_test.go (go-test-writer, red)
 - [ ] T013 [US6] Implement default swap + config guard; record price-sheet math for SC-006 in the PR description in internal/config/config.go (go-test-writer, green)
@@ -118,7 +119,7 @@
 
 ## Dependencies & Execution Order
 
-- No foundational phase — stories are file-disjoint except `internal/config/config.go` (serialize T011, T013, T019, T022 greens — or land as micro-PRs in that order) and `internal/steps/steps.go` (T003 before T007's precheck export; serialize T017/T021 steps edits).
+- No foundational phase — stories are file-disjoint except `internal/config/config.go` (serialize T011, T013, T019, T022 greens — or land as micro-PRs in that order) and `internal/steps/steps.go` (T003 before T007's precheck export; serialize T011/T017/T021 steps edits — T011 wires the post-scenario budget abort into steps.go too).
 - US5 (file store) consumes feature 002's canonical vocabulary — land after 002 or include its spellings.
 - US2 depends on US1's metadata table for step binding (T007 after T003).
 - Priority order: US1, US2, US6 (P1) → US3, US4, US5, US8 (P2) → US7, US9 (P3). MVP = US1.
