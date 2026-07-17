@@ -58,6 +58,22 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator, opts ...O
 	// unset (0) defaults to 1, but a negative or even value is a loud error
 	// rather than a silently-coerced guess (Constitution IV, no silent fallbacks).
 	judge.RegisterBuiltins()
+
+	// Funnel custom driver/comparator/judge registrations from the public facade
+	// (spec 007 FR-002). They land AFTER the built-ins and BEFORE judge resolution,
+	// adapter validation, and Seal — so a custom driver is a first-class adapter
+	// validated like any other, and a custom judge is resolvable by name.
+	//
+	// Each is collision-checked against the registry first: the registry keys by name
+	// only, so provenance is tracked to the extent of "a built-in or an earlier
+	// registration". Built-ins register first and extras apply in order, so the 2nd of
+	// a duplicate pair sees the 1st already present — covering both custom-vs-built-in
+	// and custom-vs-custom. A collision is a loud, seam-and-name error, never a silent
+	// last-wins overwrite (Constitution IV).
+	if err := applyExtras(o); err != nil {
+		return nil, err
+	}
+
 	backend := cfg.Judge.Backend
 	if backend == "" {
 		backend = "claude"
@@ -113,6 +129,32 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator, opts ...O
 	}
 	registry.Seal() // wiring complete: post-build registration now fails loudly (FR-009)
 	return &Engine{cfg: cfg, cor: cor, st: st, sems: sems, pricing: pricing, patterns: pats, logger: o.logger}, nil
+}
+
+// applyExtras registers the facade-funneled driver/comparator/judge seams into the
+// (open) registry, each guarded by a collision check that fails loudly naming the
+// seam and the conflicting name (FR-002). It runs inside Build, between built-in
+// registration and Seal, so post-seal registration stays unrepresentable.
+func applyExtras(o options) error {
+	for _, ed := range o.extraDrivers {
+		if _, exists := registry.Driver(ed.name); exists {
+			return fmt.Errorf("engine: WithDriver: adapter %q is already registered (a built-in or an earlier registration); adapter names must be unique", ed.name)
+		}
+		registry.RegisterDriver(ed.name, ed.driver)
+	}
+	for _, ec := range o.extraComparators {
+		if _, exists := registry.Comparator(ec.name); exists {
+			return fmt.Errorf("engine: WithComparator: comparator %q is already registered (a built-in or an earlier registration); comparator names must be unique", ec.name)
+		}
+		registry.RegisterComparator(ec.name, ec.comparator)
+	}
+	for _, ej := range o.extraJudges {
+		if _, exists := registry.Judge(ej.name); exists {
+			return fmt.Errorf("engine: WithJudge: judge %q is already registered (a built-in or an earlier registration); judge names must be unique", ej.name)
+		}
+		registry.RegisterJudge(ej.name, ej.factory)
+	}
+	return nil
 }
 
 // toPricing converts the YAML pricing table into the transport-free core.Pricing

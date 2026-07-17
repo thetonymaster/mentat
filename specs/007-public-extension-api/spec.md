@@ -37,10 +37,11 @@ feature file drives it green — built and run in CI.
 2. **Given** the example extension's source, **When** its imports are inspected,
    **Then** it imports only the public package(s) — zero module-private imports
    (enforced by a CI check).
-3. **Given** registration of a duplicate adapter name or a registration after
-   the composition root is sealed, **When** it happens, **Then** it fails
-   loudly (the sealing rules from the run-lifecycle feature apply to public
-   registration too).
+3. **Given** registration of a duplicate adapter name, **When** it happens,
+   **Then** it fails loudly naming both registrants. (Registration *after* the
+   composition root is sealed is unrepresentable through the public surface —
+   options exist only at `Run`, so it cannot occur; feature 003's internal
+   sealing still enforces loudness for the CLI/engine paths.)
 
 ---
 
@@ -140,8 +141,9 @@ follows them.
   nothing else. *(G1)*
 - **FR-002**: Public registration hooks MUST exist for drivers, stores,
   comparators, and judges, composing with the single composition root and its
-  sealing rules; duplicate names and post-seal registration fail loudly naming
-  the conflict. *(G1)*
+  sealing rules; duplicate names fail loudly naming the conflict. Post-seal
+  registration is unrepresentable through the public surface (options exist only
+  at `Run`); feature 003's sealing enforces loudness internally. *(G1)*
 - **FR-003**: A library-mode entry point MUST run feature files with a given
   configuration and optional registrations, honoring caller cancellation, and
   return structured results (per-scenario verdict + reasons + report data +

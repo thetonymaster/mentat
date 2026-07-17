@@ -1,14 +1,95 @@
 package engine
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/thetonymaster/mentat/internal/config"
+	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/registry"
 )
+
+// extraStubDriver/Comparator/Judge are minimal seam stubs used to exercise the
+// facade-funneled extra-registration path (WithExtraDriver/Comparator/Judge) and its
+// collision detection at the composition root (spec 007 FR-002). They do no work —
+// the collision check fires before any of them is ever invoked.
+type extraStubDriver struct{}
+
+func (extraStubDriver) Run(context.Context, core.RunSpec) (core.RunResult, error) {
+	return core.RunResult{}, nil
+}
+
+type extraStubComparator struct{}
+
+func (extraStubComparator) Name() string { return "extra-stub" }
+func (extraStubComparator) Compare(context.Context, core.Evidence, core.Expectation) (core.Verdict, error) {
+	return core.Verdict{Pass: true}, nil
+}
+
+type extraStubJudge struct{}
+
+func (extraStubJudge) Judge(context.Context, core.JudgeRequest) (core.JudgeVerdict, error) {
+	return core.JudgeVerdict{}, nil
+}
+
+// TestBuildAppliesExtraSeams pins the composition-root half of FR-002: facade-funneled
+// driver/comparator/judge registrations land in the registry as first-class seams, and
+// a name colliding with a built-in OR with an earlier extra fails loudly naming the
+// seam and the conflicting name — never a silent last-wins overwrite (Constitution IV).
+//
+// No t.Parallel(): Build mutates the registry's package-global maps.
+func TestBuildAppliesExtraSeams(t *testing.T) {
+	drv := extraStubDriver{}
+	cmp := extraStubComparator{}
+	jf := func(config.Config) (core.Judge, error) { return extraStubJudge{}, nil }
+
+	tests := []struct {
+		name       string
+		opts       []Option
+		wantErrSub []string // nil ⇒ Build succeeds
+		wantDriver string   // non-empty ⇒ assert this driver name is registered after Build
+	}{
+		{name: "custom driver registers as first-class adapter", opts: []Option{WithExtraDriver("xdrv", drv)}, wantDriver: "xdrv"},
+		{name: "driver collides with built-in", opts: []Option{WithExtraDriver("shell", drv)}, wantErrSub: []string{"WithDriver", "shell"}},
+		{name: "driver collides with earlier extra", opts: []Option{WithExtraDriver("dup-d", drv), WithExtraDriver("dup-d", drv)}, wantErrSub: []string{"WithDriver", "dup-d"}},
+		{name: "custom comparator registers", opts: []Option{WithExtraComparator("xcmp", cmp)}},
+		{name: "comparator collides with built-in", opts: []Option{WithExtraComparator("result", cmp)}, wantErrSub: []string{"WithComparator", "result"}},
+		{name: "comparator collides with earlier extra", opts: []Option{WithExtraComparator("dup-c", cmp), WithExtraComparator("dup-c", cmp)}, wantErrSub: []string{"WithComparator", "dup-c"}},
+		{name: "custom judge registers", opts: []Option{WithExtraJudge("xjudge", jf)}},
+		{name: "judge collides with built-in", opts: []Option{WithExtraJudge("claude", jf)}, wantErrSub: []string{"WithJudge", "claude"}},
+		{name: "judge collides with earlier extra", opts: []Option{WithExtraJudge("dup-j", jf), WithExtraJudge("dup-j", jf)}, wantErrSub: []string{"WithJudge", "dup-j"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// No targets ⇒ the adapter-validation loop is skipped, isolating the
+			// extra-registration/collision behaviour under test.
+			cfg := config.Config{OTLPEndpoint: "x"}
+			_, err := Build(cfg, nil, nil, tt.opts...)
+			if len(tt.wantErrSub) == 0 {
+				if err != nil {
+					t.Fatalf("Build with extra seam: %v", err)
+				}
+				if tt.wantDriver != "" {
+					if _, ok := registry.Driver(tt.wantDriver); !ok {
+						t.Fatalf("extra driver %q not registered after Build", tt.wantDriver)
+					}
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("Build must reject %s, got nil error", tt.name)
+			}
+			for _, sub := range tt.wantErrSub {
+				if !strings.Contains(err.Error(), sub) {
+					t.Errorf("Build error = %q, want substring %q", err, sub)
+				}
+			}
+		})
+	}
+}
 
 // TestEngineAdapter proves the read-only Adapter accessor reports a configured
 // target's adapter (used by the steps layer to reject request-body steps against a
