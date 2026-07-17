@@ -138,3 +138,15 @@ go-coder:        T001, T025 (Makefile), T026
 Ship US1 (step docs) as MVP — it unblocks human authoring immediately. US2 and
 US6 complete the P1 tier. Every story is a checkpoint; nothing here blocks the
 correctness features (002–005), which take precedence if scheduling conflicts.
+
+---
+
+## Phase 13: Convergence
+
+**Appended by `/speckit-converge`** after assessing the code against spec.md,
+plan.md, and the constitution. Ten of eleven FRs and all buildable success
+criteria are satisfied in code; the two findings below are the remaining gap.
+Ordered MEDIUM then LOW (no CRITICAL/HIGH findings).
+
+- [X] T030 Stop silently ignoring a non-`whole` `extract` policy on non-shell (http) targets: reject it at config load with a descriptive error (preferred, per Constitution IV), or apply `core.ExtractAnswer` to the response body in the http driver — today config.go:293 validates it for every target and engine.go:165 plumbs `t.Extract.Policy()` into every RunSpec, but internal/driver/http.go:83 never reads it, so a `marker`/`pattern` extract on an http target is a silent no-op returning the whole body, in internal/config/config.go, internal/driver/http.go per FR-010 / Constitution IV (partial)
+- [X] T031 Wire `FileStore.RejectMultiRun` into the file-store replay path as defense-in-depth, or remove it as redundant and rely on the documented engine pinned-path guard (engine.go:258) — the method (internal/store/filestore.go:320) is implemented and unit-tested (filestore_test.go:826) but has no production caller, in internal/store/filestore.go, internal/engine/engine.go per FR-005 edge case / research R5 (unrequested)
