@@ -160,6 +160,9 @@ func (w *world) sendRequestBodyDoc(doc *godog.DocString) error {
 	if doc == nil {
 		return fmt.Errorf("send-request-body step: expected a docstring body, got none")
 	}
+	if err := w.requireBodyAdapter(); err != nil {
+		return err
+	}
 	return w.drive(nil, doc.Content)
 }
 
@@ -177,7 +180,22 @@ func (w *world) sendRequestBodyFixture(path string) error {
 	if err != nil {
 		return fmt.Errorf("read request body fixture %q: %w", resolved, err)
 	}
+	if err := w.requireBodyAdapter(); err != nil {
+		return err
+	}
 	return w.drive(nil, string(body))
+}
+
+// requireBodyAdapter rejects a request-body step whose target uses an adapter that
+// does not consume a request body — only the http adapter does. Without this the
+// shell adapter would silently discard the body (Constitution IV: no silent
+// fallbacks). When no target is set the accessor reports ok=false and this passes
+// through, leaving drive's "no target set" error to fire (path preserved).
+func (w *world) requireBodyAdapter() error {
+	if a, ok := w.eng.Adapter(w.target); ok && a != "http" {
+		return fmt.Errorf("request-body step: target %q uses the %q adapter, which does not consume a request body (only http does)", w.target, a)
+	}
+	return nil
 }
 
 func (w *world) drive(args []string, input string) error {

@@ -92,6 +92,15 @@ func (e *Engine) ShapePattern(name string) ([]comparator.ShapeExpectation, bool)
 // operation, not a concurrent one.
 func (e *Engine) PinRun(runID string) { e.pinned = runID }
 
+// Adapter reports the adapter kind of a configured target ("shell", "http", …) and
+// whether the target exists. Read-only; the step layer uses it to reject a
+// request-body step against an adapter that does not consume a body (only http
+// does), so the body is never silently discarded (Constitution IV).
+func (e *Engine) Adapter(target string) (string, bool) {
+	t, ok := e.cfg.Targets[target]
+	return t.Adapter, ok
+}
+
 // Comparator resolves a named comparator from the global registry.
 func (e *Engine) Comparator(name string) (core.Comparator, bool) {
 	return registry.Comparator(name)

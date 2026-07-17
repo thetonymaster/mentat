@@ -33,13 +33,25 @@ func validateCmd(args []string, stdout io.Writer) (int, error) {
 	fs.SetOutput(stdout)
 	cfgPath := fs.String("config", "mentat.yaml", "config file")
 	format := fs.String("format", "text", "output format: text (human-readable) or json")
-	if err := fs.Parse(args); err != nil {
-		return 2, err
+	// flag.FlagSet stops parsing at the first positional, so we resume after each
+	// path to accept flags interspersed with the positional paths (the documented
+	// `validate [paths...] [--config ...] [--format ...]` contract).
+	var paths []string
+	rest := args
+	for len(rest) > 0 {
+		if err := fs.Parse(rest); err != nil {
+			return 2, err
+		}
+		rest = fs.Args()
+		if len(rest) == 0 {
+			break
+		}
+		paths = append(paths, rest[0])
+		rest = rest[1:]
 	}
 	if *format != "text" && *format != "json" {
 		return 2, fmt.Errorf("validate: unknown --format %q (want text or json)", *format)
 	}
-	paths := fs.Args()
 	if len(paths) == 0 {
 		paths = []string{"features"}
 	}
@@ -72,10 +84,17 @@ func runValidate(cfgPath string, paths []string) []steps.Finding {
 
 	known := map[string]bool{}
 	expDir := ""
+	// configOK/expOK gate the derived checks: an unavailable source is reported once
+	// as its own finding, but its check is SKIPPED rather than run against empty data
+	// — otherwise one load error balloons into a false unknown-target (or
+	// unknown-shape) for every reference in the corpus.
+	configOK := true
 	if data, err := os.ReadFile(cfgPath); err != nil {
 		findings = append(findings, steps.Finding{File: cfgPath, Class: "config", Message: err.Error()})
+		configOK = false
 	} else if cfg, cerr := config.Load(data); cerr != nil {
 		findings = append(findings, steps.Finding{File: cfgPath, Class: "config", Message: cerr.Error()})
+		configOK = false
 	} else {
 		for name := range cfg.Targets {
 			known[name] = true
@@ -83,10 +102,12 @@ func runValidate(cfgPath string, paths []string) []steps.Finding {
 		expDir = cfg.Expectations
 	}
 
+	expOK := true
 	pats, perr := expectations.Load(expDir)
 	if perr != nil {
 		findings = append(findings, steps.Finding{File: expDir, Class: "expectations", Message: perr.Error()})
 		pats = expectations.Patterns{}
+		expOK = false
 	}
 
 	// The checker satisfies steps.PrecheckEngine with real cel/aggregate-cel
@@ -108,7 +129,7 @@ func runValidate(cfgPath string, paths []string) []steps.Finding {
 	}
 
 	for _, f := range files {
-		findings = append(findings, checkFeature(f, known, chk)...)
+		findings = append(findings, checkFeature(f, known, chk, configOK, expOK)...)
 	}
 	return dedupeSort(findings)
 }
@@ -141,7 +162,10 @@ func (c checker) ShapePattern(name string) ([]comparator.ShapeExpectation, bool)
 
 // checkFeature parses one feature file, generates its pickles, and runs every
 // precheck against each pickle — resolving each finding's source line via the AST.
-func checkFeature(path string, known map[string]bool, chk checker) []steps.Finding {
+// configOK/expOK omit the target and shape-pattern checks respectively when their
+// source failed to load, so an unavailable source is never mistaken for "every
+// reference is unknown".
+func checkFeature(path string, known map[string]bool, chk checker, configOK, expOK bool) []steps.Finding {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return []steps.Finding{{File: path, Class: "read", Message: err.Error()}}
@@ -159,9 +183,13 @@ func checkFeature(path string, known map[string]bool, chk checker) []steps.Findi
 	for _, pk := range gherkin.Pickles(*doc, path, gen) {
 		out = append(out, steps.RunsTagFindings(pk.Tags, src)...)
 		out = append(out, steps.StepBindingFindings(pk.Steps, src)...)
-		out = append(out, steps.TargetFindings(known, pk.Steps, src)...)
+		if configOK {
+			out = append(out, steps.TargetFindings(known, pk.Steps, src)...)
+		}
 		out = append(out, steps.CELFindings(chk, pk.Steps, src)...)
-		out = append(out, steps.ShapePatternFindings(chk, pk.Steps, src)...)
+		if expOK {
+			out = append(out, steps.ShapePatternFindings(chk, pk.Steps, src)...)
+		}
 	}
 	return out
 }
@@ -189,8 +217,11 @@ func featureFiles(paths []string) ([]string, []steps.Finding) {
 			add(p)
 			continue
 		}
-		_ = filepath.WalkDir(p, func(path string, d fs.DirEntry, werr error) error {
+		walkErr := filepath.WalkDir(p, func(path string, d fs.DirEntry, werr error) error {
+			// An unreadable subtree is a reported finding, never a silent omission:
+			// record it and keep walking siblings (return nil, not the error).
 			if werr != nil {
+				findings = append(findings, steps.Finding{File: path, Class: "path", Message: werr.Error()})
 				return nil
 			}
 			if !d.IsDir() {
@@ -198,6 +229,9 @@ func featureFiles(paths []string) ([]string, []steps.Finding) {
 			}
 			return nil
 		})
+		if walkErr != nil {
+			findings = append(findings, steps.Finding{File: p, Class: "path", Message: walkErr.Error()})
+		}
 	}
 	sort.Strings(files)
 	return files, findings

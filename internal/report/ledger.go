@@ -82,31 +82,31 @@ func NewBudget(maxUSD float64, pricing core.Pricing) *Budget {
 
 // Add prices sr's completed judge usage, accumulates it, and returns a hard error
 // when the running total crosses the ceiling (naming spent, budget, and the crossing
-// scenario) or when the usage cannot be priced (ambiguous/unknown model). The first
-// error is retained (see Err) and further Adds return it unchanged, so a scenario
-// that slips through after the abort signal cannot mask the original cause.
+// scenario) or when the usage cannot be priced (ambiguous/unknown model). The FIRST
+// error is retained (see Err) and further Adds return it unchanged, so a scenario that
+// slips through after the abort signal cannot mask the original cause — but their
+// completed cost is STILL folded into Spent(), so the accounting never underreports
+// actual usage once the budget has tripped.
 func (b *Budget) Add(sr core.ScenarioResult) error {
 	if b.max <= 0 {
 		return nil // unlimited: no accounting, no cost computed (pre-US6 behaviour)
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.err != nil {
-		return b.err
-	}
 	if sr.Judge != nil {
 		cost, err := JudgeCost(*sr.Judge, b.pricing)
 		if err != nil {
-			b.err = fmt.Errorf("judge budget: scenario %q: %w", sr.Name, err)
+			if b.err == nil {
+				b.err = fmt.Errorf("judge budget: scenario %q: %w", sr.Name, err)
+			}
 			return b.err
 		}
 		b.spent += cost
 	}
-	if b.spent > b.max {
+	if b.spent > b.max && b.err == nil {
 		b.err = fmt.Errorf("judge budget exceeded: spent $%.4f exceeds budget $%.4f at scenario %q", b.spent, b.max, sr.Name)
-		return b.err
 	}
-	return nil
+	return b.err
 }
 
 // Err returns the retained trip/pricing error (nil until the budget is crossed or a

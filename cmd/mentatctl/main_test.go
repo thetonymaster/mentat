@@ -195,6 +195,67 @@ func TestBindRunFlags(t *testing.T) {
 	}
 }
 
+// TestCheckFlags proves the post-parse validation rejects a flag the selected
+// verb does not read (Constitution IV: no silently-ignored flag, naming flag +
+// verb) and rejects a negative --timeout, while supported flags, the universal
+// flags (config/-v/-vv), and a zero/positive timeout pass.
+func TestCheckFlags(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		sub     string
+		args    []string
+		timeout time.Duration
+		wantErr string // empty => nil expected
+	}{
+		// supported / universal flags pass, per verb
+		{name: "run supports timeout", sub: "run", args: []string{"--timeout", "5s"}, timeout: 5 * time.Second},
+		{name: "run supports prompt-file", sub: "run", args: []string{"--prompt-file", "p.txt"}},
+		{name: "run supports o", sub: "run", args: []string{"-o", "out.txt"}},
+		{name: "run supports scenario save quiet json target", sub: "run", args: []string{"--scenario", "s", "--save", "f", "--quiet", "--json", "--target", "b"}},
+		{name: "trace supports last", sub: "trace", args: []string{"--last"}},
+		{name: "tools supports last", sub: "tools", args: []string{"--last"}},
+		{name: "services supports last", sub: "services", args: []string{"--last"}},
+		{name: "replay supports feature and last", sub: "replay", args: []string{"--feature", "f.feature", "--last"}},
+		{name: "universal config allowed for diff", sub: "diff", args: []string{"--config", "x.yaml"}},
+		{name: "universal verbose allowed for trace", sub: "trace", args: []string{"-v"}},
+		{name: "universal debug allowed for tools", sub: "tools", args: []string{"-vv"}},
+		{name: "no flags set is fine", sub: "diff", args: nil},
+
+		// unsupported flags rejected, naming flag + verb
+		{name: "trace rejects timeout", sub: "trace", args: []string{"--timeout", "5s"}, wantErr: `flag "--timeout" is not supported by the "trace" command`},
+		{name: "replay rejects o", sub: "replay", args: []string{"-o", "out"}, wantErr: `flag "--o" is not supported by the "replay" command`},
+		{name: "diff rejects prompt-file", sub: "diff", args: []string{"--prompt-file", "x"}, wantErr: `flag "--prompt-file" is not supported by the "diff" command`},
+		{name: "run rejects last", sub: "run", args: []string{"--last"}, wantErr: `flag "--last" is not supported by the "run" command`},
+		{name: "trace rejects feature", sub: "trace", args: []string{"--feature", "f"}, wantErr: `flag "--feature" is not supported by the "trace" command`},
+
+		// negative timeout rejected (supported verb, bad value); zero/positive pass
+		{name: "run rejects negative timeout", sub: "run", args: []string{"--timeout", "-1s"}, timeout: -time.Second, wantErr: "--timeout must be non-negative, got -1s"},
+		{name: "run allows zero timeout", sub: "run", args: []string{"--timeout", "0s"}, timeout: 0},
+		{name: "run allows positive timeout", sub: "run", args: []string{"--timeout", "3s"}, timeout: 3 * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			fs := flag.NewFlagSet(tt.sub, flag.ContinueOnError)
+			bindRunFlags(fs)
+			if err := fs.Parse(tt.args); err != nil {
+				t.Fatalf("parse %v: %v", tt.args, err)
+			}
+			err := checkFlags(tt.sub, fs, tt.timeout)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("checkFlags(%q, %v) = %v, want nil", tt.sub, tt.args, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("checkFlags(%q, %v) = %v, want containing %q", tt.sub, tt.args, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestSplitDomainVerb(t *testing.T) {
 	tests := []struct {
 		name       string

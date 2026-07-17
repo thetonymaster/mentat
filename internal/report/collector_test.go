@@ -92,10 +92,11 @@ func TestCollector_Scenarios(t *testing.T) {
 
 // TestCollector_JudgeTotal proves the collector folds each scenario's judge usage
 // into a suite JudgeTotal (US6 / judge-ledger contract): calls, input and output
-// tokens sum field-wise across scenarios that made judge calls, and the total is
-// nil when NO scenario made a judge call — absence of usage is not a fabricated
-// all-zero total (FR-006, "no fabricated zeros"). Cost is filled later by Price;
-// the collector sums only the raw token counts.
+// tokens AND any already-filled CostUsd sum field-wise across scenarios that made
+// judge calls, and the total is nil when NO scenario made a judge call — absence of
+// usage is not a fabricated all-zero total (FR-006, "no fabricated zeros"). Per-scenario
+// CostUsd is filled by Price before the report is folded; the collector aggregates it
+// into JudgeTotal.CostUsd rather than recomputing.
 func TestCollector_JudgeTotal(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -104,6 +105,7 @@ func TestCollector_JudgeTotal(t *testing.T) {
 		wantCalls int
 		wantIn    int64
 		wantOut   int64
+		wantCost  float64
 	}{
 		{
 			name: "no judge calls yields a nil total (no fabricated zeros)",
@@ -116,13 +118,14 @@ func TestCollector_JudgeTotal(t *testing.T) {
 		{
 			name: "sums judge usage across the scenarios that called the judge",
 			appends: []core.ScenarioResult{
-				{Name: "a", Pass: true, Judge: &core.JudgeUsage{Calls: 3, InputTokens: 1250, OutputTokens: 90, Model: "judge-model"}},
+				{Name: "a", Pass: true, Judge: &core.JudgeUsage{Calls: 3, InputTokens: 1250, OutputTokens: 90, Model: "judge-model", CostUsd: 0.0125}},
 				{Name: "b", Pass: true}, // made no judge call — contributes nothing
-				{Name: "c", Pass: true, Judge: &core.JudgeUsage{Calls: 9, InputTokens: 3750, OutputTokens: 270, Model: "judge-model"}},
+				{Name: "c", Pass: true, Judge: &core.JudgeUsage{Calls: 9, InputTokens: 3750, OutputTokens: 270, Model: "judge-model", CostUsd: 0.0375}},
 			},
 			wantCalls: 12,
 			wantIn:    5000,
 			wantOut:   360,
+			wantCost:  0.05,
 		},
 	}
 	for _, tt := range tests {
@@ -149,6 +152,9 @@ func TestCollector_JudgeTotal(t *testing.T) {
 			}
 			if rep.JudgeTotal.OutputTokens != tt.wantOut {
 				t.Errorf("JudgeTotal.OutputTokens = %d, want %d", rep.JudgeTotal.OutputTokens, tt.wantOut)
+			}
+			if math.Abs(rep.JudgeTotal.CostUsd-tt.wantCost) >= 1e-9 {
+				t.Errorf("JudgeTotal.CostUsd = %v, want ~%v", rep.JudgeTotal.CostUsd, tt.wantCost)
 			}
 			// The suite total is not attributed to one model (the contract's judgeTotal
 			// carries no model key), so the collector leaves Model empty.

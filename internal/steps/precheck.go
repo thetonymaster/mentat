@@ -215,6 +215,16 @@ func RunsTagFindings(tags []*messages.PickleTag, src Source) []Finding {
 // scenario-init prefix). parseRunsTag (steps.go) wraps this for the fail-fast
 // Before hook; RunsTagFindings wraps it for collect-all validation.
 func parseRunsTagRaw(tags []*messages.PickleTag) (n int, parallel bool, tag *messages.PickleTag, msg string) {
+	// Scan ALL tags: a pickle inherits feature/rule/scenario-level tags, so more than
+	// one @runs may reach here. A malformed tag is reported as before; two or more VALID
+	// @runs tags are ambiguous (Constitution IV: ambiguous input is a hard, descriptive
+	// error, never an order-dependent guess). We remember the first valid match and, on
+	// seeing a second, return an ambiguity naming both — locating it at the second tag.
+	var (
+		firstTag *messages.PickleTag
+		firstN   int
+		firstPar bool
+	)
 	for _, t := range tags {
 		if !strings.HasPrefix(t.Name, "@runs(") {
 			continue
@@ -227,7 +237,13 @@ func parseRunsTagRaw(tags []*messages.PickleTag) (n int, parallel bool, tag *mes
 		if err != nil || nn < 1 {
 			return 0, false, t, fmt.Sprintf("@runs requires N>=1, got %q", t.Name)
 		}
-		return nn, m[2] == "parallel", nil, ""
+		if firstTag != nil {
+			return 0, false, t, fmt.Sprintf("ambiguous @runs tags: %q and %q both set the run count (only one @runs is allowed)", firstTag.Name, t.Name)
+		}
+		firstTag, firstN, firstPar = t, nn, m[2] == "parallel"
+	}
+	if firstTag != nil {
+		return firstN, firstPar, nil, ""
 	}
 	return 1, false, nil, ""
 }

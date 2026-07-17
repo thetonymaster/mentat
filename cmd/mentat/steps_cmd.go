@@ -241,6 +241,8 @@ Quantifiers
   exactly N spans match "..."               exactly N matches
   the tool "..." is called at most N times  at most N calls
   the tool "..." is never called            zero calls (never)
+  a span "..." has at least N children matching "..."  fan-out lower bound
+  a span "..." has exactly N children matching "..."   fan-out exact count
 
 Ordinals (tool-result and span-attribute steps; spans ordered by start time)
   (none)      the sole match; error if zero or more than one match

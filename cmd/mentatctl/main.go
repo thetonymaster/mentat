@@ -144,6 +144,51 @@ func timeoutErr(timeout time.Duration, ctxErr, runErr error) error {
 	return runErr
 }
 
+// universalFlags are accepted by every verb: the config path and the two
+// verbosity switches. They are allowed on top of each verb's own flags.
+var universalFlags = map[string]bool{"config": true, "v": true, "vv": true}
+
+// verbFlags lists, per verb, the flags that verb's dispatch case actually reads
+// (beyond the universal set). A flag set on the command line but absent here is
+// rejected by checkFlags so an unsupported flag can never be silently ignored
+// (architecture invariant: no silent fallbacks). run reads its inputs directly
+// and never resolves an id, so `last` is deliberately absent; trace/tools/
+// services/replay resolve an id via idArg() and so accept `last`.
+var verbFlags = map[string]map[string]bool{
+	"run":      {"target": true, "scenario": true, "prompt": true, "prompt-file": true, "o": true, "json": true, "quiet": true, "save": true, "timeout": true},
+	"trace":    {"last": true},
+	"tools":    {"last": true},
+	"services": {"last": true},
+	"replay":   {"feature": true, "last": true},
+	"diff":     {},
+}
+
+// checkFlags is a pure post-parse guard: it rejects any flag that was explicitly
+// set on fs but is not supported by the sub verb, and rejects a negative
+// --timeout. It inspects only the flags Parse actually saw (fs.Visit), so unset
+// defaults never trip it. Returned errors name the offending flag and verb (or
+// the bad duration) so the failure is self-explanatory.
+func checkFlags(sub string, fs *flag.FlagSet, timeout time.Duration) error {
+	allowed := verbFlags[sub]
+	var bad error
+	fs.Visit(func(fl *flag.Flag) {
+		if bad != nil {
+			return
+		}
+		if universalFlags[fl.Name] || allowed[fl.Name] {
+			return
+		}
+		bad = fmt.Errorf("flag %q is not supported by the %q command", "--"+fl.Name, sub)
+	})
+	if bad != nil {
+		return bad
+	}
+	if timeout < 0 {
+		return fmt.Errorf("--timeout must be non-negative, got %s", timeout)
+	}
+	return nil
+}
+
 func dispatch(domain, sub string, rest []string) error {
 	if err := checkDomainVerb(domain, sub); err != nil {
 		return err
@@ -152,6 +197,9 @@ func dispatch(domain, sub string, rest []string) error {
 	fs := flag.NewFlagSet(sub, flag.ExitOnError)
 	f := bindRunFlags(fs)
 	_ = fs.Parse(rest)
+	if err := checkFlags(sub, fs, *f.timeout); err != nil {
+		return err
+	}
 	args := fs.Args()
 
 	// Verbosity flags map to a stderr slog handler (discard by default, SC-005);

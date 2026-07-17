@@ -25,12 +25,14 @@ func mustMkdir(t *testing.T, dir string) {
 	}
 }
 
-// defectsFeature seeds four authoring defect classes at known lines:
+// defectsFeature seeds four authoring defect references at known lines:
 //
 //	line 3: unknown target ("ghost" is not a configured target)
 //	line 5: unbound step  ("the moon is made of cheese" matches no metadata pattern)
 //	line 6: bad CEL       ("tokens <" does not compile)
-//	line 7: unknown shape ("missing" is not a loaded pattern)
+//	line 7: unknown shape ("missing") — flagged unknown-shape ONLY when the
+//	        expectations dir loads; when expectations fails to load the shape check
+//	        is skipped (a load failure must not balloon into false unknown-shapes).
 const defectsFeature = `Feature: defects
   Scenario: many problems
     Given the agent target "ghost"
@@ -95,8 +97,10 @@ func classesIn(out string) map[string]bool {
 }
 
 // TestValidateCollectsAllFindings proves a single validate run reports every
-// authoring defect class — the four seeded feature defects plus the malformed
-// expectations file — with exit 1, never stopping at the first finding.
+// authoring defect class it can — three feature defects plus the malformed
+// expectations file — with exit 1, never stopping at the first finding. Because
+// the seeded expectations dir fails to load, the shape check is (correctly) skipped
+// here; genuine unknown-shape is covered by TestValidateUnavailableSourceDoesNotBalloon.
 func TestValidateCollectsAllFindings(t *testing.T) {
 	t.Parallel()
 	cfgPath, featuresDir, expDir := seedDefectCorpus(t)
@@ -111,10 +115,15 @@ func TestValidateCollectsAllFindings(t *testing.T) {
 	}
 
 	got := classesIn(out.String())
-	for _, class := range []string{"unbound-step", "bad-cel", "unknown-target", "unknown-shape", "expectations"} {
+	for _, class := range []string{"unbound-step", "bad-cel", "unknown-target", "expectations"} {
 		if !got[class] {
 			t.Errorf("missing finding class %q in output:\n%s", class, out.String())
 		}
+	}
+	// The expectations dir failed to load, so the shape check is skipped — no
+	// unknown-shape may appear (a load failure must not balloon into false findings).
+	if got["unknown-shape"] {
+		t.Errorf("unknown-shape must be suppressed when expectations fails to load:\n%s", out.String())
 	}
 
 	// Line resolution: the feature defects must carry their source line.
@@ -122,7 +131,6 @@ func TestValidateCollectsAllFindings(t *testing.T) {
 		"unknown-target": 3,
 		"unbound-step":   5,
 		"bad-cel":        6,
-		"unknown-shape":  7,
 	}
 	for class, line := range wantLines {
 		if !hasFindingAtLine(out.String(), featuresDir, class, line) {
@@ -247,8 +255,8 @@ func TestValidateJSONFormat(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
 		t.Fatalf("output is not valid JSON: %v\n%s", err, out.String())
 	}
-	if len(doc.Findings) < 5 {
-		t.Fatalf("want >=5 findings, got %d\n%s", len(doc.Findings), out.String())
+	if len(doc.Findings) < 4 {
+		t.Fatalf("want >=4 findings, got %d\n%s", len(doc.Findings), out.String())
 	}
 	seen := map[string]bool{}
 	for _, f := range doc.Findings {
@@ -257,7 +265,8 @@ func TestValidateJSONFormat(t *testing.T) {
 			t.Errorf("finding missing class/message: %+v", f)
 		}
 	}
-	for _, class := range []string{"unbound-step", "bad-cel", "unknown-target", "unknown-shape", "expectations"} {
+	// unknown-shape is suppressed because the seeded expectations dir fails to load.
+	for _, class := range []string{"unbound-step", "bad-cel", "unknown-target", "expectations"} {
 		if !seen[class] {
 			t.Errorf("json missing class %q", class)
 		}
@@ -397,6 +406,186 @@ func TestValidateDirectFileAndMissingPath(t *testing.T) {
 	}
 	if !got["path"] {
 		t.Errorf("missing path was not reported:\n%s", out.String())
+	}
+}
+
+// shapeFeature references a configured target and a shape name, so a corpus whose
+// expectations dir loads cleanly can still surface a GENUINE unknown-shape finding.
+const shapeFeature = `Feature: shapes
+  Scenario: unknown shape
+    Given the agent target "researchbot"
+    When I run scenario "x"
+    Then the run matches shape "missing"
+`
+
+// seedBadConfigCorpus writes the four-defect feature and a config that FAILS to
+// load (negative max_concurrency), returning the config path and features dir.
+func seedBadConfigCorpus(t *testing.T) (cfgPath, featuresDir string) {
+	t.Helper()
+	root := t.TempDir()
+	featuresDir = filepath.Join(root, "features")
+	mustMkdir(t, featuresDir)
+	mustWrite(t, filepath.Join(featuresDir, "defects.feature"), defectsFeature)
+	cfgPath = filepath.Join(root, "mentat.yaml")
+	mustWrite(t, cfgPath, "targets:\n  bad:\n    max_concurrency: -3\n")
+	return cfgPath, featuresDir
+}
+
+// seedLoadableShapeCorpus writes a valid config (researchbot target) whose
+// expectations dir loads cleanly (one real pattern), plus a feature referencing an
+// unknown shape — so unknown-shape is a GENUINE finding, not an artifact of an
+// expectations-load failure.
+func seedLoadableShapeCorpus(t *testing.T) (cfgPath, featuresDir string) {
+	t.Helper()
+	root := t.TempDir()
+	expDir := filepath.Join(root, "expectations")
+	mustMkdir(t, expDir)
+	mustWrite(t, filepath.Join(expDir, "flow.yaml"), "name: research-flow\nclauses:\n  - exists: \"gen_ai.operation.name=invoke_agent\"\n")
+	featuresDir = filepath.Join(root, "features")
+	mustMkdir(t, featuresDir)
+	mustWrite(t, filepath.Join(featuresDir, "shape.feature"), shapeFeature)
+	cfgPath = filepath.Join(root, "mentat.yaml")
+	mustWrite(t, cfgPath, "expectations: "+expDir+"\ntargets:\n  researchbot:\n    adapter: shell\n    command: [echo, hi]\n")
+	return cfgPath, featuresDir
+}
+
+// TestValidateUnavailableSourceDoesNotBalloon proves an unavailable source is
+// reported once and never balloons into per-target/per-shape FALSE findings: a
+// config that fails to load must NOT flag every target as unknown-target, and a
+// malformed expectations dir must NOT flag every shape as unknown-shape. When a
+// source IS available the genuine check still fires.
+func TestValidateUnavailableSourceDoesNotBalloon(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		setup       func(t *testing.T) (cfgPath, featuresDir string)
+		wantPresent []string
+		wantAbsent  []string
+	}{
+		{
+			name:        "config load failure suppresses unknown-target",
+			setup:       seedBadConfigCorpus,
+			wantPresent: []string{"config"},
+			wantAbsent:  []string{"unknown-target"},
+		},
+		{
+			name: "expectations load failure suppresses unknown-shape but keeps unknown-target",
+			setup: func(t *testing.T) (string, string) {
+				c, f, _ := seedDefectCorpus(t)
+				return c, f
+			},
+			wantPresent: []string{"expectations", "unknown-target"},
+			wantAbsent:  []string{"unknown-shape"},
+		},
+		{
+			name:        "loadable expectations still yields a genuine unknown-shape",
+			setup:       seedLoadableShapeCorpus,
+			wantPresent: []string{"unknown-shape"},
+			wantAbsent:  []string{"expectations"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfgPath, featuresDir := tt.setup(t)
+			var out bytes.Buffer
+			if _, err := validateCmd([]string{"--config", cfgPath, featuresDir}, &out); err != nil {
+				t.Fatalf("validateCmd error: %v", err)
+			}
+			got := classesIn(out.String())
+			for _, c := range tt.wantPresent {
+				if !got[c] {
+					t.Errorf("want finding class %q present, got:\n%s", c, out.String())
+				}
+			}
+			for _, c := range tt.wantAbsent {
+				if got[c] {
+					t.Errorf("want finding class %q ABSENT (false finding from an unavailable source), got:\n%s", c, out.String())
+				}
+			}
+		})
+	}
+}
+
+// TestValidateFlagsInterspersedWithPaths proves the documented contract
+// `mentat validate [paths...] [--config ...] [--format ...]`: flags work whether
+// they precede, follow, or surround the positional paths. A flag.FlagSet stops at
+// the first positional, so `validate features --format json` would otherwise treat
+// `--format json` as PATHS and silently render TEXT.
+func TestValidateFlagsInterspersedWithPaths(t *testing.T) {
+	t.Parallel()
+	cfgPath, featuresDir, _ := seedDefectCorpus(t)
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"flag after path", []string{"--config", cfgPath, featuresDir, "--format", "json"}},
+		{"flag before path", []string{"--config", cfgPath, "--format", "json", featuresDir}},
+		{"flags surrounding paths", []string{"--config", cfgPath, featuresDir, "--format", "json", featuresDir}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var out bytes.Buffer
+			_, err := validateCmd(tt.args, &out)
+			if err != nil {
+				t.Fatalf("validateCmd error: %v", err)
+			}
+			if !strings.HasPrefix(strings.TrimSpace(out.String()), "{") {
+				t.Fatalf("want JSON output (leading '{'), got:\n%s", out.String())
+			}
+		})
+	}
+}
+
+// cleanFeature is a defect-free feature (known target, compilable CEL) used to
+// make a corpus non-empty without adding findings of its own.
+const cleanFeature = `Feature: clean
+  Scenario: ok
+    Given the agent target "researchbot"
+    When I run scenario "x"
+    Then the run satisfies "tokens < 5000"
+`
+
+// TestValidateReportsUnreadableSubtree proves featureFiles reports a directory it
+// cannot traverse as a `path` finding rather than silently omitting it — an
+// unreadable subtree must never masquerade as a clean corpus.
+func TestValidateReportsUnreadableSubtree(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	featuresDir := filepath.Join(root, "features")
+	mustMkdir(t, featuresDir)
+	mustWrite(t, filepath.Join(featuresDir, "ok.feature"), cleanFeature) // non-empty corpus
+
+	sub := filepath.Join(featuresDir, "locked")
+	mustMkdir(t, sub)
+	mustWrite(t, filepath.Join(sub, "hidden.feature"), cleanFeature)
+	if err := os.Chmod(sub, 0o000); err != nil {
+		t.Fatalf("chmod %s: %v", sub, err)
+	}
+	// Restore perms before t.TempDir's own cleanup, so RemoveAll can descend.
+	t.Cleanup(func() { _ = os.Chmod(sub, 0o755) })
+	if _, err := os.ReadDir(sub); err == nil {
+		t.Skip("cannot drop directory read perms in this environment (running as root?)")
+	}
+
+	cfgPath := filepath.Join(root, "mentat.yaml")
+	mustWrite(t, cfgPath, "targets:\n  researchbot:\n    adapter: shell\n    command: [echo, hi]\n")
+
+	var out bytes.Buffer
+	code, err := validateCmd([]string{"--config", cfgPath, featuresDir}, &out)
+	if err != nil {
+		t.Fatalf("validateCmd error: %v", err)
+	}
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1 (unreadable subtree is a finding)\n%s", code, out.String())
+	}
+	if !classesIn(out.String())["path"] {
+		t.Fatalf("want a path finding for the unreadable subtree, got:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), sub) {
+		t.Errorf("path finding should name the unreadable dir %q, got:\n%s", sub, out.String())
 	}
 }
 

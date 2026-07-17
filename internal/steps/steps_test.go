@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -706,6 +708,12 @@ func TestParseRunsTag(t *testing.T) {
 			tags:    []*messages.PickleTag{{Name: "@smoke"}},
 			wantN:   1,
 			wantPar: false,
+		},
+		{
+			name:    "multiple_runs_tags_are_ambiguous",
+			tags:    []*messages.PickleTag{{Name: "@runs(2)"}, {Name: "@runs(3)"}},
+			wantErr: true,
+			errSub:  "@runs(3)",
 		},
 	}
 	for _, tt := range tests {
@@ -1882,18 +1890,29 @@ func TestStepsThreadScenarioContext(t *testing.T) {
 	})
 }
 
-// captureInputEngine wires an engine whose shell driver runs a harmless echo and
-// whose mock correlator captures the RunSpec's Input at Inject time (Inject fires
-// in driveOnce AFTER the spec is fully built) and resolves a trace so the drive
-// succeeds. The returned *string holds the Input of the most recent drive — the
-// seam the US4 body steps must plumb through. A shell target is used precisely
-// because the shell driver ignores spec.Input, so a captured non-empty Input can
-// only have come from the body step, never from the driver.
+// captureInputEngine wires an engine whose http driver posts to a throwaway 200
+// server and whose mock correlator captures the RunSpec's Input at Inject time
+// (Inject fires in driveOnce AFTER the spec is fully built) and resolves a trace so
+// the drive succeeds. The returned *string holds the Input of the most recent drive
+// — the seam the US4 body steps must plumb through. An http target is used because
+// F19 now rejects request-body steps against any non-http adapter; the driver only
+// READS spec.Input (never writes it back), so a captured non-empty Input can still
+// only have come from the body step. Inject/Resolve are Times(1): each returned
+// engine serves exactly one drive, so a regression that stops driving (leaving *got
+// at its "" zero value) trips the unmet expectation instead of a false pass.
 func captureInputEngine(t *testing.T) (*engine.Engine, *string) {
 	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
 	cfg := config.Config{
 		OTLPEndpoint: "x",
-		Targets:      map[string]config.Target{"bot": {Adapter: "shell", Command: []string{"sh", "-c", "echo hi"}, MaxConcurrency: 1}},
+		Targets: map[string]config.Target{"bot": {
+			Adapter:        "http",
+			HTTP:           config.HTTP{URL: srv.URL, Method: "POST"},
+			MaxConcurrency: 1,
+		}},
 	}
 	ctrl := gomock.NewController(t)
 	st := mocks.NewMockTraceStore(ctrl)
@@ -1903,8 +1922,8 @@ func captureInputEngine(t *testing.T) (*engine.Engine, *string) {
 		func(_ context.Context, spec *core.RunSpec) string {
 			*got = spec.Input
 			return "run-1"
-		}).AnyTimes()
-	cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).Return(happyTrace(), nil).AnyTimes()
+		}).Times(1)
+	cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).Return(happyTrace(), nil).Times(1)
 	eng, err := engine.Build(cfg, st, cor)
 	if err != nil {
 		t.Fatalf("engine.Build: %v", err)
@@ -1998,6 +2017,67 @@ func TestSendRequestBodyFixtureSetsInput(t *testing.T) {
 			}
 			if *got != content {
 				t.Fatalf("captured Input = %q, want %q", *got, content)
+			}
+		})
+	}
+}
+
+// shellBodyEngine wires a fully-drivable engine with a SHELL target, so a body
+// step reaches (and, before the F19 fix, drives) the shell adapter. The mock
+// correlator's Inject/Resolve are AnyTimes: after the fix the body step must reject
+// the shell adapter BEFORE driving (zero Inject calls), so a Times(1) here would
+// mask the very behaviour under test.
+func shellBodyEngine(t *testing.T) *engine.Engine {
+	t.Helper()
+	cfg := config.Config{
+		OTLPEndpoint: "x",
+		Targets:      map[string]config.Target{"bot": {Adapter: "shell", Command: []string{"sh", "-c", "echo hi"}, MaxConcurrency: 1}},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	cor := mocks.NewMockCorrelator(ctrl)
+	cor.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("run-1").AnyTimes()
+	cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).Return(happyTrace(), nil).AnyTimes()
+	eng, err := engine.Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("engine.Build: %v", err)
+	}
+	return eng
+}
+
+// TestSendRequestBodyRejectsNonHTTPAdapter proves a request-body step against a
+// non-http adapter (here shell, which ignores RunSpec.Input) is a hard error naming
+// the adapter — never a silent drive that discards the body (Constitution IV / F19).
+// The doc-string path guards after the nil check; the fixture path guards after the
+// file read (so the fixture must exist to reach the adapter check).
+func TestSendRequestBodyRejectsNonHTTPAdapter(t *testing.T) {
+	dir := t.TempDir()
+	fixture := filepath.Join(dir, "body.json")
+	if err := os.WriteFile(fixture, []byte("{\"q\":1}"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	tests := []struct {
+		name string
+		call func(w *world) error
+	}{
+		{
+			name: "doc-string body against shell",
+			call: func(w *world) error { return w.sendRequestBodyDoc(&godog.DocString{Content: "{}"}) },
+		},
+		{
+			name: "fixture body against shell",
+			call: func(w *world) error { return w.sendRequestBodyFixture(fixture) },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := &world{eng: shellBodyEngine(t), ctx: context.Background(), target: "bot", uri: filepath.Join(dir, "o.feature")}
+			err := tt.call(w)
+			if err == nil {
+				t.Fatal("want error for a body step against a shell adapter, got nil")
+			}
+			if !strings.Contains(err.Error(), "shell") {
+				t.Fatalf("error %q must name the offending %q adapter", err.Error(), "shell")
 			}
 		})
 	}

@@ -111,6 +111,26 @@ func TestStepsCmdFormats(t *testing.T) {
 	}
 }
 
+// TestStepsTextGrammarHasFanoutQuantifiers proves the text grammar's Quantifiers
+// section lists the two fan-out (parent/child) forms, which ARE registered steps
+// (`…has at least/exactly N children matching …`). The unique grammar labels
+// "fan-out lower bound"/"fan-out exact count" live only in the grammar section, so
+// this asserts the Quantifiers block specifically, not the step table.
+func TestStepsTextGrammarHasFanoutQuantifiers(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	if err := stepsCmd(nil, &buf); err != nil { // nil args → default text format
+		t.Fatalf("stepsCmd text: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"fan-out lower bound", "fan-out exact count"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("steps text grammar missing fan-out quantifier %q", want)
+		}
+	}
+}
+
 // TestStepsCmdWritesFile covers the -o path the go:generate directive uses: the
 // file written must be byte-identical to what the command streams to stdout.
 func TestStepsCmdWritesFile(t *testing.T) {

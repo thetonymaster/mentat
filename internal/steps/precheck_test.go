@@ -1,6 +1,7 @@
 package steps
 
 import (
+	"strings"
 	"testing"
 
 	messages "github.com/cucumber/messages/go/v21"
@@ -196,15 +197,22 @@ func TestShapePatternFindings(t *testing.T) {
 func TestRunsTagFindings(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name    string
-		tags    []*messages.PickleTag
-		wantHit bool
+		name     string
+		tags     []*messages.PickleTag
+		wantHit  bool
+		wantSubs []string
 	}{
 		{name: "absent tag", tags: nil},
 		{name: "good tag", tags: []*messages.PickleTag{{Name: "@runs(3)"}}},
 		{name: "good parallel tag", tags: []*messages.PickleTag{{Name: "@runs(2,parallel)"}}},
 		{name: "malformed tag", tags: []*messages.PickleTag{{Name: "@runs(bad)", AstNodeId: "t1"}}, wantHit: true},
 		{name: "zero n", tags: []*messages.PickleTag{{Name: "@runs(0)", AstNodeId: "t1"}}, wantHit: true},
+		{
+			name:     "two valid tags are ambiguous",
+			tags:     []*messages.PickleTag{{Name: "@runs(2)", AstNodeId: "t1"}, {Name: "@runs(3)", AstNodeId: "t2"}},
+			wantHit:  true,
+			wantSubs: []string{"ambiguous", "@runs(2)", "@runs(3)"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -216,6 +224,11 @@ func TestRunsTagFindings(t *testing.T) {
 				}
 				if got[0].Line != 2 {
 					t.Fatalf("line = %d, want 2", got[0].Line)
+				}
+				for _, sub := range tt.wantSubs {
+					if !strings.Contains(got[0].Message, sub) {
+						t.Fatalf("finding message %q must name %q", got[0].Message, sub)
+					}
 				}
 				return
 			}

@@ -271,14 +271,16 @@ func (s *FileStore) Query(_ context.Context, q core.TraceQuery) ([]core.TraceRef
 
 // FetchPayload returns the recorded fixture bytes for id — the change-detection
 // signal of the stability poll. The bytes are the file's own content (deterministic
-// across fetches), so repeated fetches are byte-identical. Unknown/ambiguous id is
-// the hard error lookup names, never (nil, nil).
+// across fetches), so repeated fetches are byte-identical. A COPY is returned, never
+// the internal slice: a caller that mutates the result must not corrupt subsequent
+// fetches (the byte-stability guarantee). Unknown/ambiguous id is the hard error
+// lookup names, never (nil, nil).
 func (s *FileStore) FetchPayload(_ context.Context, id string) ([]byte, error) {
 	ent, err := s.lookup(id)
 	if err != nil {
 		return nil, err
 	}
-	return ent.payload, nil
+	return append([]byte(nil), ent.payload...), nil
 }
 
 // DecodePayload decodes payload bytes previously returned by FetchPayload — the

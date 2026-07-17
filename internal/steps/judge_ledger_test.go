@@ -18,26 +18,25 @@ import (
 	"github.com/thetonymaster/mentat/internal/report"
 )
 
-// usageJudge is a deterministic core.Judge that returns a fixed match verdict AND a
-// fixed token usage, so the ledger-threading tests can assert the usage flows from
-// the semantic matcher through the After hook and report.Derive into the collector.
-type usageJudge struct {
-	usage core.JudgeUsage
-}
-
-func (j usageJudge) Judge(_ context.Context, _ core.JudgeRequest) (core.JudgeVerdict, error) {
-	return core.JudgeVerdict{Match: true, Reason: "usage judge match", Usage: j.usage}, nil
-}
-
-// usageJudgeEng builds a real engine whose judge backend returns the given fixed
-// usage on every call (votes=1). Hermetic: mock store serving happyTrace, shell
-// target echoing an answer the fake judge ignores. Registers into the global judge
-// registry, so callers must be serial.
+// usageJudgeEng builds a real engine whose judge backend is a gomock MockJudge
+// returning a fixed match verdict AND the given fixed token usage on its single
+// expected call (votes=1), so the ledger-threading tests can assert the usage flows
+// from the semantic matcher through the After hook and report.Derive into the
+// collector. Per CLAUDE.md the core Judge interface is mocked with uber gomock (not a
+// hand fake) because the call count matters: Times(1) proves the semantic check
+// issues exactly one judge call — and, for the budget test, that the aborted second
+// scenario starts none. Hermetic: mock store serving happyTrace, shell target echoing
+// an answer the judge ignores. Registers into the global judge registry, so callers
+// must be serial.
 func usageJudgeEng(t *testing.T, u core.JudgeUsage) *engine.Engine {
 	t.Helper()
 	registry.ResetForTest(t)
+	ctrl := gomock.NewController(t)
+	j := mocks.NewMockJudge(ctrl)
+	j.EXPECT().Judge(gomock.Any(), gomock.Any()).
+		Return(core.JudgeVerdict{Match: true, Reason: "usage judge match", Usage: u}, nil).Times(1)
 	registry.RegisterJudge("fake-usage", func(config.Config) (core.Judge, error) {
-		return usageJudge{usage: u}, nil
+		return j, nil
 	})
 	cfg := config.Config{
 		OTLPEndpoint: "x",
@@ -46,7 +45,6 @@ func usageJudgeEng(t *testing.T, u core.JudgeUsage) *engine.Engine {
 			"svc": {Adapter: "shell", Command: []string{"sh", "-c", "echo answer"}, MaxConcurrency: 1},
 		},
 	}
-	ctrl := gomock.NewController(t)
 	st := mocks.NewMockTraceStore(ctrl)
 	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "r"}}, nil).AnyTimes()
 	stubStoredTrace(st, happyTrace())

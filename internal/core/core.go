@@ -269,6 +269,9 @@ func ExtractAnswer(stdout string, policy ExtractPolicy) (string, error) {
 	case "", ExtractWhole:
 		return strings.TrimSpace(stdout), nil
 	case ExtractMarker:
+		if policy.Marker == "" {
+			return "", fmt.Errorf("extract: marker mode requires a non-empty marker")
+		}
 		idx := strings.LastIndex(stdout, policy.Marker)
 		if idx < 0 {
 			return "", fmt.Errorf("extract: marker %q not found in output", policy.Marker)

@@ -220,22 +220,56 @@ func TestBudget_TripsAndNamesScenario(t *testing.T) {
 	}
 }
 
+// TestBudget_ContinuesAccountingAfterTrip proves that once the budget trips on one
+// scenario, a later scenario whose judge call ALSO completed still has its cost folded
+// into Spent() (the "completed calls" accounting must not underreport actual usage),
+// while Err() keeps the ORIGINAL trip error unchanged — the first cause is retained,
+// never overwritten by a scenario that slips through after the abort signal.
+func TestBudget_ContinuesAccountingAfterTrip(t *testing.T) {
+	t.Parallel()
+	b := NewBudget(0.01, budgetPricing) // 1-cent ceiling
+
+	// $0.02 > $0.01 — trips here, naming this scenario.
+	tripErr := b.Add(core.ScenarioResult{Name: "tripper", Judge: budgetUsage(2000)})
+	if tripErr == nil {
+		t.Fatal("expected the budget to trip on the tripper scenario, got nil")
+	}
+
+	// A later scenario that ALSO completed its judge call: its $0.01 must still land in
+	// Spent() even though the budget already tripped.
+	if err := b.Add(core.ScenarioResult{Name: "later", Judge: budgetUsage(1000)}); err == nil {
+		t.Fatal("Add after a trip returned nil, want the retained trip error")
+	}
+	if math.Abs(b.Spent()-0.03) > 1e-9 {
+		t.Errorf("Spent() = %v, want ~0.03 (later scenario's $0.01 still accounted after the trip)", b.Spent())
+	}
+	// Err() retains the ORIGINAL (tripper) error unchanged — not overwritten by "later".
+	if got := b.Err(); got == nil || got.Error() != tripErr.Error() {
+		t.Errorf("Err() = %v, want the original trip error %v (unchanged)", got, tripErr)
+	}
+	if !strings.Contains(b.Err().Error(), "tripper") {
+		t.Errorf("Err() %q should still name the original scenario tripper", b.Err())
+	}
+}
+
 // TestBudget_CleanPaths covers the non-tripping and hard-error paths: an unlimited
 // budget (max 0) never accounts or trips; a scenario with no judge call contributes
 // nothing; and an ambiguous/unknown model is a hard error even under a budget.
 func TestBudget_CleanPaths(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name    string
-		max     float64
-		sr      core.ScenarioResult
-		wantErr bool
-		errSub  string
+		name     string
+		max      float64
+		sr       core.ScenarioResult
+		wantErr  bool
+		errSub   string
+		disabled bool // max <= 0: Add must not account — Spent()==0 and Err()==nil after Add
 	}{
 		{
-			name: "unlimited budget never trips even on a costly scenario",
-			max:  0,
-			sr:   core.ScenarioResult{Name: "big", Judge: budgetUsage(1_000_000)},
+			name:     "unlimited budget never trips even on a costly scenario",
+			max:      0,
+			sr:       core.ScenarioResult{Name: "big", Judge: budgetUsage(1_000_000)},
+			disabled: true,
 		},
 		{
 			name: "scenario with no judge call contributes nothing",
@@ -260,6 +294,15 @@ func TestBudget_CleanPaths(t *testing.T) {
 			}
 			if tt.wantErr && !strings.Contains(err.Error(), tt.errSub) {
 				t.Errorf("error %q missing %q", err, tt.errSub)
+			}
+			if tt.disabled {
+				// Disabled-budget contract: max <= 0 does no accounting at all.
+				if b.Spent() != 0 {
+					t.Errorf("Spent() = %v, want 0 (disabled budget must not account)", b.Spent())
+				}
+				if b.Err() != nil {
+					t.Errorf("Err() = %v, want nil (disabled budget never trips)", b.Err())
+				}
 			}
 		})
 	}

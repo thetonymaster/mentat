@@ -101,6 +101,17 @@ func TestExtractAnswerModes(t *testing.T) {
 			errSub:  "<<RESULT>>",
 		},
 		{
+			// Defensive guard symmetric with the nil-pattern case: an empty marker
+			// makes strings.LastIndex return len(stdout) (>=0), which would silently
+			// extract the empty string as a "successful" answer. Marker mode with an
+			// empty marker is a hard error, never a silent empty answer (Constitution IV).
+			name:    "marker mode with an empty marker is a hard error",
+			stdout:  "anything at all",
+			policy:  ExtractPolicy{Mode: ExtractMarker, Marker: ""},
+			wantErr: true,
+			errSub:  "non-empty marker",
+		},
+		{
 			name:   "pattern returns first capture group of first match",
 			stdout: "id=alpha\nid=beta\n",
 			policy: ExtractPolicy{Mode: ExtractPattern, Pattern: regexp.MustCompile(`id=(\w+)`)},

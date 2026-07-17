@@ -767,6 +767,38 @@ func TestFileStoreFetchAndDecodeRoundTrip(t *testing.T) {
 	}
 }
 
+// TestFileStoreFetchPayloadReturnsCopy pins the byte-stability guarantee (F10):
+// FetchPayload documents that repeated fetches are byte-identical, so it must
+// return a copy, never its internal fixture slice. A caller that mutates the
+// returned bytes must not corrupt subsequent FetchPayload results.
+func TestFileStoreFetchPayloadReturnsCopy(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeFixture(t, dir, "stable.json", `{"runScenario":"stable","spans":[{"name":"invoke_agent researchbot","parentIndex":-1,"status":"Ok","attrs":{"gen_ai.operation.name":"invoke_agent"}}]}`)
+	fs, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+
+	first, err := fs.FetchPayload(context.Background(), "stable")
+	if err != nil {
+		t.Fatalf("FetchPayload (1st): %v", err)
+	}
+	// Snapshot the original bytes before mutating the returned slice.
+	original := string(first)
+
+	// A caller mutates the returned slice; this must not touch stored state.
+	first[0] ^= 0xFF
+
+	second, err := fs.FetchPayload(context.Background(), "stable")
+	if err != nil {
+		t.Fatalf("FetchPayload (2nd): %v", err)
+	}
+	if string(second) != original {
+		t.Fatalf("mutation of returned slice leaked into store:\n got: %s\nwant: %s", second, original)
+	}
+}
+
 // TestFileStoreGetByIDCanonicalVocabulary pins that GetByID loads a fixture by id
 // through LoadFixture, applying the feature-002 canonical status/kind vocabulary:
 // an OTLP status spelling normalizes to the canonical value. Unknown id errors.
