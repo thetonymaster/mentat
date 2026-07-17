@@ -797,47 +797,6 @@ func TestFileStoreGetByIDCanonicalVocabulary(t *testing.T) {
 	}
 }
 
-// TestFileStoreRejectsMultiRun pins the @runs(N>1) hard error (research R5,
-// constitution IV): a recorded fixture is ONE deterministic sample per run id, so
-// N independent samples cannot be fabricated from it. n<=1 is allowed; n>1 is a
-// hard error carrying the R5 intent (one recorded sample / live store) and the dir.
-func TestFileStoreRejectsMultiRun(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	writeFixture(t, dir, "r.json", `{"runScenario":"r","spans":[{"name":"root","parentIndex":-1}]}`)
-	fs, err := NewFileStore(dir)
-	if err != nil {
-		t.Fatalf("NewFileStore: %v", err)
-	}
-
-	tests := []struct {
-		name    string
-		n       int
-		wantErr bool
-	}{
-		{name: "single run allowed", n: 1, wantErr: false},
-		{name: "zero is not multi-run", n: 0, wantErr: false},
-		{name: "two runs rejected", n: 2, wantErr: true},
-		{name: "five runs rejected", n: 5, wantErr: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			err := fs.RejectMultiRun(tt.n)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
-			}
-			if tt.wantErr {
-				for _, sub := range []string{"one recorded sample", "live store", dir} {
-					if !strings.Contains(err.Error(), sub) {
-						t.Fatalf("R5 error %q does not contain %q", err.Error(), sub)
-					}
-				}
-			}
-		})
-	}
-}
-
 // TestFileStoreConstructionErrors pins the loud-failure boundary (constitution IV):
 // a missing dir, a malformed fixture, or a fixture with no runScenario is a hard
 // error at construction (naming the file where one is at fault); an empty dir is a

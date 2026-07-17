@@ -310,18 +310,4 @@ func (s *FileStore) GetByID(_ context.Context, id string) (*trace.Trace, error) 
 	return tr, nil
 }
 
-// RejectMultiRun is the file store's @runs(N>1) guard (research R5, constitution
-// IV). A recorded fixture is ONE deterministic sample per run id, so N independent
-// samples cannot be fabricated from it — a multi-run request against a file store
-// must fail loudly rather than silently correlate one sample N times. n<=1 is fine;
-// n>1 returns the R5 error, naming the dir. Runtime enforcement of replay multi-run
-// is provided by the engine's pinned path (a pinned/saved run rejects n>1); this is
-// the file store's own, dir-named statement of the same invariant.
-func (s *FileStore) RejectMultiRun(n int) error {
-	if n <= 1 {
-		return nil
-	}
-	return fmt.Errorf("file store %q: serves one recorded sample per run id; multi-run (@runs(%d)) requires a live store", s.dir, n)
-}
-
 func (s *FileStore) Caps() core.StoreCaps { return core.StoreCaps{StructuralQuery: false} }
