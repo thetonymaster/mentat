@@ -84,6 +84,11 @@ jobs:
           key: ${{ runner.os }}-gobuild-e2e-${{ hashFiles('**/go.sum', '**/*.go') }}
           restore-keys: |
             ${{ runner.os }}-gobuild-e2e-
+      - name: build lab SUTs
+        # US9: mentat.yaml drives shell SUTs via prebuilt binaries (./bin/researchbot,
+        # ./bin/orderflow); make harness-up builds them locally via `labs`, but this job
+        # starts compose directly, so build them here or the shell scenarios fork/exec-fail.
+        run: make labs
       - name: start Tempo + Collector
         run: docker compose -f deploy/docker-compose.yml up -d
       - name: wait for Tempo
