@@ -258,12 +258,13 @@ func TestBudget_ContinuesAccountingAfterTrip(t *testing.T) {
 func TestBudget_CleanPaths(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name     string
-		max      float64
-		sr       core.ScenarioResult
-		wantErr  bool
-		errSub   string
-		disabled bool // max <= 0: Add must not account — Spent()==0 and Err()==nil after Add
+		name      string
+		max       float64
+		sr        core.ScenarioResult
+		wantErr   bool
+		errSub    string
+		disabled  bool    // max <= 0: Add must not account — Spent()==0 and Err()==nil after Add
+		wantSpent float64 // expected Budget.Spent() after Add (0 for every clean-path row here)
 	}{
 		{
 			name:     "unlimited budget never trips even on a costly scenario",
@@ -272,9 +273,10 @@ func TestBudget_CleanPaths(t *testing.T) {
 			disabled: true,
 		},
 		{
-			name: "scenario with no judge call contributes nothing",
-			max:  0.01,
-			sr:   core.ScenarioResult{Name: "no-judge"},
+			name:      "scenario with no judge call contributes nothing",
+			max:       0.01,
+			sr:        core.ScenarioResult{Name: "no-judge"},
+			wantSpent: 0, // no judge usage => no accounting, even under an active budget
 		},
 		{
 			name:    "ambiguous model under a budget is a hard error",
@@ -294,6 +296,9 @@ func TestBudget_CleanPaths(t *testing.T) {
 			}
 			if tt.wantErr && !strings.Contains(err.Error(), tt.errSub) {
 				t.Errorf("error %q missing %q", err, tt.errSub)
+			}
+			if b.Spent() != tt.wantSpent {
+				t.Errorf("Spent() = %v, want %v after Add", b.Spent(), tt.wantSpent)
 			}
 			if tt.disabled {
 				// Disabled-budget contract: max <= 0 does no accounting at all.

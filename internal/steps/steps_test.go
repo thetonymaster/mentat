@@ -2022,11 +2022,11 @@ func TestSendRequestBodyFixtureSetsInput(t *testing.T) {
 	}
 }
 
-// shellBodyEngine wires a fully-drivable engine with a SHELL target, so a body
-// step reaches (and, before the F19 fix, drives) the shell adapter. The mock
-// correlator's Inject/Resolve are AnyTimes: after the fix the body step must reject
-// the shell adapter BEFORE driving (zero Inject calls), so a Times(1) here would
-// mask the very behaviour under test.
+// shellBodyEngine wires an otherwise-drivable engine with a SHELL target. F19
+// requires a body step to reject the shell adapter BEFORE driving, so the
+// correlator must never be touched: Inject/Resolve are Times(0). That makes a
+// regression which drives the shell adapter before failing trip immediately —
+// AnyTimes() would let such a drive-then-reject slip through.
 func shellBodyEngine(t *testing.T) *engine.Engine {
 	t.Helper()
 	cfg := config.Config{
@@ -2036,8 +2036,8 @@ func shellBodyEngine(t *testing.T) *engine.Engine {
 	ctrl := gomock.NewController(t)
 	st := mocks.NewMockTraceStore(ctrl)
 	cor := mocks.NewMockCorrelator(ctrl)
-	cor.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("run-1").AnyTimes()
-	cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).Return(happyTrace(), nil).AnyTimes()
+	cor.EXPECT().Inject(gomock.Any(), gomock.Any()).Times(0)
+	cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
 	eng, err := engine.Build(cfg, st, cor)
 	if err != nil {
 		t.Fatalf("engine.Build: %v", err)
