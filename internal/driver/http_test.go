@@ -79,6 +79,50 @@ func TestHTTPDriverHappyPath(t *testing.T) {
 	}
 }
 
+// TestHTTPDriverSendsInputBody proves the http driver writes spec.Input to the
+// request body verbatim — including a multi-line (doc-string-style) body — and
+// sends an empty body when Input is empty. This pins the transport half of US4:
+// the engine plumbs the body step's content into spec.Input, and the driver must
+// forward it unaltered.
+func TestHTTPDriverSendsInputBody(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{name: "empty input sends empty body", input: ""},
+		{name: "single-line body verbatim", input: `{"q":"revenue"}`},
+		{name: "multi-line docstring body verbatim", input: "line one\nline two\n  indented\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var gotBody string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				b, _ := io.ReadAll(r.Body)
+				gotBody = string(b)
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer srv.Close()
+
+			spec := core.RunSpec{
+				Target:  "checkout",
+				Adapter: "http",
+				Input:   tt.input,
+				HTTP:    core.HTTPSpec{URL: srv.URL, Method: http.MethodPost},
+				RunID:   "run-body",
+				Tags:    map[string]string{"test.run.id": "run-body"},
+			}
+			if _, err := NewHTTP().Run(context.Background(), spec); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if gotBody != tt.input {
+				t.Fatalf("body = %q, want %q (verbatim)", gotBody, tt.input)
+			}
+		})
+	}
+}
+
 func TestHTTPDriverNon2xxIsData(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusPaymentRequired)

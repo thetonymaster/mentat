@@ -19,6 +19,7 @@ type RunOpts struct {
 	JSON     bool
 	Quiet    bool
 	Save     string // fixture name; empty = don't save
+	Output   string // -o: write the answer (only) to this file; empty = don't
 }
 
 // LastPath is where the most recent interactive run id is cached. Used by --last.

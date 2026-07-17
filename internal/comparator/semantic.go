@@ -80,7 +80,18 @@ func (m semanticMatcher) Match(ctx context.Context, ev core.Evidence, want, _ st
 
 	var matchCount, noMatchCount int
 	var noMatchReason string
+	// Sum each completed vote's token usage into one summable ledger row for this
+	// verdict (US6). Every vote goes to the same judge, so carry the (last non-empty)
+	// model id; a zero-value/unmetered vote contributes nothing. usage.Calls therefore
+	// counts the judge calls actually made (== votes on the metered success path).
+	var usage core.JudgeUsage
 	for _, jv := range results {
+		usage.Calls += jv.Usage.Calls
+		usage.InputTokens += jv.Usage.InputTokens
+		usage.OutputTokens += jv.Usage.OutputTokens
+		if jv.Usage.Model != "" {
+			usage.Model = jv.Usage.Model
+		}
 		if jv.Match {
 			matchCount++
 			continue
@@ -93,7 +104,7 @@ func (m semanticMatcher) Match(ctx context.Context, ev core.Evidence, want, _ st
 
 	switch {
 	case matchCount > noMatchCount:
-		return core.Verdict{Pass: true}, nil
+		return core.Verdict{Pass: true, Judge: &usage}, nil
 	case noMatchCount > matchCount:
 		// FR-008: a failing verdict must always carry a non-empty, human-readable
 		// reason. If every no-match vote returned a blank reason, substitute a
@@ -101,8 +112,10 @@ func (m semanticMatcher) Match(ctx context.Context, ev core.Evidence, want, _ st
 		if strings.TrimSpace(noMatchReason) == "" {
 			noMatchReason = "semantic judge returned no-match without a reason"
 		}
-		return core.Verdict{Pass: false, Reasons: []string{noMatchReason}}, nil
+		return core.Verdict{Pass: false, Reasons: []string{noMatchReason}, Judge: &usage}, nil
 	default:
+		// Config-unreachable (votes is guaranteed odd >= 1): this returns a hard error
+		// and no verdict, so usage is intentionally not attached to a discarded verdict.
 		return core.Verdict{}, fmt.Errorf("semantic: %d-vote tie (%d match / %d no-match); majority is undefined", votes, matchCount, noMatchCount)
 	}
 }

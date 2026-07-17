@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"regexp"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/thetonymaster/mentat/internal/core"
 )
 
 // Run-lifecycle defaults (feature 003). Generous enough not to break a slow-but-
@@ -35,7 +38,10 @@ type RunBudget struct {
 }
 
 type Config struct {
-	Store        string            `yaml:"store"`
+	Store string `yaml:"store"`
+	// StorePath is the fixture directory the "file" store replays from (US5). It is
+	// REQUIRED when Store == "file" (validated in Load) and ignored otherwise.
+	StorePath    string            `yaml:"storePath"`
 	Tempo        Endpoint          `yaml:"tempo"`
 	OTLPEndpoint string            `yaml:"otlpEndpoint"`
 	Poll         PollSpec          `yaml:"poll"`
@@ -51,16 +57,31 @@ type Config struct {
 	Budget RunBudget `yaml:"-"`
 }
 
+// DefaultJudgeModel is the pinned fast-tier default judge model (US6, judge-ledger
+// Defaults policy). Haiku-class: ~80% cheaper per input and output token than the
+// former Opus-tier default (SC-006 — Opus 4.8 $5/$25 per MTok vs Haiku 4.5 $1/$5 =
+// 80% input and 80% output reduction), and unlike Opus it accepts the temperature
+// knob best-of-N voting needs (see internal/judge/claude.go temperatureAcceptingFamilies,
+// which matches the "haiku" substring). To upgrade accuracy, set judge.model in config
+// — one line, documented in the README.
+const DefaultJudgeModel = "claude-haiku-4-5"
+
 // JudgeConfig configures the semantic (LLM-judge) result matcher. The whole block
 // is optional — a project that never writes `the result means` never needs it; the
 // defaults applied in Load make an omitted block valid.
 type JudgeConfig struct {
 	Backend string `yaml:"backend"` // default "claude"
-	Model   string `yaml:"model"`   // default "claude-opus-4-8"
+	Model   string `yaml:"model"`   // default DefaultJudgeModel (fast-tier haiku)
 	Votes   int    `yaml:"votes"`   // default 1; best-of-N majority (odd N required)
 	// Temperature is applied only on models that accept it (Sonnet 4.6 / Haiku 4.5);
 	// omitted on Opus-tier. Optional knob, default 0.
 	Temperature float64 `yaml:"temperature"`
+	// MaxCostUSD is the optional post-scenario judge-spend ceiling in USD (US6). Unset
+	// or 0 means unlimited — today's behaviour, no budget accounting. When positive,
+	// completed judge cost is summed after each scenario and the suite aborts once it
+	// is exceeded (judge-ledger budget contract). A negative value is rejected at load
+	// rather than silently treated as unlimited (Constitution IV).
+	MaxCostUSD float64 `yaml:"max_cost_usd"`
 }
 
 type Endpoint struct {
@@ -84,6 +105,31 @@ type Target struct {
 	// target (override → suite → default), populated by Load.
 	RunTimeout string    `yaml:"run_timeout"`
 	Budget     RunBudget `yaml:"-"`
+	// Extract is the target's answer-extraction policy (US8); the block is optional
+	// and an absent one means whole (today's TrimSpace behaviour). Validated in Load,
+	// which precompiles the pattern once so the compiled regexp rides the policy.
+	Extract ExtractConfig `yaml:"extract"`
+}
+
+// ExtractConfig is the YAML form of a target's answer-extraction policy (US8,
+// config-`extract` row). Mode is whole|marker|pattern (empty → whole). Marker is
+// required for marker mode; Pattern is required for pattern mode and must compile
+// with at least one capture group. Load validates the block and precompiles the
+// pattern into the unexported compiled field so Policy() never recompiles per run.
+type ExtractConfig struct {
+	Mode    string `yaml:"mode"`
+	Marker  string `yaml:"marker"`
+	Pattern string `yaml:"pattern"`
+	// compiled is the precompiled Pattern regexp, populated by Load for pattern mode
+	// (nil for whole/marker). It is the single compile of the pattern for the whole run.
+	compiled *regexp.Regexp
+}
+
+// Policy converts the validated config into the transport-free core.ExtractPolicy
+// the driver applies. The compiled regexp (built once at Load) rides along, so the
+// engine never recompiles the pattern per run.
+func (e ExtractConfig) Policy() core.ExtractPolicy {
+	return core.ExtractPolicy{Mode: e.Mode, Marker: e.Marker, Pattern: e.compiled}
 }
 
 // HTTP is the per-target request config used when adapter is "http".
@@ -128,6 +174,12 @@ func Load(data []byte) (Config, error) {
 	}
 	if c.Store == "" {
 		c.Store = "tempo"
+	}
+	// The file store (US5) replays fixtures from storePath, so an empty storePath is
+	// a hard load error rather than a silent default that would later scan the process
+	// working directory (Constitution IV). For any other store storePath is ignored.
+	if c.Store == "file" && strings.TrimSpace(c.StorePath) == "" {
+		return Config{}, fmt.Errorf("storePath is required when store is %q", "file")
 	}
 	if c.Expectations == "" {
 		c.Expectations = "expectations"
@@ -178,6 +230,11 @@ func Load(data []byte) (Config, error) {
 			return Config{}, terr
 		}
 		t.Budget = RunBudget{Timeout: tt, Unbounded: tu, KillGrace: killGrace}
+		re, eerr := validateExtract(name, t.Adapter, t.Extract)
+		if eerr != nil {
+			return Config{}, eerr
+		}
+		t.Extract.compiled = re
 		c.Targets[name] = t
 	}
 	if err := validatePricing(c.Pricing); err != nil {
@@ -187,7 +244,7 @@ func Load(data []byte) (Config, error) {
 		c.Judge.Backend = "claude"
 	}
 	if c.Judge.Model == "" {
-		c.Judge.Model = "claude-opus-4-8"
+		c.Judge.Model = DefaultJudgeModel
 	}
 	if c.Judge.Votes == 0 {
 		c.Judge.Votes = 1
@@ -213,7 +270,63 @@ func validateJudge(j JudgeConfig) error {
 	if j.Temperature < 0 || math.IsNaN(j.Temperature) || math.IsInf(j.Temperature, 0) {
 		return fmt.Errorf("judge.temperature must be finite and >= 0, got %v", j.Temperature)
 	}
+	// votes>1 at temperature 0 sends near-identical calls, so best-of-N majority burns
+	// cost without diversity. Reject loudly, naming BOTH remedies, rather than silently
+	// auto-diversifying (Constitution IV): the human chooses a higher temperature or a
+	// single vote (judge-ledger Defaults policy).
+	if j.Votes > 1 && j.Temperature == 0 {
+		return fmt.Errorf("judge: votes=%d with temperature=0 sends near-identical calls; raise temperature (e.g. 0.7) or set votes: 1", j.Votes)
+	}
+	if j.MaxCostUSD < 0 || math.IsNaN(j.MaxCostUSD) || math.IsInf(j.MaxCostUSD, 0) {
+		return fmt.Errorf("judge.max_cost_usd must be finite and >= 0, got %v", j.MaxCostUSD)
+	}
 	return nil
+}
+
+// validateExtract validates a target's extract block and, for pattern mode,
+// returns the compiled regexp so Load can cache it on the target (compile once,
+// not per run). Whole (the default, empty mode) and marker modes return a nil
+// regexp. Every failure is a hard, named load error — a marker/pattern mode
+// missing its required field, a pattern that will not compile, or a pattern with
+// no capture group (there would be nothing to extract), and an unknown mode value.
+// No silent fallback to whole (Constitution IV).
+//
+// marker and pattern extraction are stdout-scoped and only the shell adapter
+// produces stdout (core.ExtractAnswer runs in the shell driver; http sets Answer to
+// the whole response body and never reads the policy). So a marker/pattern policy on
+// any non-shell adapter is a LOUD load failure naming the target, adapter, and the
+// shell requirement — never silently accepted and then ignored at runtime (FR-010,
+// Constitution IV). whole/empty mode is the default no-op and stays valid everywhere.
+func validateExtract(target, adapter string, e ExtractConfig) (*regexp.Regexp, error) {
+	switch e.Mode {
+	case "", core.ExtractWhole:
+		return nil, nil
+	case core.ExtractMarker:
+		if adapter != "shell" {
+			return nil, fmt.Errorf("target %q: extract mode %q requires the shell adapter (extraction reads stdout), but adapter is %q", target, core.ExtractMarker, adapter)
+		}
+		if e.Marker == "" {
+			return nil, fmt.Errorf("target %q: extract marker is required when mode is %q", target, core.ExtractMarker)
+		}
+		return nil, nil
+	case core.ExtractPattern:
+		if adapter != "shell" {
+			return nil, fmt.Errorf("target %q: extract mode %q requires the shell adapter (extraction reads stdout), but adapter is %q", target, core.ExtractPattern, adapter)
+		}
+		if e.Pattern == "" {
+			return nil, fmt.Errorf("target %q: extract pattern is required when mode is %q", target, core.ExtractPattern)
+		}
+		re, err := regexp.Compile(e.Pattern)
+		if err != nil {
+			return nil, fmt.Errorf("target %q: extract pattern %q does not compile: %w", target, e.Pattern, err)
+		}
+		if re.NumSubexp() < 1 {
+			return nil, fmt.Errorf("target %q: extract pattern %q must contain at least one capture group", target, e.Pattern)
+		}
+		return re, nil
+	default:
+		return nil, fmt.Errorf("target %q: unknown extract mode %q (want %q, %q, or %q)", target, e.Mode, core.ExtractWhole, core.ExtractMarker, core.ExtractPattern)
+	}
 }
 
 // validatePricing rejects pricing entries that would silently skew the cost a

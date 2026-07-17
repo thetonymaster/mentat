@@ -65,6 +65,63 @@ func TestDriveProducesEvidenceFromStore(t *testing.T) {
 	}
 }
 
+// TestDriveAppliesExtractPolicy proves the US8 plumbing end-to-end: a target's
+// `extract` policy rides from config.Target through driveOnce's RunSpec into the
+// shell driver, which applies it to stdout. Marker mode extracts the text after
+// the LAST marker; an absent marker is a hard run failure naming the marker (no
+// silent empty-answer fallback), surfaced as a Drive error.
+func TestDriveAppliesExtractPolicy(t *testing.T) {
+	tr := &trace.Trace{Spans: []*trace.Span{{Name: "root"}}, Roots: []*trace.Span{{Name: "root"}}}
+	newEngine := func(t *testing.T, target config.Target) *Engine {
+		ctrl := gomock.NewController(t)
+		st := mocks.NewMockTraceStore(ctrl)
+		st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "run-x"}}, nil).AnyTimes()
+		stubStoredTrace(st, tr)
+		cor := correlate.New(func() string { return "run-x" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+		cfg := config.Config{
+			Poll:    config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+			Targets: map[string]config.Target{"agent": target},
+		}
+		eng, err := Build(cfg, st, cor)
+		if err != nil {
+			t.Fatalf("Build: %v", err)
+		}
+		return eng
+	}
+
+	t.Run("marker policy extracts text after the last marker", func(t *testing.T) {
+		eng := newEngine(t, config.Target{
+			Adapter:        "shell",
+			Command:        []string{"sh", "-c", `printf 'ANSWER: one\nANSWER: two\n'`},
+			MaxConcurrency: 1,
+			Extract:        config.ExtractConfig{Mode: "marker", Marker: "ANSWER:"},
+		})
+		ev, err := eng.Drive(context.Background(), "agent", nil)
+		if err != nil {
+			t.Fatalf("Drive: %v", err)
+		}
+		if ev.Output.Answer != "two" {
+			t.Fatalf("Answer = %q, want %q (text after the last marker)", ev.Output.Answer, "two")
+		}
+	})
+
+	t.Run("absent marker fails the drive naming the marker", func(t *testing.T) {
+		eng := newEngine(t, config.Target{
+			Adapter:        "shell",
+			Command:        []string{"sh", "-c", `printf 'no marker here\n'`},
+			MaxConcurrency: 1,
+			Extract:        config.ExtractConfig{Mode: "marker", Marker: "<<RESULT>>"},
+		})
+		_, err := eng.Drive(context.Background(), "agent", nil)
+		if err == nil {
+			t.Fatal("expected a run failure for an absent marker, got nil")
+		}
+		if !strings.Contains(err.Error(), "<<RESULT>>") {
+			t.Fatalf("error %q does not name the marker %q", err.Error(), "<<RESULT>>")
+		}
+	})
+}
+
 func TestDriveUnknownTarget(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -455,7 +512,7 @@ func TestDriveOnceFailureEvidence(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Build: %v", err)
 			}
-			ev, err := eng.driveOnce(context.Background(), "sut", nil)
+			ev, err := eng.driveOnce(context.Background(), "sut", nil, "")
 			if err == nil {
 				t.Fatal("expected error, got nil")
 			}
@@ -927,7 +984,7 @@ func TestDriveOnceRunBudget(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Build: %v", err)
 			}
-			ev, err := eng.driveOnce(context.Background(), "sut", nil)
+			ev, err := eng.driveOnce(context.Background(), "sut", nil, "")
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("expected error, got nil (ev=%+v)", ev)
@@ -1565,7 +1622,7 @@ func TestDriveOnceInjectsOTLPEndpointConditionally(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Build: %v", err)
 			}
-			if _, err := eng.driveOnce(context.Background(), "sut", nil); err != nil {
+			if _, err := eng.driveOnce(context.Background(), "sut", nil, ""); err != nil {
 				t.Fatalf("driveOnce: %v", err)
 			}
 

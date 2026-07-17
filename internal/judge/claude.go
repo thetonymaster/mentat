@@ -120,7 +120,19 @@ func (j *claudeJudge) Judge(ctx context.Context, req core.JudgeRequest) (core.Ju
 		if err := json.Unmarshal([]byte(block.Text), &out); err != nil {
 			return core.JudgeVerdict{}, fmt.Errorf("judge: parsing structured verdict %q: %w", block.Text, err)
 		}
-		return core.JudgeVerdict{Match: out.Match, Reason: out.Reason}, nil
+		// Record the call's token usage against the CONFIGURED model (j.model), which
+		// is what the ledger prices — not the response's echoed model id (US6). Calls=1:
+		// one backend call, one ledger row.
+		return core.JudgeVerdict{
+			Match:  out.Match,
+			Reason: out.Reason,
+			Usage: core.JudgeUsage{
+				Calls:        1,
+				InputTokens:  msg.Usage.InputTokens,
+				OutputTokens: msg.Usage.OutputTokens,
+				Model:        j.model,
+			},
+		}, nil
 	}
 	return core.JudgeVerdict{}, fmt.Errorf("judge: response had no text content block to parse a verdict from")
 }

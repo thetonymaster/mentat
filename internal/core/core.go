@@ -4,7 +4,9 @@ package core
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"time"
 
@@ -51,6 +53,30 @@ type Verdict struct {
 	// Detail is the structured computed-vs-expected result of a canonical aggregate
 	// (@runs) comparison. Non-nil only for that case; every other comparator leaves it nil.
 	Detail *AggregateDetail
+	// Judge is the summed judge-token ledger for this verdict — non-nil only when the
+	// comparator actually issued judge calls (the semantic matcher sums it across its
+	// best-of-N votes). A comparator that makes no judge call leaves it nil: absence
+	// of usage is not zero usage (no fabricated zeros — judge-ledger contract, FR-006).
+	Judge *JudgeUsage
+}
+
+// JudgeUsage is a summable ledger row of judge-model token consumption (US6). It is a
+// value type: zero value is the additive identity, and rows sum field-wise (Model is
+// the judge model id, required so the later cost step prices per-model via the pricing
+// table). Calls is the number of judge calls the row accounts for (1 for a single call;
+// N after summing N votes). Never fabricate a row for a call that did not happen.
+//
+// CostUsd is the derived cost in USD. It is 0 until priced at the render/budget
+// boundary (report.Price / report.Budget) — the matcher and judge never set it,
+// because pricing is not their concern (Constitution I). The json tags render the
+// judge-ledger contract shape (calls/inputTokens/outputTokens/costUsd/model); the
+// suite total omits model (left empty so `omitempty` drops the key).
+type JudgeUsage struct {
+	Calls        int     `json:"calls"`
+	InputTokens  int64   `json:"inputTokens"`
+	OutputTokens int64   `json:"outputTokens"`
+	CostUsd      float64 `json:"costUsd"`
+	Model        string  `json:"model,omitempty"`
 }
 
 // AggregateDetail is the structured result of a canonical aggregate comparison
@@ -97,6 +123,11 @@ type RunSpec struct {
 	// driver honours the lifecycle policy without importing config. Zero means the
 	// driver applies no extra grace/WaitDelay (the pre-feature-003 behaviour).
 	KillGrace time.Duration
+	// Extract is the answer-extraction policy the driver applies to stdout (US8).
+	// The zero value is ExtractWhole (TrimSpace), so a spec built without it keeps
+	// today's behaviour byte-for-byte. Only the shell adapter consults it — an
+	// http adapter's answer is its response body, not a stdout concept.
+	Extract ExtractPolicy
 }
 
 // HTTPSpec is the http adapter's per-target request config (mirrors config.HTTP,
@@ -202,10 +233,66 @@ type JudgeRequest struct {
 type JudgeVerdict struct {
 	Match  bool
 	Reason string // human-readable rationale; flows into Verdict.Reasons on a fail (FR-008)
+	// Usage is this single call's token ledger (Calls=1) with the judge model id,
+	// captured from the backend response. The semantic matcher sums it across votes
+	// into Verdict.Judge (US6). Zero value on non-metered/error paths.
+	Usage JudgeUsage
 }
 
-// ExtractAnswer applies the project-wide convention: stdout is the result.
-func ExtractAnswer(stdout string) string { return strings.TrimSpace(stdout) }
+// Extraction modes (US8, data-model "Answer extraction"). The zero value ("")
+// is treated as ExtractWhole so a hand-built RunSpec and a target with no
+// `extract` config keep today's TrimSpace behaviour byte-for-byte.
+const (
+	ExtractWhole   = "whole"   // trimmed full stdout (default; never fails)
+	ExtractMarker  = "marker"  // text after the LAST occurrence of Marker, trimmed
+	ExtractPattern = "pattern" // first capture group of the first Pattern match
+)
+
+// ExtractPolicy parameterizes ExtractAnswer (US8). It is a value type: the zero
+// value (Mode == "") behaves as ExtractWhole. Marker is required for ExtractMarker;
+// Pattern is a precompiled regexp with at least one capture group, required for
+// ExtractPattern. The config layer compiles Pattern once at load and rides the
+// compiled regexp here so extraction never recompiles per run.
+type ExtractPolicy struct {
+	Mode    string
+	Marker  string
+	Pattern *regexp.Regexp
+}
+
+// ExtractAnswer derives the run's answer from stdout under policy. The default
+// (whole) mode never fails. A marker or pattern that cannot be resolved is a hard,
+// descriptive error naming the offending marker/pattern — never a silent empty
+// answer (Constitution IV): an unresolvable extraction is a run failure, not an
+// empty-string success.
+func ExtractAnswer(stdout string, policy ExtractPolicy) (string, error) {
+	switch policy.Mode {
+	case "", ExtractWhole:
+		return strings.TrimSpace(stdout), nil
+	case ExtractMarker:
+		if policy.Marker == "" {
+			return "", fmt.Errorf("extract: marker mode requires a non-empty marker")
+		}
+		idx := strings.LastIndex(stdout, policy.Marker)
+		if idx < 0 {
+			return "", fmt.Errorf("extract: marker %q not found in output", policy.Marker)
+		}
+		return strings.TrimSpace(stdout[idx+len(policy.Marker):]), nil
+	case ExtractPattern:
+		if policy.Pattern == nil {
+			return "", fmt.Errorf("extract: pattern mode requires a compiled pattern")
+		}
+		m := policy.Pattern.FindStringSubmatch(stdout)
+		if m == nil {
+			return "", fmt.Errorf("extract: pattern \"%s\" found no match in output", policy.Pattern.String())
+		}
+		if len(m) < 2 {
+			return "", fmt.Errorf("extract: pattern \"%s\" has no capture group", policy.Pattern.String())
+		}
+		return m[1], nil
+	default:
+		return "", fmt.Errorf("extract: unknown mode %q (want %q, %q, or %q)", policy.Mode, ExtractWhole, ExtractMarker, ExtractPattern)
+	}
+}
 
 // RunReport is the whole-run artifact a Reporter renders. Pure data.
 type RunReport struct {
@@ -220,6 +307,12 @@ type RunReport struct {
 	// completion (feature 003, FR-006). The report then carries the scenarios that
 	// finished plus this explicit marker; omitted from a clean run's JSON.
 	Interrupted bool `json:"interrupted,omitempty"`
+	// JudgeTotal is the suite-wide judge-token ledger, summed field-wise across the
+	// scenarios that made judge calls (US6). Non-nil ONLY when at least one scenario
+	// issued a judge call — absence of usage is not a fabricated all-zero total
+	// (judge-ledger contract, FR-006). Its Model is intentionally empty (the total is
+	// not attributed to one model); CostUsd is filled by report.Price at render time.
+	JudgeTotal *JudgeUsage `json:"judgeTotal,omitempty"`
 }
 
 // ScenarioResult is one scenario's outcome, derived from its Evidence + Verdict.
@@ -239,6 +332,11 @@ type ScenarioResult struct {
 	// and HTML report so the degradation is surfaced, not swallowed. Empty when
 	// derivation was clean.
 	DerivationNote string `json:"DerivationNote,omitempty"`
+	// Judge is this scenario's summed judge-token ledger (US6), carried from the
+	// semantic matcher's Verdict.Judge through report.Derive. Non-nil ONLY when the
+	// scenario made a judge call — a scenario with no `the result means` step leaves
+	// it nil (no fabricated zeros, FR-006). CostUsd is 0 until report.Price fills it.
+	Judge *JudgeUsage `json:"judge,omitempty"`
 }
 
 // RunRecord is one run within a scenario (one element per @runs iteration).

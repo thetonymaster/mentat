@@ -1,16 +1,16 @@
 [1;37mFeature:[0m Research agent behaviour
 
   [1;37mScenario:[0m summarizes Q3 revenue within budget      [1;30m# features/research_agent.feature:2[0m
-    [32mGiven[0m [32mthe agent target "research-agent"[0m          [1;30m# steps.go:59 -> *world[0m
-    [32mWhen[0m [32mI run scenario "happy"[0m                      [1;30m# steps.go:60 -> *world[0m
-    [32mThen[0m [32mthe agent calls tools in order:[0m             [1;30m# steps.go:62 -> *world[0m
+    [32mGiven[0m [32mthe agent target "research-agent"[0m          [1;30m# metadata.go:75 -> *world[0m
+    [32mWhen[0m [32mI run scenario "happy"[0m                      [1;30m# metadata.go:75 -> *world[0m
+    [32mThen[0m [32mthe agent calls tools in order:[0m             [1;30m# metadata.go:75 -> *world[0m
       | [36msearch[0m    |
       | [36mfetch_doc[0m |
       | [36msummarize[0m |
-    [32mAnd[0m [32mthe tool "delete_record" is never called[0m     [1;30m# steps.go:63 -> *world[0m
-    [32mAnd[0m [32mtotal tokens are under 5000[0m                  [1;30m# steps.go:65 -> *world[0m
-    [32mAnd[0m [32mthe result contains "Q3 revenue"[0m             [1;30m# steps.go:69 -> *world[0m
-    [32mAnd[0m [32mthe result of tool "search" contains "doc-1"[0m [1;30m# steps.go:96 -> *world[0m
+    [32mAnd[0m [32mthe tool "delete_record" is never called[0m     [1;30m# metadata.go:75 -> *world[0m
+    [32mAnd[0m [32mtotal tokens are under 5000[0m                  [1;30m# metadata.go:75 -> *world[0m
+    [32mAnd[0m [32mthe result contains "Q3 revenue"[0m             [1;30m# metadata.go:75 -> *world[0m
+    [32mAnd[0m [32mthe result of tool "search" contains "doc-1"[0m [1;30m# metadata.go:75 -> *world[0m
 
 1 scenarios ([32m1 passed[0m)
 7 steps ([32m7 passed[0m)

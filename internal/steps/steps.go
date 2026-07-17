@@ -3,6 +3,8 @@ package steps
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -35,13 +37,29 @@ type world struct {
 	// budget/cancellation bounds them all (feature 003, FR-004). A fresh background
 	// context is banned in this file (a ctx_guard test enforces it) to prevent the
 	// audit-B2 regression of discarding the scenario context.
-	ctx        context.Context
+	ctx context.Context
+	// uri is the feature file's path, captured in sc.Before from scenario.Uri. The
+	// body-fixture step resolves a relative fixture path against filepath.Dir(uri)
+	// so a body lives next to the .feature that references it; absolute paths are
+	// used as-is.
+	uri        string
 	target     string
 	ev         core.Evidence
 	evs        []core.Evidence
 	n          int
 	parallel   bool
 	lastDetail *core.AggregateDetail
+	// lastJudge accumulates the judge-token usage of every semantic check in the
+	// scenario (US6). The After hook is verdict-authoritative (it rebuilds the
+	// Verdict from stepErr, not the comparator's return), so — mirroring lastDetail —
+	// check() records each Verdict.Judge here so the usage still reaches report.Derive.
+	// Nil until a semantic check actually issues a judge call (no fabricated zeros).
+	lastJudge *core.JudgeUsage
+	// budget is the optional post-scenario judge-spend ceiling (US6); nil disables the
+	// check (today's behaviour). abort cancels the suite context when the budget trips,
+	// so no new scenario starts a judge call. Both are wired at the composition root.
+	budget *report.Budget
+	abort  context.CancelFunc
 }
 
 // Initializer binds the v1 grammar; results go to a discarded collector.
@@ -51,54 +69,26 @@ func Initializer(eng *engine.Engine) func(*godog.ScenarioContext) {
 }
 
 // InitializerWithCollector binds the v1 grammar and records one ScenarioResult per
-// scenario into col. Use this at the composition root to capture run reports.
+// scenario into col. Use this at the composition root to capture run reports. It runs
+// with no judge budget (unlimited) — today's behaviour.
 func InitializerWithCollector(eng *engine.Engine, col *report.Collector) func(*godog.ScenarioContext) {
+	return InitializerWithBudget(eng, col, nil, nil)
+}
+
+// InitializerWithBudget is InitializerWithCollector plus a post-scenario judge-spend
+// budget (US6). After each scenario's ledger is collected, the budget accounts its
+// completed judge cost; when the running total crosses the ceiling (or a usage cannot
+// be priced) abort cancels the suite context so no NEW scenario starts a judge call.
+// A nil budget disables the check (unlimited); a nil abort makes the trip advisory.
+func InitializerWithBudget(eng *engine.Engine, col *report.Collector, budget *report.Budget, abort context.CancelFunc) func(*godog.ScenarioContext) {
 	return func(sc *godog.ScenarioContext) {
-		w := &world{eng: eng, col: col}
+		w := &world{eng: eng, col: col, budget: budget, abort: abort}
 
-		sc.Step(`^the (?:agent|service) target "([^"]+)"$`, w.target_)
-		sc.Step(`^I run scenario "([^"]+)"$`, w.runScenario)
-		sc.Step(`^I run the agent with prompt "([^"]*)"$`, w.runPrompt)
-		sc.Step(`^the agent calls tools in order:$`, w.toolsInOrder)
-		sc.Step(`^the tool "([^"]+)" is never called$`, w.toolNeverCalled)
-		sc.Step(`^the tool "([^"]+)" is called at most (\d+) times$`, w.toolCalledAtMost)
-		sc.Step(`^total tokens are under (\d+)$`, w.tokensUnder)
-		sc.Step(`^total cost is under ([0-9.]+) USD$`, w.costUnder)
-		sc.Step(`^total latency is under (\d+) ms$`, w.latencyUnder)
-		sc.Step(`^no span has status "ERROR"$`, w.noErrorSpans)
-		sc.Step(`^the result contains "([^"]*)"$`, w.resultContains)
-		sc.Step(`^the result equals "([^"]*)"$`, w.resultEquals)
-		sc.Step(`^the response status is (\d+)$`, w.responseStatus)
-		sc.Step(`^the result matches regex "([^"]*)"$`, w.resultMatchesRegex)
-		sc.Step(`^the result means "([^"]*)"$`, w.resultMeans)
-		sc.Step(`^the result means:$`, w.resultMeansDoc)
-		sc.Step(`^the services are called in order:$`, w.servicesInOrder)
-		sc.Step(`^the service "([^"]+)" is never called$`, w.serviceNeverCalled)
-		sc.Step(`^the response body json-contains:$`, w.responseBodyJSONContains)
-		sc.Step(`^the response body matches schema:$`, w.responseBodyMatchesSchema)
-		sc.Step(`^the run satisfies "([^"]*)"$`, w.runSatisfies)
-		sc.Step(`^the run satisfies:$`, w.runSatisfiesDoc)
-		sc.Step(`^the runs satisfy "([^"]*)"$`, w.runsSatisfies)
-		sc.Step(`^the runs satisfy:$`, w.runsSatisfiesDoc)
-
-		sc.Step(`^a span matching "([^"]*)" exists$`, w.shapeExists)
-		sc.Step(`^no span matching "([^"]*)" exists$`, w.shapeAbsent)
-		sc.Step(`^at least (\d+) spans? match(?:es)? "([^"]*)"$`, w.shapeAtLeast)
-		sc.Step(`^exactly (\d+) spans? match(?:es)? "([^"]*)"$`, w.shapeExactly)
-		sc.Step(`^a span matching "([^"]*)" is a child of a span matching "([^"]*)"$`, w.shapeChildOf)
-		sc.Step(`^a span matching "([^"]*)" is a descendant of a span matching "([^"]*)"$`, w.shapeDescendantOf)
-		sc.Step(`^a span matching "([^"]*)" has at least (\d+) children matching "([^"]*)"$`, w.shapeFanoutAtLeast)
-		sc.Step(`^a span matching "([^"]*)" has exactly (\d+) children matching "([^"]*)"$`, w.shapeFanoutExactly)
-
-		sc.Step(`^the run matches shape "([^"]*)"$`, w.matchesShape)
-
-		// §4.1 span-attribute result source — tool convenience form
-		sc.Step(`^the result of (?:(the (?:first|last|\d+(?:st|nd|rd|th)) call|every call|any call) to )?tool "([^"]+)" (contains|equals|matches regex) "([^"]*)"$`, w.resultToolValue)
-		sc.Step(`^the result of (?:(the (?:first|last|\d+(?:st|nd|rd|th)) call|every call|any call) to )?tool "([^"]+)" (json-contains|matches schema):$`, w.resultToolDoc)
-
-		// §4.2 span-attribute result source — general selector form
-		sc.Step(`^attribute "([^"]+)" of (?:(the (?:first|last|\d+(?:st|nd|rd|th))|every|any) )?(?:the )?span matching "([^"]+)" (contains|equals|matches regex) "([^"]*)"$`, w.resultAttrValue)
-		sc.Step(`^attribute "([^"]+)" of (?:(the (?:first|last|\d+(?:st|nd|rd|th))|every|any) )?(?:the )?span matching "([^"]+)" (json-contains|matches schema):$`, w.resultAttrDoc)
+		// Registration is table-driven: registerSteps binds every pattern in the
+		// stepDefs metadata table (metadata.go), which is the single source of truth
+		// shared by `mentat steps` / docs/steps.md. A drift test fails if any step is
+		// registered outside this table (see metadata_test.go).
+		registerSteps(sc, w)
 
 		// §7: compile every CEL expression in the scenario before any step runs,
 		// so a malformed expectation fails before an expensive SUT is driven.
@@ -107,6 +97,9 @@ func InitializerWithCollector(eng *engine.Engine, col *report.Collector) func(*g
 			// under it (FR-004). godog cancels it on suite interruption, so a signal
 			// or scenario timeout reaches all scenario-scoped work.
 			w.ctx = ctx
+			// Capture the feature file path so the body-fixture step can resolve a
+			// relative fixture against the feature's own directory.
+			w.uri = scenario.Uri
 			n, parallel, err := parseRunsTag(scenario.Tags)
 			if err != nil {
 				return ctx, err
@@ -122,7 +115,7 @@ func InitializerWithCollector(eng *engine.Engine, col *report.Collector) func(*g
 		})
 
 		sc.After(func(ctx context.Context, scenario *godog.Scenario, stepErr error) (context.Context, error) {
-			v := core.Verdict{Pass: stepErr == nil, Detail: w.lastDetail}
+			v := core.Verdict{Pass: stepErr == nil, Detail: w.lastDetail, Judge: w.lastJudge}
 			if stepErr != nil {
 				v.Reasons = []string{stepErr.Error()}
 			}
@@ -131,6 +124,16 @@ func InitializerWithCollector(eng *engine.Engine, col *report.Collector) func(*g
 			// error. The verdict comes only from stepErr, so the hook returns nil.
 			sr := report.Derive(scenario.Name, tagNames(scenario.Tags), v, w.evs, w.eng.Pricing())
 			w.col.Append(sr)
+			// Post-scenario judge budget (US6): account this scenario's completed judge
+			// cost. On a trip (or an unpriceable usage) abort the suite context so the
+			// next scenario starts no new judge call — in-flight votes already finished.
+			// The scenario verdict itself is untouched (the hook still returns nil): the
+			// budget gates SUBSEQUENT scenarios, it does not retroactively fail this one.
+			if w.budget != nil {
+				if err := w.budget.Add(sr); err != nil && w.abort != nil {
+					w.abort()
+				}
+			}
 			return ctx, nil
 		})
 	}
@@ -147,10 +150,55 @@ func tagNames(tags []*messages.PickleTag) []string {
 
 func (w *world) target_(name string) error { w.target = name; return nil }
 
-func (w *world) runScenario(name string) error { return w.drive([]string{"--scenario", name}) }
-func (w *world) runPrompt(p string) error      { return w.drive([]string{"--prompt", p}) }
+func (w *world) runScenario(name string) error { return w.drive([]string{"--scenario", name}, "") }
+func (w *world) runPrompt(p string) error      { return w.drive([]string{"--prompt", p}, "") }
 
-func (w *world) drive(args []string) error {
+// sendRequestBodyDoc drives the target with the doc-string as the request body
+// (RunSpec.Input), the HTTP analogue of runPrompt. A missing doc-string is a hard
+// error rather than a silently-empty body (No Silent Fallbacks).
+func (w *world) sendRequestBodyDoc(doc *godog.DocString) error {
+	if doc == nil {
+		return fmt.Errorf("send-request-body step: expected a docstring body, got none")
+	}
+	if err := w.requireBodyAdapter(); err != nil {
+		return err
+	}
+	return w.drive(nil, doc.Content)
+}
+
+// sendRequestBodyFixture reads a fixture file and drives the target with its
+// contents as the request body (RunSpec.Input). A relative path resolves against
+// the feature directory (filepath.Dir(w.uri)); an absolute path is used as-is. An
+// unreadable fixture is a hard error naming the RESOLVED path, raised before any
+// drive so a bad fixture never sends an empty body (No Silent Fallbacks).
+func (w *world) sendRequestBodyFixture(path string) error {
+	resolved := path
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(filepath.Dir(w.uri), resolved)
+	}
+	body, err := os.ReadFile(resolved)
+	if err != nil {
+		return fmt.Errorf("read request body fixture %q: %w", resolved, err)
+	}
+	if err := w.requireBodyAdapter(); err != nil {
+		return err
+	}
+	return w.drive(nil, string(body))
+}
+
+// requireBodyAdapter rejects a request-body step whose target uses an adapter that
+// does not consume a request body — only the http adapter does. Without this the
+// shell adapter would silently discard the body (Constitution IV: no silent
+// fallbacks). When no target is set the accessor reports ok=false and this passes
+// through, leaving drive's "no target set" error to fire (path preserved).
+func (w *world) requireBodyAdapter() error {
+	if a, ok := w.eng.Adapter(w.target); ok && a != "http" {
+		return fmt.Errorf("request-body step: target %q uses the %q adapter, which does not consume a request body (only http does)", w.target, a)
+	}
+	return nil
+}
+
+func (w *world) drive(args []string, input string) error {
 	if w.target == "" {
 		return fmt.Errorf("no target set; use a Given ... target step first")
 	}
@@ -158,7 +206,7 @@ func (w *world) drive(args []string) error {
 	if n < 1 {
 		n = 1
 	}
-	evs, err := w.eng.DriveN(w.ctx, w.target, args, n, w.parallel)
+	evs, err := w.eng.DriveNInput(w.ctx, w.target, args, input, n, w.parallel)
 	if err != nil {
 		return err
 	}
@@ -183,6 +231,12 @@ func (w *world) check(name string, exp core.Expectation) error {
 		return fmt.Errorf("no comparator %q", name)
 	}
 	v, err := c.Compare(w.ctx, w.ev, exp)
+	// Record any judge usage BEFORE the pass/fail branch: a failing semantic verdict
+	// still consumed judge tokens, and the ledger must account for it (US6). A
+	// non-semantic comparator leaves v.Judge nil, so this is a no-op for them.
+	if v.Judge != nil {
+		w.lastJudge = addJudge(w.lastJudge, v.Judge)
+	}
 	if err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}
@@ -190,6 +244,25 @@ func (w *world) check(name string, exp core.Expectation) error {
 		return fmt.Errorf("%s failed: %s", name, strings.Join(v.Reasons, "; "))
 	}
 	return nil
+}
+
+// addJudge folds add into acc field-wise, allocating acc on first use. It sums the
+// per-check judge usage across a scenario's semantic steps (US6). The judge model id
+// is carried (last non-empty wins — every vote goes to the same configured judge).
+func addJudge(acc, add *core.JudgeUsage) *core.JudgeUsage {
+	if add == nil {
+		return acc
+	}
+	if acc == nil {
+		acc = &core.JudgeUsage{}
+	}
+	acc.Calls += add.Calls
+	acc.InputTokens += add.InputTokens
+	acc.OutputTokens += add.OutputTokens
+	if add.Model != "" {
+		acc.Model = add.Model
+	}
+	return acc
 }
 
 func (w *world) toolsInOrder(tbl *godog.Table) error {
@@ -577,52 +650,24 @@ func (w *world) matchesShape(name string) error {
 }
 
 // precheckShapePatterns fails a scenario at init if it references a shape pattern that was
-// not loaded — before the SUT is driven, mirroring precompileScenario for CEL (§7).
+// not loaded — before the SUT is driven, mirroring precompileScenario for CEL (§7). It
+// delegates to the collect-all ShapePatternFindings (shared with `mentat validate`) and
+// surfaces the FIRST finding as the scenario-init error, so behaviour is unchanged.
 func (w *world) precheckShapePatterns(steps []*messages.PickleStep) error {
-	for _, st := range steps {
-		m := reMatchesShape.FindStringSubmatch(st.Text)
-		if m == nil {
-			continue
-		}
-		if _, ok := w.eng.ShapePattern(m[1]); !ok {
-			return fmt.Errorf("scenario-init: unknown shape pattern %q (no such pattern under the expectations dir)", m[1])
-		}
+	if fs := ShapePatternFindings(w.eng, steps, Source{}); len(fs) > 0 {
+		return fmt.Errorf("scenario-init: %s", fs[0].Message)
 	}
 	return nil
 }
 
 // precompileScenario compiles every "the run satisfies" and "the runs satisfy"
 // expression in the scenario before any step executes (§7). A syntax/type/unknown-var
-// error fails the scenario at init, before the SUT is driven.
+// error fails the scenario at init, before the SUT is driven. It delegates to the
+// collect-all CELFindings (shared with `mentat validate`) and surfaces the FIRST
+// finding as the scenario-init error, so behaviour is unchanged.
 func (w *world) precompileScenario(steps []*messages.PickleStep) error {
-	for _, st := range steps {
-		if expr, ok := satisfiesExpr(st); ok {
-			c, ok := w.eng.Comparator("cel")
-			if !ok {
-				return fmt.Errorf("scenario-init: 'the run satisfies' requires the cel comparator, which is not registered")
-			}
-			pc, ok := c.(interface{ Compile(string) error })
-			if !ok {
-				return fmt.Errorf("scenario-init: cel comparator %T does not support pre-compilation", c)
-			}
-			if err := pc.Compile(expr); err != nil {
-				return fmt.Errorf("scenario-init: %w", err)
-			}
-			continue
-		}
-		if expr, ok := runsSatisfiesExpr(st); ok {
-			c, ok := w.eng.AggregateComparator("aggregate-cel")
-			if !ok {
-				return fmt.Errorf("scenario-init: 'the runs satisfy' requires the aggregate-cel comparator, which is not registered")
-			}
-			pc, ok := c.(interface{ Compile(string) error })
-			if !ok {
-				return fmt.Errorf("scenario-init: aggregate comparator %T does not support pre-compilation", c)
-			}
-			if err := pc.Compile(expr); err != nil {
-				return fmt.Errorf("scenario-init: %w", err)
-			}
-		}
+	if fs := CELFindings(w.eng, steps, Source{}); len(fs) > 0 {
+		return fmt.Errorf("scenario-init: %s", fs[0].Message)
 	}
 	return nil
 }
@@ -651,21 +696,14 @@ func runsSatisfiesExpr(st *messages.PickleStep) (string, bool) {
 }
 
 // parseRunsTag reads @runs(N) / @runs(N,parallel). Absent -> (1, false, nil). A tag
-// that begins "@runs(" but does not match the strict form is a hard error.
+// that begins "@runs(" but does not match the strict form is a hard error. It wraps
+// the shared parseRunsTagRaw (precheck.go) — the same parser RunsTagFindings uses for
+// collect-all validation — prefixing "scenario-init:" so the fail-fast error text is
+// unchanged.
 func parseRunsTag(tags []*messages.PickleTag) (int, bool, error) {
-	for _, tag := range tags {
-		if !strings.HasPrefix(tag.Name, "@runs(") {
-			continue
-		}
-		m := reRunsTag.FindStringSubmatch(tag.Name)
-		if m == nil {
-			return 0, false, fmt.Errorf("scenario-init: malformed @runs tag %q (want @runs(N) or @runs(N,parallel))", tag.Name)
-		}
-		n, err := strconv.Atoi(m[1])
-		if err != nil || n < 1 {
-			return 0, false, fmt.Errorf("scenario-init: @runs requires N>=1, got %q", tag.Name)
-		}
-		return n, m[2] == "parallel", nil
+	n, parallel, _, msg := parseRunsTagRaw(tags)
+	if msg != "" {
+		return 0, false, fmt.Errorf("scenario-init: %s", msg)
 	}
-	return 1, false, nil
+	return n, parallel, nil
 }

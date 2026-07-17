@@ -29,6 +29,27 @@ A run is tagged with `test.run.id` and may span several traces; correlation reso
 by that tag and merges them. Comparators consume only `Evidence` (trace forest +
 captured output), which keeps them portable across agents and microservices.
 
+## Authoring specs (`mentat steps`, `mentat validate`)
+
+```bash
+go run ./cmd/mentat steps                 # every registered step, grouped, + grammar (text)
+go run ./cmd/mentat steps --format md     # the same, as Markdown (the committed docs/steps.md)
+go run ./cmd/mentat validate              # static-check the feature corpus (no SUT/store/judge)
+go run ./cmd/mentat validate --format json
+```
+
+- **Step reference.** `mentat steps` prints every Gherkin step (pattern, summary,
+  example) plus the shared selector/quantifier/ordinal grammar and CEL variables.
+  Its Markdown form is generated into [`docs/steps.md`](docs/steps.md) via
+  `go generate ./...` and a drift test keeps that file byte-identical — the reference
+  can never fall out of sync with the registered steps.
+- **Validate.** `mentat validate [paths...]` runs the authoring prechecks statically —
+  step binding, CEL precompilation, shape patterns, targets, expectations — over the
+  feature corpus without driving a SUT or contacting a store/judge (no network by
+  construction). It reports **all** findings and exits 1 on any (or when no feature
+  files are found), 0 when clean. `--format json` emits
+  `{"findings":[{"file","line","class","message"}]}`.
+
 ## Semantic result matcher (`the result means`)
 
 Alongside the deterministic result matchers (`the result contains` / `equals` /
@@ -57,17 +78,19 @@ never writes `the result means` never needs it.
 ```yaml
 judge:
   backend: claude            # default "claude"
-  model: claude-opus-4-8     # default "claude-opus-4-8"; e.g. claude-haiku-4-5 (cheapest), claude-sonnet-4-6
+  model: claude-haiku-4-5    # default "claude-haiku-4-5" (fast tier); e.g. claude-sonnet-4-6, claude-opus-4-8 (highest accuracy)
   votes: 1                   # default 1; best-of-N majority, odd N (even N > 1 is rejected)
   temperature: 0             # optional; applied only on models that accept it (Sonnet 4.6 / Haiku 4.5)
+  max_cost_usd: 0            # optional; 0 = unlimited. Positive = suite aborts once completed judge spend crosses it
 ```
 
 | Field | Default | Notes |
 | --- | --- | --- |
 | `backend` | `claude` | resolved from the judge registry; an unknown name is a hard error at engine build |
-| `model` | `claude-opus-4-8` | passed to the backend; an invalid model surfaces as a judge-call error |
-| `votes` | `1` | must be `>= 1` and **odd**; an even `votes > 1` is rejected (majority is undefined on a tie) |
+| `model` | `claude-haiku-4-5` | fast tier (`config.DefaultJudgeModel`), ~80% cheaper per token than the former Opus default; upgrade accuracy with one line. Passed to the backend; an invalid model surfaces as a judge-call error |
+| `votes` | `1` | must be `>= 1` and **odd** (even `votes > 1` is rejected — majority is undefined on a tie). `votes > 1` with `temperature: 0` is a **load error** — near-identical calls; raise the temperature or drop to `votes: 1` |
 | `temperature` | `0` | takes effect only on models that accept it (Sonnet 4.6 / Haiku 4.5). Opus-tier rejects a temperature parameter, so determinism there comes from structured output + the vote |
+| `max_cost_usd` | `0` (unlimited) | optional judge-spend ceiling in USD. After each scenario, completed judge cost is summed; once it crosses the ceiling the suite aborts naming spent/budget/scenario (reports still emit). Negative is rejected at load |
 
 > **Data egress (opt-in, no redaction in v1).** `ANTHROPIC_API_KEY` is supplied via
 > the environment, never in `mentat.yaml` — the secret stays out of config. Selecting
@@ -104,6 +127,27 @@ containing the completed scenarios plus an explicit interrupted marker (JSON
 `"interrupted": true`, an HTML banner, a JUnit suite `<property>`), and exits `130`.
 A second signal force-quits. Reports are written atomically (temp file + rename), so
 an interrupt never leaves a truncated report. (POSIX only; Windows is out of scope.)
+
+## Offline replay (file store)
+
+The `file` store replays saved run fixtures from a directory instead of querying a
+live Tempo, so a suite can be re-evaluated with **no infrastructure and no network**:
+
+```yaml
+store: file
+storePath: fixtures/   # directory of saved-run fixtures (from `mentatctl agent run --save`)
+```
+
+Each fixture is keyed by its recorded `runScenario` field — the run id captured when
+it was saved. Because resolution is by that exact id, offline replay runs on the
+**pinned path** (`mentatctl agent replay <saved-run-id> --feature <f> --config <file-store-config>`),
+which resolves the saved id from the store without driving anything. The live
+`mentat run` path injects a *fresh* run id per run that matches no saved fixture, so
+it deliberately fails loud (not-found naming the dir + id) rather than serving the
+wrong trace. A `@runs(N>1)` scenario is a hard error — the store holds one recorded
+sample per id. Offline replay is proven hermetically by
+`internal/steps/filestore_replay_test.go`: a saved fixture drives a suite green with
+no Docker, its trace resolved entirely from the local file store.
 
 ## Verbosity & diagnostics
 

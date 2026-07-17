@@ -6,6 +6,7 @@ import (
 	"errors"
 	"maps"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -620,6 +621,271 @@ func TestInMemStoreCaps(t *testing.T) {
 	caps := st.Caps()
 	if caps.StructuralQuery {
 		t.Fatalf("InMemStore should not report StructuralQuery capability")
+	}
+}
+
+// writeFixture writes a LoadFixture-format fixture into dir and returns its path.
+func writeFixture(t *testing.T, dir, name, content string) string {
+	t.Helper()
+	p := filepath.Join(dir, name)
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatalf("write fixture %s: %v", p, err)
+	}
+	return p
+}
+
+// TestFileStoreQuery pins the directory-backed store's tag query (US5, R5): a
+// fixture keyed by its recorded `runScenario` resolves to one ref; an absent id is
+// a hard not-found error naming BOTH the dir and the id (unlike InMemStore's
+// (nil,nil) — a replay against a file store is a deliberate "this exact id lives
+// here", so its absence is loud); two fixtures sharing a runScenario are an
+// ambiguity error naming both files (constitution IV — never guess which sample);
+// a non-run-id tag is rejected.
+func TestFileStoreQuery(t *testing.T) {
+	t.Parallel()
+
+	single := t.TempDir()
+	writeFixture(t, single, "run-a.json", `{"runScenario":"run-a","spans":[{"name":"invoke_agent researchbot","parentIndex":-1,"status":"Ok","attrs":{"gen_ai.operation.name":"invoke_agent"}}]}`)
+
+	dup := t.TempDir()
+	dupA := writeFixture(t, dup, "a.json", `{"runScenario":"dup","spans":[{"name":"root","parentIndex":-1}]}`)
+	dupB := writeFixture(t, dup, "b.json", `{"runScenario":"dup","spans":[{"name":"root","parentIndex":-1}]}`)
+
+	tests := []struct {
+		name     string
+		dir      string
+		query    core.TraceQuery
+		wantLen  int
+		wantErr  bool
+		wantSubs []string
+	}{
+		{
+			name:    "hit returns one ref",
+			dir:     single,
+			query:   core.TraceQuery{Tag: "test.run.id", Value: "run-a"},
+			wantLen: 1,
+		},
+		{
+			name:     "absent errors naming dir and id",
+			dir:      single,
+			query:    core.TraceQuery{Tag: "test.run.id", Value: "ghost"},
+			wantErr:  true,
+			wantSubs: []string{single, "ghost"},
+		},
+		{
+			name:     "ambiguous errors naming both files",
+			dir:      dup,
+			query:    core.TraceQuery{Tag: "test.run.id", Value: "dup"},
+			wantErr:  true,
+			wantSubs: []string{dupA, dupB},
+		},
+		{
+			name:     "wrong tag errors",
+			dir:      single,
+			query:    core.TraceQuery{Tag: "some.other.tag", Value: "run-a"},
+			wantErr:  true,
+			wantSubs: []string{"test.run.id"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			fs, err := NewFileStore(tt.dir)
+			if err != nil {
+				t.Fatalf("NewFileStore: %v", err)
+			}
+			refs, err := fs.Query(context.Background(), tt.query)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				for _, sub := range tt.wantSubs {
+					if !strings.Contains(err.Error(), sub) {
+						t.Fatalf("error %q does not contain %q", err.Error(), sub)
+					}
+				}
+				return
+			}
+			if len(refs) != tt.wantLen {
+				t.Fatalf("refs len=%d want=%d", len(refs), tt.wantLen)
+			}
+			if len(refs) == 1 && refs[0].TraceID != tt.query.Value {
+				t.Fatalf("ref TraceID=%q want %q", refs[0].TraceID, tt.query.Value)
+			}
+		})
+	}
+}
+
+// TestFileStoreFetchAndDecodeRoundTrip pins the store seam pair: FetchPayload
+// returns the recorded fixture bytes and DecodePayload decodes exactly those
+// bytes back into a forest via LoadFixture. A multi-root fixture (invariant §2 —
+// a run may span more than one root trace) round-trips as a two-root forest.
+// FetchPayload of an unknown id is a hard error naming dir+id; DecodePayload of
+// malformed bytes is a hard, wrapped error.
+func TestFileStoreFetchAndDecodeRoundTrip(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeFixture(t, dir, "multi.json", `{"runScenario":"multi","spans":[`+
+		`{"name":"invoke_agent researchbot","parentIndex":-1,"status":"Ok","attrs":{"gen_ai.operation.name":"invoke_agent"}},`+
+		`{"name":"execute_tool search","parentIndex":0,"status":"Ok","attrs":{"gen_ai.operation.name":"execute_tool","gen_ai.tool.name":"search"}},`+
+		`{"name":"invoke_agent subagent","parentIndex":-1,"status":"Ok","attrs":{"gen_ai.operation.name":"invoke_agent"}}]}`)
+	fs, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+
+	payload, err := fs.FetchPayload(context.Background(), "multi")
+	if err != nil {
+		t.Fatalf("FetchPayload: %v", err)
+	}
+	tr, err := fs.DecodePayload("multi", payload)
+	if err != nil {
+		t.Fatalf("DecodePayload: %v", err)
+	}
+	if len(tr.Roots) != 2 {
+		t.Fatalf("roots=%d want 2 (multi-root forest)", len(tr.Roots))
+	}
+	if len(tr.Spans) != 3 {
+		t.Fatalf("spans=%d want 3", len(tr.Spans))
+	}
+	tools := tr.ByOp(genai.OpExecuteTool)
+	if len(tools) != 1 || tools[0].Attr(genai.ToolName) != "search" {
+		t.Fatalf("tool spans wrong: %+v", tools)
+	}
+
+	if _, err := fs.FetchPayload(context.Background(), "ghost"); err == nil {
+		t.Fatal("FetchPayload(ghost): want error")
+	} else {
+		for _, sub := range []string{dir, "ghost"} {
+			if !strings.Contains(err.Error(), sub) {
+				t.Fatalf("error %q does not contain %q", err.Error(), sub)
+			}
+		}
+	}
+	if _, err := fs.DecodePayload("multi", []byte("{not json")); err == nil {
+		t.Fatal("DecodePayload(bad bytes): want error")
+	}
+}
+
+// TestFileStoreFetchPayloadReturnsCopy pins the byte-stability guarantee (F10):
+// FetchPayload documents that repeated fetches are byte-identical, so it must
+// return a copy, never its internal fixture slice. A caller that mutates the
+// returned bytes must not corrupt subsequent FetchPayload results.
+func TestFileStoreFetchPayloadReturnsCopy(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeFixture(t, dir, "stable.json", `{"runScenario":"stable","spans":[{"name":"invoke_agent researchbot","parentIndex":-1,"status":"Ok","attrs":{"gen_ai.operation.name":"invoke_agent"}}]}`)
+	fs, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+
+	first, err := fs.FetchPayload(context.Background(), "stable")
+	if err != nil {
+		t.Fatalf("FetchPayload (1st): %v", err)
+	}
+	// Snapshot the original bytes before mutating the returned slice.
+	original := string(first)
+
+	// A caller mutates the returned slice; this must not touch stored state.
+	first[0] ^= 0xFF
+
+	second, err := fs.FetchPayload(context.Background(), "stable")
+	if err != nil {
+		t.Fatalf("FetchPayload (2nd): %v", err)
+	}
+	if string(second) != original {
+		t.Fatalf("mutation of returned slice leaked into store:\n got: %s\nwant: %s", second, original)
+	}
+}
+
+// TestFileStoreGetByIDCanonicalVocabulary pins that GetByID loads a fixture by id
+// through LoadFixture, applying the feature-002 canonical status/kind vocabulary:
+// an OTLP status spelling normalizes to the canonical value. Unknown id errors.
+func TestFileStoreGetByIDCanonicalVocabulary(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeFixture(t, dir, "err.json", `{"runScenario":"errrun","spans":[{"name":"checkout","parentIndex":-1,"status":"STATUS_CODE_ERROR","kind":"SPAN_KIND_SERVER"}]}`)
+	fs, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+
+	tr, err := fs.GetByID(context.Background(), "errrun")
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if len(tr.Spans) != 1 {
+		t.Fatalf("spans=%d want 1", len(tr.Spans))
+	}
+	if tr.Spans[0].Status != trace.StatusError {
+		t.Fatalf("status=%q want %q", tr.Spans[0].Status, trace.StatusError)
+	}
+	if tr.Spans[0].Kind != trace.KindServer {
+		t.Fatalf("kind=%q want %q", tr.Spans[0].Kind, trace.KindServer)
+	}
+	if _, err := fs.GetByID(context.Background(), "missing"); err == nil {
+		t.Fatal("GetByID(missing): want error")
+	}
+}
+
+// TestFileStoreConstructionErrors pins the loud-failure boundary (constitution IV):
+// a missing dir, a malformed fixture, or a fixture with no runScenario is a hard
+// error at construction (naming the file where one is at fault); an empty dir is a
+// valid empty store whose queries not-found.
+func TestFileStoreConstructionErrors(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nonexistent dir errors", func(t *testing.T) {
+		t.Parallel()
+		if _, err := NewFileStore(filepath.Join(t.TempDir(), "does-not-exist")); err == nil {
+			t.Fatal("want error for missing dir")
+		}
+	})
+	t.Run("malformed fixture errors naming file", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		p := writeFixture(t, dir, "bad.json", `{not json`)
+		_, err := NewFileStore(dir)
+		if err == nil {
+			t.Fatal("want error for malformed fixture")
+		}
+		if !strings.Contains(err.Error(), p) {
+			t.Fatalf("error %q does not name file %q", err.Error(), p)
+		}
+	})
+	t.Run("empty runScenario errors naming file", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		p := writeFixture(t, dir, "noid.json", `{"spans":[{"name":"root","parentIndex":-1}]}`)
+		_, err := NewFileStore(dir)
+		if err == nil {
+			t.Fatal("want error for empty runScenario")
+		}
+		if !strings.Contains(err.Error(), p) {
+			t.Fatalf("error %q does not name file %q", err.Error(), p)
+		}
+	})
+	t.Run("empty dir is a valid empty store", func(t *testing.T) {
+		t.Parallel()
+		fs, err := NewFileStore(t.TempDir())
+		if err != nil {
+			t.Fatalf("empty dir should be valid: %v", err)
+		}
+		if _, err := fs.Query(context.Background(), core.TraceQuery{Tag: "test.run.id", Value: "x"}); err == nil {
+			t.Fatal("query on empty store should not-found")
+		}
+	})
+}
+
+func TestFileStoreCaps(t *testing.T) {
+	t.Parallel()
+	fs, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	if fs.Caps().StructuralQuery {
+		t.Fatal("FileStore should not report StructuralQuery capability")
 	}
 }
 

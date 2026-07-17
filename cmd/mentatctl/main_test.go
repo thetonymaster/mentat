@@ -2,8 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"flag"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/thetonymaster/mentat/internal/engine"
 )
@@ -85,6 +91,166 @@ func TestCheckDomainVerb(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("error %q missing substring %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestResolvePrompt pins the --prompt-file / stdin / mutual-exclusion contract
+// (US7): --prompt-file wins nothing — it is an error to set both; `-` reads
+// stdin; a missing file names its path (no silent fallback).
+func TestResolvePrompt(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "p.txt")
+	if err := os.WriteFile(file, []byte("prompt from file\n"), 0o644); err != nil {
+		t.Fatalf("write prompt file: %v", err)
+	}
+	tests := []struct {
+		name       string
+		prompt     string
+		promptFile string
+		stdin      string
+		want       string
+		wantErr    string
+	}{
+		{name: "no prompt-file returns the prompt flag", prompt: "inline", want: "inline"},
+		{name: "prompt-file reads the file", promptFile: file, want: "prompt from file"},
+		{name: "dash reads stdin", promptFile: "-", stdin: "from stdin\n", want: "from stdin"},
+		{name: "both flags set is an error", prompt: "inline", promptFile: file, wantErr: "mutually exclusive"},
+		{name: "missing file names the path", promptFile: filepath.Join(dir, "nope.txt"), wantErr: "nope.txt"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolvePrompt(tt.prompt, tt.promptFile, strings.NewReader(tt.stdin))
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("err=%v, want containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("resolvePrompt = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestTimeoutErr proves --timeout surfaces a descriptive error naming the
+// duration on deadline, and is transparent otherwise (no timeout / non-deadline
+// error / nil run error).
+func TestTimeoutErr(t *testing.T) {
+	base := errors.New("boom")
+	tests := []struct {
+		name    string
+		timeout time.Duration
+		ctxErr  error
+		runErr  error
+		wantNil bool
+		wantSub string
+	}{
+		{name: "nil run error stays nil", timeout: time.Second, ctxErr: context.DeadlineExceeded, runErr: nil, wantNil: true},
+		{name: "deadline exceeded names the duration", timeout: 5 * time.Second, ctxErr: context.DeadlineExceeded, runErr: base, wantSub: "timed out after 5s"},
+		{name: "no timeout passes error through", timeout: 0, ctxErr: nil, runErr: base, wantSub: "boom"},
+		{name: "non-deadline error passes through", timeout: time.Second, ctxErr: context.Canceled, runErr: base, wantSub: "boom"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := timeoutErr(tt.timeout, tt.ctxErr, tt.runErr)
+			if tt.wantNil {
+				if err != nil {
+					t.Fatalf("want nil, got %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantSub) {
+				t.Fatalf("err=%v, want containing %q", err, tt.wantSub)
+			}
+		})
+	}
+}
+
+// TestBindRunFlags proves the three US7 flags are registered and parse into the
+// run flag set (plumbing), alongside a pre-existing flag as a control.
+func TestBindRunFlags(t *testing.T) {
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	f := bindRunFlags(fs)
+	args := []string{"--prompt-file", "p.txt", "--timeout", "2s", "-o", "out.txt", "--target", "bot"}
+	if err := fs.Parse(args); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if *f.promptFile != "p.txt" {
+		t.Fatalf("promptFile = %q, want %q", *f.promptFile, "p.txt")
+	}
+	if *f.output != "out.txt" {
+		t.Fatalf("output = %q, want %q", *f.output, "out.txt")
+	}
+	if *f.timeout != 2*time.Second {
+		t.Fatalf("timeout = %v, want %v", *f.timeout, 2*time.Second)
+	}
+	if *f.target != "bot" {
+		t.Fatalf("target = %q, want %q", *f.target, "bot")
+	}
+}
+
+// TestCheckFlags proves the post-parse validation rejects a flag the selected
+// verb does not read (Constitution IV: no silently-ignored flag, naming flag +
+// verb) and rejects a negative --timeout, while supported flags, the universal
+// flags (config/-v/-vv), and a zero/positive timeout pass.
+func TestCheckFlags(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		sub     string
+		args    []string
+		timeout time.Duration
+		wantErr string // empty => nil expected
+	}{
+		// supported / universal flags pass, per verb
+		{name: "run supports timeout", sub: "run", args: []string{"--timeout", "5s"}, timeout: 5 * time.Second},
+		{name: "run supports prompt-file", sub: "run", args: []string{"--prompt-file", "p.txt"}},
+		{name: "run supports o", sub: "run", args: []string{"-o", "out.txt"}},
+		{name: "run supports scenario save quiet json target", sub: "run", args: []string{"--scenario", "s", "--save", "f", "--quiet", "--json", "--target", "b"}},
+		{name: "trace supports last", sub: "trace", args: []string{"--last"}},
+		{name: "tools supports last", sub: "tools", args: []string{"--last"}},
+		{name: "services supports last", sub: "services", args: []string{"--last"}},
+		{name: "replay supports feature and last", sub: "replay", args: []string{"--feature", "f.feature", "--last"}},
+		{name: "universal config allowed for diff", sub: "diff", args: []string{"--config", "x.yaml"}},
+		{name: "universal verbose allowed for trace", sub: "trace", args: []string{"-v"}},
+		{name: "universal debug allowed for tools", sub: "tools", args: []string{"-vv"}},
+		{name: "no flags set is fine", sub: "diff", args: nil},
+
+		// unsupported flags rejected, naming flag + verb
+		{name: "trace rejects timeout", sub: "trace", args: []string{"--timeout", "5s"}, wantErr: `flag "--timeout" is not supported by the "trace" command`},
+		{name: "replay rejects o", sub: "replay", args: []string{"-o", "out"}, wantErr: `flag "--o" is not supported by the "replay" command`},
+		{name: "diff rejects prompt-file", sub: "diff", args: []string{"--prompt-file", "x"}, wantErr: `flag "--prompt-file" is not supported by the "diff" command`},
+		{name: "run rejects last", sub: "run", args: []string{"--last"}, wantErr: `flag "--last" is not supported by the "run" command`},
+		{name: "trace rejects feature", sub: "trace", args: []string{"--feature", "f"}, wantErr: `flag "--feature" is not supported by the "trace" command`},
+
+		// negative timeout rejected (supported verb, bad value); zero/positive pass
+		{name: "run rejects negative timeout", sub: "run", args: []string{"--timeout", "-1s"}, timeout: -time.Second, wantErr: "--timeout must be non-negative, got -1s"},
+		{name: "run allows zero timeout", sub: "run", args: []string{"--timeout", "0s"}, timeout: 0},
+		{name: "run allows positive timeout", sub: "run", args: []string{"--timeout", "3s"}, timeout: 3 * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			fs := flag.NewFlagSet(tt.sub, flag.ContinueOnError)
+			bindRunFlags(fs)
+			if err := fs.Parse(tt.args); err != nil {
+				t.Fatalf("parse %v: %v", tt.args, err)
+			}
+			err := checkFlags(tt.sub, fs, tt.timeout)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("checkFlags(%q, %v) = %v, want nil", tt.sub, tt.args, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("checkFlags(%q, %v) = %v, want containing %q", tt.sub, tt.args, err, tt.wantErr)
 			}
 		})
 	}

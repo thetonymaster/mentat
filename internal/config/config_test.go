@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/thetonymaster/mentat/internal/core"
 )
 
 func TestLoadAppliesPerAdapterConcurrencyDefaults(t *testing.T) {
@@ -122,6 +124,314 @@ func TestLoadStore(t *testing.T) {
 			}
 			if c.Store != tt.wantStore {
 				t.Fatalf("Store = %q, want %q", c.Store, tt.wantStore)
+			}
+		})
+	}
+}
+
+// TestLoadStorePath pins the file-store config contract (US5): storePath is
+// REQUIRED when store is "file" (empty → a hard load error naming the field) and
+// carried through to Config; when store is anything else, storePath is ignored.
+func TestLoadStorePath(t *testing.T) {
+	tests := []struct {
+		name       string
+		yaml       string
+		wantPath   string
+		wantErr    bool
+		wantErrSub string
+	}{
+		{
+			name:     "file store keeps storePath",
+			yaml:     "store: file\nstorePath: ./captures\n",
+			wantPath: "./captures",
+		},
+		{
+			name:       "file store without storePath errors naming the field",
+			yaml:       "store: file\n",
+			wantErr:    true,
+			wantErrSub: "storePath",
+		},
+		{
+			name:     "non-file store ignores absent storePath",
+			yaml:     "store: tempo\ntempo:\n  endpoint: http://localhost:3200\n",
+			wantPath: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, err := Load([]byte(tt.yaml))
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				if !strings.Contains(err.Error(), tt.wantErrSub) {
+					t.Fatalf("error %q does not contain %q", err.Error(), tt.wantErrSub)
+				}
+				return
+			}
+			if c.StorePath != tt.wantPath {
+				t.Fatalf("StorePath = %q, want %q", c.StorePath, tt.wantPath)
+			}
+		})
+	}
+}
+
+// TestLoadExtract pins the targets.<n>.extract config contract (US8, data-model
+// config-`extract` row): default (absent) is whole; marker requires a marker;
+// pattern must compile AND carry at least one capture group; an unknown mode is a
+// load error. Valid configs convert to the right core.ExtractPolicy, and the
+// pattern is precompiled once at load (the compiled regexp rides the policy).
+func TestLoadExtract(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name         string
+		yaml         string
+		wantErr      bool
+		errSub       string
+		assertPolicy func(t *testing.T, p core.ExtractPolicy)
+	}{
+		{
+			name: "absent extract defaults to whole (empty mode, nil pattern)",
+			yaml: `targets:
+  a: { adapter: shell, command: ["true"] }
+`,
+			assertPolicy: func(t *testing.T, p core.ExtractPolicy) {
+				if p.Mode != "" {
+					t.Fatalf("Mode = %q, want empty (whole default)", p.Mode)
+				}
+				if p.Pattern != nil {
+					t.Fatalf("Pattern = %v, want nil for whole", p.Pattern)
+				}
+			},
+		},
+		{
+			name: "explicit whole mode loads",
+			yaml: `targets:
+  a:
+    adapter: shell
+    command: ["true"]
+    extract: { mode: whole }
+`,
+			assertPolicy: func(t *testing.T, p core.ExtractPolicy) {
+				if p.Mode != core.ExtractWhole {
+					t.Fatalf("Mode = %q, want %q", p.Mode, core.ExtractWhole)
+				}
+			},
+		},
+		{
+			name: "marker mode with marker loads and converts",
+			yaml: `targets:
+  a:
+    adapter: shell
+    command: ["true"]
+    extract: { mode: marker, marker: "ANSWER:" }
+`,
+			assertPolicy: func(t *testing.T, p core.ExtractPolicy) {
+				if p.Mode != core.ExtractMarker || p.Marker != "ANSWER:" {
+					t.Fatalf("policy = %+v, want mode=marker marker=ANSWER:", p)
+				}
+			},
+		},
+		{
+			name: "marker mode without marker errors naming the requirement",
+			yaml: `targets:
+  a:
+    adapter: shell
+    command: ["true"]
+    extract: { mode: marker }
+`,
+			wantErr: true,
+			errSub:  "marker is required",
+		},
+		{
+			name: "pattern mode with a valid single-group regex loads, compiles, and converts",
+			yaml: `targets:
+  a:
+    adapter: shell
+    command: ["true"]
+    extract: { mode: pattern, pattern: 'id=(\w+)' }
+`,
+			assertPolicy: func(t *testing.T, p core.ExtractPolicy) {
+				if p.Mode != core.ExtractPattern {
+					t.Fatalf("Mode = %q, want %q", p.Mode, core.ExtractPattern)
+				}
+				if p.Pattern == nil {
+					t.Fatal("Pattern is nil, want a precompiled regexp riding the policy")
+				}
+				m := p.Pattern.FindStringSubmatch("id=xyz")
+				if len(m) < 2 || m[1] != "xyz" {
+					t.Fatalf("compiled pattern did not capture as expected: %v", m)
+				}
+			},
+		},
+		{
+			name: "pattern mode without pattern errors naming the requirement",
+			yaml: `targets:
+  a:
+    adapter: shell
+    command: ["true"]
+    extract: { mode: pattern }
+`,
+			wantErr: true,
+			errSub:  "pattern is required",
+		},
+		{
+			name: "pattern that does not compile errors naming the pattern",
+			yaml: `targets:
+  a:
+    adapter: shell
+    command: ["true"]
+    extract: { mode: pattern, pattern: 'id=(' }
+`,
+			wantErr: true,
+			errSub:  "id=(",
+		},
+		{
+			name: "pattern with zero capture groups errors",
+			yaml: `targets:
+  a:
+    adapter: shell
+    command: ["true"]
+    extract: { mode: pattern, pattern: 'id=\w+' }
+`,
+			wantErr: true,
+			errSub:  "capture group",
+		},
+		{
+			name: "unknown mode errors naming the mode",
+			yaml: `targets:
+  a:
+    adapter: shell
+    command: ["true"]
+    extract: { mode: telepathy }
+`,
+			wantErr: true,
+			errSub:  "telepathy",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := Load([]byte(tt.yaml))
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Load err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				if !strings.Contains(err.Error(), tt.errSub) {
+					t.Fatalf("error %q does not contain %q", err.Error(), tt.errSub)
+				}
+				return
+			}
+			p := cfg.Targets["a"].Extract.Policy()
+			if tt.assertPolicy != nil {
+				tt.assertPolicy(t, p)
+			}
+		})
+	}
+}
+
+// TestLoadRejectsExtractOnNonShellAdapter pins FR-010 / Constitution IV (no silent
+// fallbacks): answer extraction is stdout-scoped and only the shell adapter produces
+// stdout, so a marker/pattern extract policy on a non-shell adapter (e.g. http) is a
+// LOUD config-load failure naming the target, the adapter, and the shell requirement
+// — rather than being silently accepted and then ignored at runtime (http.go sets
+// Answer = whole body and never reads the policy). whole/empty/absent extract remains
+// valid for every adapter (it is the default no-op), which is load-bearing for SC-008
+// (zero verdict changes for existing http targets that carry no extract block).
+func TestLoadRejectsExtractOnNonShellAdapter(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		yaml    string
+		wantErr bool
+		errSubs []string // all must appear when wantErr
+	}{
+		{
+			name: "http adapter with marker extract is rejected naming target, adapter, and shell",
+			yaml: `targets:
+  web:
+    adapter: http
+    http: { url: "http://localhost:8080", method: GET }
+    extract: { mode: marker, marker: "ANSWER:" }
+`,
+			wantErr: true,
+			errSubs: []string{"web", "http", "shell", "marker"},
+		},
+		{
+			name: "http adapter with pattern extract is rejected naming target, adapter, and shell",
+			yaml: `targets:
+  web:
+    adapter: http
+    http: { url: "http://localhost:8080", method: GET }
+    extract: { mode: pattern, pattern: 'id=(\w+)' }
+`,
+			wantErr: true,
+			errSubs: []string{"web", "http", "shell", "pattern"},
+		},
+		{
+			name: "shell adapter with marker extract still loads (primary supported case)",
+			yaml: `targets:
+  a:
+    adapter: shell
+    command: ["true"]
+    extract: { mode: marker, marker: "ANSWER:" }
+`,
+			wantErr: false,
+		},
+		{
+			name: "shell adapter with pattern extract still loads (primary supported case)",
+			yaml: `targets:
+  a:
+    adapter: shell
+    command: ["true"]
+    extract: { mode: pattern, pattern: 'id=(\w+)' }
+`,
+			wantErr: false,
+		},
+		{
+			name: "http adapter with no extract block still loads (SC-008 zero verdict changes)",
+			yaml: `targets:
+  web:
+    adapter: http
+    http: { url: "http://localhost:8080", method: GET }
+`,
+			wantErr: false,
+		},
+		{
+			name: "http adapter with whole extract mode still loads",
+			yaml: `targets:
+  web:
+    adapter: http
+    http: { url: "http://localhost:8080", method: GET }
+    extract: { mode: whole }
+`,
+			wantErr: false,
+		},
+		{
+			name: "http adapter with empty extract mode still loads",
+			yaml: `targets:
+  web:
+    adapter: http
+    http: { url: "http://localhost:8080", method: GET }
+    extract: { mode: "" }
+`,
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Load([]byte(tt.yaml))
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Load err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if !tt.wantErr {
+				return
+			}
+			for _, sub := range tt.errSubs {
+				if !strings.Contains(err.Error(), sub) {
+					t.Fatalf("error %q does not contain %q", err.Error(), sub)
+				}
 			}
 		})
 	}
@@ -295,26 +605,26 @@ func TestLoadJudgeDefaults(t *testing.T) {
 		wantTemp    float64
 	}{
 		{
-			name:        "block omitted entirely applies all defaults",
+			name:        "block omitted entirely applies all defaults (model is fast-tier haiku)",
 			yaml:        "store: tempo\n",
 			wantBackend: "claude",
-			wantModel:   "claude-opus-4-8",
+			wantModel:   "claude-haiku-4-5",
 			wantVotes:   1,
 			wantTemp:    0,
 		},
 		{
-			name:        "empty backend defaults to claude",
-			yaml:        "judge:\n  model: claude-haiku-4-5\n  votes: 3\n",
+			name:        "empty backend defaults to claude (temperature set so votes>1 is valid)",
+			yaml:        "judge:\n  model: claude-haiku-4-5\n  votes: 3\n  temperature: 0.7\n",
 			wantBackend: "claude",
 			wantModel:   "claude-haiku-4-5",
 			wantVotes:   3,
-			wantTemp:    0,
+			wantTemp:    0.7,
 		},
 		{
-			name:        "empty model defaults to claude-opus-4-8",
+			name:        "empty model defaults to fast-tier haiku",
 			yaml:        "judge:\n  backend: claude\n  votes: 1\n",
 			wantBackend: "claude",
-			wantModel:   "claude-opus-4-8",
+			wantModel:   "claude-haiku-4-5",
 			wantVotes:   1,
 			wantTemp:    0,
 		},
@@ -385,13 +695,13 @@ func TestLoadRejectsInvalidJudge(t *testing.T) {
 			errSub:  "judge.votes must be odd, got 4",
 		},
 		{
-			name:    "odd votes 3 allowed",
-			yaml:    "judge:\n  votes: 3\n",
+			name:    "odd votes 3 with temperature allowed",
+			yaml:    "judge:\n  votes: 3\n  temperature: 0.7\n",
 			wantErr: false,
 		},
 		{
-			name:    "odd votes 5 allowed",
-			yaml:    "judge:\n  votes: 5\n",
+			name:    "odd votes 5 with temperature allowed",
+			yaml:    "judge:\n  votes: 5\n  temperature: 0.7\n",
 			wantErr: false,
 		},
 		{
@@ -417,6 +727,17 @@ func TestLoadRejectsInvalidJudge(t *testing.T) {
 			yaml:    "judge:\n  votes: 1\n  temperature: 0\n",
 			wantErr: false,
 		},
+		{
+			name:    "negative max_cost_usd rejected (no silent unlimited fallback)",
+			yaml:    "judge:\n  votes: 1\n  max_cost_usd: -0.01\n",
+			wantErr: true,
+			errSub:  "judge.max_cost_usd must be finite and >= 0",
+		},
+		{
+			name:    "zero max_cost_usd allowed (unlimited)",
+			yaml:    "judge:\n  votes: 1\n  max_cost_usd: 0\n",
+			wantErr: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -428,6 +749,133 @@ func TestLoadRejectsInvalidJudge(t *testing.T) {
 				}
 				if !strings.Contains(err.Error(), tt.errSub) {
 					t.Fatalf("error %q does not contain %q", err.Error(), tt.errSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+		})
+	}
+}
+
+// TestLoadJudgeMaxCostUSD proves the optional judge.max_cost_usd budget knob loads
+// (US6): an explicit ceiling round-trips, and an omitted one defaults to 0 —
+// unlimited, today's behaviour (no budget accounting).
+func TestLoadJudgeMaxCostUSD(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		yaml    string
+		wantMax float64
+	}{
+		{
+			name:    "omitted defaults to unlimited (0)",
+			yaml:    "judge:\n  votes: 1\n",
+			wantMax: 0,
+		},
+		{
+			name:    "explicit ceiling round-trips",
+			yaml:    "judge:\n  votes: 1\n  max_cost_usd: 0.05\n",
+			wantMax: 0.05,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c, err := Load([]byte(tt.yaml))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if c.Judge.MaxCostUSD != tt.wantMax {
+				t.Errorf("Judge.MaxCostUSD = %v, want %v", c.Judge.MaxCostUSD, tt.wantMax)
+			}
+		})
+	}
+}
+
+// TestLoadDefaultsJudgeModelToFastTier proves the US6 default swap (judge-ledger
+// contract, Defaults policy): an omitted or empty judge.model resolves to the
+// pinned fast-tier default (Haiku-class). The fast tier is >=80% cheaper per token
+// than the former Opus-tier default (SC-006, price-sheet math in the PR) and,
+// unlike Opus, accepts the temperature knob best-of-N voting needs.
+func TestLoadDefaultsJudgeModelToFastTier(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{name: "judge block omitted entirely", yaml: "store: tempo\n"},
+		{name: "judge block present but model empty", yaml: "judge:\n  backend: claude\n  votes: 1\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c, err := Load([]byte(tt.yaml))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if c.Judge.Model != "claude-haiku-4-5" {
+				t.Fatalf("Judge.Model = %q, want fast-tier default %q", c.Judge.Model, "claude-haiku-4-5")
+			}
+		})
+	}
+}
+
+// TestLoadRejectsVotesWithoutTemperature proves the US6 best-of-N guard (judge-ledger
+// contract, Defaults policy): votes>1 at temperature 0 sends near-identical calls, so
+// majority voting is pointless. Load fails loudly with a message naming BOTH remedies
+// — raise temperature OR drop to votes: 1 — rather than silently running a useless
+// best-of-N (Constitution IV: no silent fallback). votes==1 (the default) and votes>1
+// with a positive temperature both load clean.
+func TestLoadRejectsVotesWithoutTemperature(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		yaml    string
+		wantErr bool
+		errSubs []string // all must appear when wantErr
+	}{
+		{
+			name:    "votes 3 at temperature 0 rejected naming both remedies",
+			yaml:    "judge:\n  votes: 3\n",
+			wantErr: true,
+			errSubs: []string{"votes=3", "temperature=0", "raise temperature", "set votes: 1"},
+		},
+		{
+			name:    "votes 5 at temperature 0 rejected naming both remedies",
+			yaml:    "judge:\n  votes: 5\n",
+			wantErr: true,
+			errSubs: []string{"votes=5", "raise temperature", "set votes: 1"},
+		},
+		{
+			name:    "votes 3 with temperature 0.7 loads clean",
+			yaml:    "judge:\n  votes: 3\n  temperature: 0.7\n",
+			wantErr: false,
+		},
+		{
+			name:    "votes 1 at temperature 0 (the defaults) loads clean",
+			yaml:    "judge:\n  votes: 1\n  temperature: 0\n",
+			wantErr: false,
+		},
+		{
+			name:    "omitted judge block (votes defaults to 1) loads clean",
+			yaml:    "store: tempo\n",
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Load([]byte(tt.yaml))
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				for _, sub := range tt.errSubs {
+					if !strings.Contains(err.Error(), sub) {
+						t.Fatalf("error %q does not contain %q", err.Error(), sub)
+					}
 				}
 				return
 			}
@@ -726,8 +1174,8 @@ func TestLoadAbsentOptionalKeysApplyDefaults(t *testing.T) {
 			if cfg.Poll.SearchLimit != 100 {
 				t.Errorf("Poll.SearchLimit = %d, want 100 (default)", cfg.Poll.SearchLimit)
 			}
-			if cfg.Judge.Backend != "claude" || cfg.Judge.Model != "claude-opus-4-8" || cfg.Judge.Votes != 1 {
-				t.Errorf("Judge = %+v, want defaults {claude claude-opus-4-8 1 0}", cfg.Judge)
+			if cfg.Judge.Backend != "claude" || cfg.Judge.Model != "claude-haiku-4-5" || cfg.Judge.Votes != 1 {
+				t.Errorf("Judge = %+v, want defaults {claude claude-haiku-4-5 1 0}", cfg.Judge)
 			}
 			wantSuite := RunBudget{Timeout: DefaultRunTimeout, Unbounded: false, KillGrace: DefaultKillGrace}
 			if cfg.Budget != wantSuite {

@@ -1,0 +1,109 @@
+# Agent Assignments
+# Feature: 006-dx-completeness — DX & Product Completeness
+# Generated: 2026-07-15T21:39:25Z
+# Command: /speckit.agent-assign.assign
+# Source of truth: inline routing annotations already present in tasks.md
+#   (each task's trailing "(go-test-writer, red|green)" / "(go-coder)" marker).
+
+agents_scanned:
+  - name: "go-test-writer"
+    source: "project"
+    description: "Owns the red->green->refactor TDD loop for any feature/bugfix; table-driven tests, uber gomock, godog step defs + .feature specs, L3 meta-test. Refuses scaffolding/config."
+  - name: "go-coder"
+    source: "project"
+    description: "Non-TDD Go work: package scaffolding, go.mod/dep bumps, mock regen, deploy/ + Tempo/Collector config, Makefile targets, gofmt/vet cleanups, behavior-preserving refactors. Refuses behaviour changes."
+  - name: "go-reviewer"
+    source: "project"
+    description: "Read-only local reviewer (pair scan / gate audit). Not an implementer; emits findings only."
+  - name: "go-context-builder"
+    source: "project"
+    description: "Read-only context scout run before planning/implementation. Not an implementer; emits a briefing only."
+
+assignments:
+  T001:
+    agent: "go-coder"
+    reason: "Baseline `make ci` + capture the mentatctl run golden — non-TDD setup/tooling, no behaviour change."
+  T002:
+    agent: "go-test-writer"
+    reason: "Red: failing tests for the step metadata table + drift test."
+  T003:
+    agent: "go-test-writer"
+    reason: "Green: restructure step registration into the metadata table."
+  T004:
+    agent: "go-test-writer"
+    reason: "Red: failing tests for the `mentat steps` renderer + generated docs."
+  T005:
+    agent: "go-test-writer"
+    reason: "Green: implement the `steps` subcommand, generator, and committed docs/steps.md."
+  T006:
+    agent: "go-test-writer"
+    reason: "Red: failing tests for `mentat validate` across the four seeded defect classes."
+  T007:
+    agent: "go-test-writer"
+    reason: "Green: implement `mentat validate` (parse -> binding -> CEL -> shape/expectations/target checks)."
+  T008:
+    agent: "go-test-writer"
+    reason: "Red: failing tests for core.JudgeUsage capture + per-call aggregation."
+  T009:
+    agent: "go-test-writer"
+    reason: "Green: implement usage capture + aggregation (regenerate mocks via go generate)."
+  T010:
+    agent: "go-test-writer"
+    reason: "Red: failing tests for the collector judgeTotal + JSON/HTML ledger surfaces."
+  T011:
+    agent: "go-test-writer"
+    reason: "Green: implement ledger rendering + judge.max_cost_usd budget abort (touches the shared steps.go hotspot)."
+  T012:
+    agent: "go-test-writer"
+    reason: "Red: failing tests for the fast-tier default + votes>1@temp0 config guard; L3 meta-tests stay green."
+  T013:
+    agent: "go-test-writer"
+    reason: "Green: implement the default-model swap + config guard."
+  T014:
+    agent: "go-test-writer"
+    reason: "Red: failing test for JUnit + console coexistence and write-failure exit contract."
+  T015:
+    agent: "go-test-writer"
+    reason: "Green: implement the godog multi-formatter wiring."
+  T016:
+    agent: "go-test-writer"
+    reason: "Red: failing tests for HTTP body steps (doc-string + fixture, missing-fixture error)."
+  T017:
+    agent: "go-test-writer"
+    reason: "Green: implement body steps + RunSpec.Input plumbing + http driver send."
+  T018:
+    agent: "go-test-writer"
+    reason: "Red: failing tests for the file store Query/GetByID and @runs(N>1) hard error."
+  T019:
+    agent: "go-test-writer"
+    reason: "Green: implement the directory-backed file store + register the `file` factory."
+  T020:
+    agent: "go-test-writer"
+    reason: "Hermetic offline-replay test proving saved fixtures run green without docker."
+  T021:
+    agent: "go-test-writer"
+    reason: "Red: failing table tests for whole/marker/pattern extraction modes + config validation."
+  T022:
+    agent: "go-test-writer"
+    reason: "Green: implement policy-parameterized ExtractAnswer + targets.<n>.extract config."
+  T023:
+    agent: "go-test-writer"
+    reason: "Red: failing tests for the additive mentatctl summary lines + prompt-file/stdin/-o/--timeout flags."
+  T024:
+    agent: "go-test-writer"
+    reason: "Green: implement summary enrichment + new flags."
+  T025:
+    agent: "go-coder"
+    reason: "Add `make labs` + point mentat.yaml/e2e configs at prebuilt binaries — Makefile/config scaffolding, no behaviour change."
+  T026:
+    agent: "go-test-writer"
+    reason: "Convert e2e report-meta test to mentatBin + add t.Parallel and verify green — a behaviour-test change, routed to the test owner."
+  T027:
+    agent: "go-coder"
+    reason: "Coverage gate (>=80% touched packages) — verification tooling, no production behaviour change."
+  T028:
+    agent: "go-coder"
+    reason: "Full quickstart.md validation + offline-replay proof + `make ci` — verification/docs."
+  T029:
+    agent: "go-coder"
+    reason: "Sync both contract docs + README + changelog with the implementation — documentation."

@@ -18,9 +18,12 @@ mentat validate [paths...] [--config mentat.yaml] [--format text|json]
 ```
 
 - Default paths: the configured/conventional features directory.
-- Runs all authoring prechecks without driving SUTs or contacting store/judge.
-- Reports **all** findings (file:line, class, message); exit 1 on any finding
-  or when no feature files are found; exit 0 clean.
+- Runs all authoring prechecks without driving SUTs or contacting store/judge
+  (it constructs no store/driver/correlator at all — no network by construction).
+- Reports **all** findings; exit 1 on any finding or when no feature files are
+  found; exit 0 clean.
+- `--format json` emits `{"findings": [{"file", "line", "class", "message"}]}`
+  (`internal/steps.Finding`); `--format text` (default) prints `file:line: [class] message`.
 - Budget: completes in < 1s on this repo's corpus (hermetic test enforces no
   network by construction, not by timing).
 
@@ -37,17 +40,19 @@ mentatctl agent run [--prompt "..." | --prompt-file f | --prompt-file -] \
                     [-o answer.txt] [--timeout 90s] <target>
 ```
 
-Summary (additive lines, existing lines unchanged for script compatibility):
+Summary (additive lines, existing lines unchanged for script compatibility).
+Exact spellings are golden-locked in `internal/ctl/format.go` (`RenderSummary`) and
+`internal/ctl/testdata/run-golden.txt`:
 
 ```
-run: <run id>
+run <run id>
 tools: <ordered tool names>
 spans: <n>
 answer: <answer>
-tokens: <in>/<out>
+tokens: in <in> out <out>
 cost: $<x.xxxx>
 latency: <ms> ms
-traces: <root trace ids>
+traces: <space-separated root trace ids>
 ```
 
 ## Compatibility

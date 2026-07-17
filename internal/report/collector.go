@@ -30,6 +30,7 @@ func (c *Collector) Report(started time.Time, dur time.Duration, interrupted boo
 	defer c.mu.Unlock()
 	rep := core.RunReport{StartedAt: started, Duration: dur, Total: len(c.scenarios), Interrupted: interrupted}
 	rep.Scenarios = append(rep.Scenarios, c.scenarios...)
+	var judgeTotal *core.JudgeUsage
 	for _, sr := range c.scenarios {
 		if sr.Pass {
 			rep.Passed++
@@ -37,6 +38,21 @@ func (c *Collector) Report(started time.Time, dur time.Duration, interrupted boo
 			rep.Failed++
 		}
 		rep.TotalCost += sr.Cost
+		// Fold each scenario's judge usage into the suite total (US6). The total stays
+		// nil until a scenario actually made a judge call, so a run with no semantic
+		// checks carries no fabricated all-zero total (FR-006). Model is left empty —
+		// the total is not attributed to one model. CostUsd is summed here from the
+		// per-scenario cost (which report.Price fills before rendering).
+		if sr.Judge != nil {
+			if judgeTotal == nil {
+				judgeTotal = &core.JudgeUsage{}
+			}
+			judgeTotal.Calls += sr.Judge.Calls
+			judgeTotal.InputTokens += sr.Judge.InputTokens
+			judgeTotal.OutputTokens += sr.Judge.OutputTokens
+			judgeTotal.CostUsd += sr.Judge.CostUsd
+		}
 	}
+	rep.JudgeTotal = judgeTotal
 	return rep
 }

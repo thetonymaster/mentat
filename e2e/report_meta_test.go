@@ -20,6 +20,7 @@ import (
 // aggregate_scalar_bad.feature (p95 over checkout @runs(2)) which is proven to
 // go red by TestAggregateScalarGoesRed.
 func TestL3_ReportReflectsFailure(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	jsonPath := filepath.Join(dir, "r.json")
 
@@ -29,7 +30,7 @@ func TestL3_ReportReflectsFailure(t *testing.T) {
 	// Flag ordering: flags MUST come between "run" and the feature path because
 	// cmd/mentat/main.go does fs.Parse(os.Args[2:]) and Go's flag package stops
 	// at the first non-flag positional argument.
-	cmd := exec.CommandContext(ctx, "go", "run", "./cmd/mentat",
+	cmd := exec.CommandContext(ctx, mentatBin,
 		"run", "--report-json", jsonPath,
 		"features/meta/aggregate_scalar_bad.feature",
 	)
@@ -61,10 +62,11 @@ func TestL3_ReportReflectsFailure(t *testing.T) {
 // path makes mentat exit non-zero with an error message containing
 // "create json report" (from emitReports in cmd/mentat/main.go).
 func TestL3_UnwritableReportExitsNonZero(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "go", "run", "./cmd/mentat",
+	cmd := exec.CommandContext(ctx, mentatBin,
 		"run", "--report-json", "/this/dir/does/not/exist/r.json",
 		"features/meta/aggregate_scalar_bad.feature",
 	)

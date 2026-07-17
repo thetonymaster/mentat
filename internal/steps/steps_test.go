@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -706,6 +708,12 @@ func TestParseRunsTag(t *testing.T) {
 			tags:    []*messages.PickleTag{{Name: "@smoke"}},
 			wantN:   1,
 			wantPar: false,
+		},
+		{
+			name:    "multiple_runs_tags_are_ambiguous",
+			tags:    []*messages.PickleTag{{Name: "@runs(2)"}, {Name: "@runs(3)"}},
+			wantErr: true,
+			errSub:  "@runs(3)",
 		},
 	}
 	for _, tt := range tests {
@@ -1880,4 +1888,213 @@ func TestStepsThreadScenarioContext(t *testing.T) {
 			t.Fatalf("comparator received %v, not the scenario context (marker=%v)", spy.gotCtx, got)
 		}
 	})
+}
+
+// captureInputEngine wires an engine whose http driver posts to a throwaway 200
+// server and whose mock correlator captures the RunSpec's Input at Inject time
+// (Inject fires in driveOnce AFTER the spec is fully built) and resolves a trace so
+// the drive succeeds. The returned *string holds the Input of the most recent drive
+// — the seam the US4 body steps must plumb through. An http target is used because
+// F19 now rejects request-body steps against any non-http adapter; the driver only
+// READS spec.Input (never writes it back), so a captured non-empty Input can still
+// only have come from the body step. Inject/Resolve are Times(1): each returned
+// engine serves exactly one drive, so a regression that stops driving (leaving *got
+// at its "" zero value) trips the unmet expectation instead of a false pass.
+func captureInputEngine(t *testing.T) (*engine.Engine, *string) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	cfg := config.Config{
+		OTLPEndpoint: "x",
+		Targets: map[string]config.Target{"bot": {
+			Adapter:        "http",
+			HTTP:           config.HTTP{URL: srv.URL, Method: "POST"},
+			MaxConcurrency: 1,
+		}},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	cor := mocks.NewMockCorrelator(ctrl)
+	got := new(string)
+	cor.EXPECT().Inject(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, spec *core.RunSpec) string {
+			*got = spec.Input
+			return "run-1"
+		}).Times(1)
+	cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).Return(happyTrace(), nil).Times(1)
+	eng, err := engine.Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("engine.Build: %v", err)
+	}
+	return eng, got
+}
+
+// TestSendRequestBodyDocSetsInput proves the `I send the request with body:`
+// doc-string step plumbs the body verbatim into RunSpec.Input, while the existing
+// prompt/scenario drive steps keep Input empty (they carry their arg via Command,
+// not the body). This is the US4 gap: driveOnce built the spec without Input, so
+// every HTTP request sent an empty body (audit E4).
+func TestSendRequestBodyDocSetsInput(t *testing.T) {
+	body := "{\n  \"query\": \"revenue\"\n}"
+	tests := []struct {
+		name string
+		call func(w *world) error
+		want string
+	}{
+		{
+			name: "body docstring becomes Input",
+			call: func(w *world) error { return w.sendRequestBodyDoc(&godog.DocString{Content: body}) },
+			want: body,
+		},
+		{
+			name: "run scenario keeps Input empty",
+			call: func(w *world) error { return w.runScenario("happy") },
+			want: "",
+		},
+		{
+			name: "run prompt keeps Input empty",
+			call: func(w *world) error { return w.runPrompt("summarize") },
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			eng, got := captureInputEngine(t)
+			w := &world{eng: eng, ctx: context.Background(), target: "bot"}
+			if err := tt.call(w); err != nil {
+				t.Fatalf("drive: %v", err)
+			}
+			if *got != tt.want {
+				t.Fatalf("captured Input = %q, want %q", *got, tt.want)
+			}
+		})
+	}
+}
+
+// TestSendRequestBodyDocNil proves a missing doc-string is a hard, descriptive
+// error rather than a silently-empty body (No Silent Fallbacks).
+func TestSendRequestBodyDocNil(t *testing.T) {
+	w := &world{}
+	if err := w.sendRequestBodyDoc(nil); err == nil {
+		t.Fatal("want error for nil docstring, got nil")
+	}
+}
+
+// TestSendRequestBodyFixtureSetsInput proves the `... with body fixture "<path>"`
+// step reads the fixture file into RunSpec.Input, resolving a relative path against
+// the feature directory (filepath.Dir(w.uri)) and using an absolute path as-is.
+func TestSendRequestBodyFixtureSetsInput(t *testing.T) {
+	dir := t.TempDir()
+	content := "{\"amount\": 42}\n"
+	rel := "bodies/order.json"
+	relPath := filepath.Join(dir, rel)
+	if err := os.MkdirAll(filepath.Dir(relPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(relPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	absPath := filepath.Join(dir, "abs.json")
+	if err := os.WriteFile(absPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write abs fixture: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "relative path resolves against feature dir", path: rel},
+		{name: "absolute path used as-is", path: absPath},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			eng, got := captureInputEngine(t)
+			w := &world{eng: eng, ctx: context.Background(), target: "bot", uri: filepath.Join(dir, "orders.feature")}
+			if err := w.sendRequestBodyFixture(tt.path); err != nil {
+				t.Fatalf("fixture drive: %v", err)
+			}
+			if *got != content {
+				t.Fatalf("captured Input = %q, want %q", *got, content)
+			}
+		})
+	}
+}
+
+// shellBodyEngine wires an otherwise-drivable engine with a SHELL target. F19
+// requires a body step to reject the shell adapter BEFORE driving, so the
+// correlator must never be touched: Inject/Resolve are Times(0). That makes a
+// regression which drives the shell adapter before failing trip immediately —
+// AnyTimes() would let such a drive-then-reject slip through.
+func shellBodyEngine(t *testing.T) *engine.Engine {
+	t.Helper()
+	cfg := config.Config{
+		OTLPEndpoint: "x",
+		Targets:      map[string]config.Target{"bot": {Adapter: "shell", Command: []string{"sh", "-c", "echo hi"}, MaxConcurrency: 1}},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	cor := mocks.NewMockCorrelator(ctrl)
+	cor.EXPECT().Inject(gomock.Any(), gomock.Any()).Times(0)
+	cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+	eng, err := engine.Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("engine.Build: %v", err)
+	}
+	return eng
+}
+
+// TestSendRequestBodyRejectsNonHTTPAdapter proves a request-body step against a
+// non-http adapter (here shell, which ignores RunSpec.Input) is a hard error naming
+// the adapter — never a silent drive that discards the body (Constitution IV / F19).
+// The doc-string path guards after the nil check; the fixture path guards after the
+// file read (so the fixture must exist to reach the adapter check).
+func TestSendRequestBodyRejectsNonHTTPAdapter(t *testing.T) {
+	dir := t.TempDir()
+	fixture := filepath.Join(dir, "body.json")
+	if err := os.WriteFile(fixture, []byte("{\"q\":1}"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	tests := []struct {
+		name string
+		call func(w *world) error
+	}{
+		{
+			name: "doc-string body against shell",
+			call: func(w *world) error { return w.sendRequestBodyDoc(&godog.DocString{Content: "{}"}) },
+		},
+		{
+			name: "fixture body against shell",
+			call: func(w *world) error { return w.sendRequestBodyFixture(fixture) },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := &world{eng: shellBodyEngine(t), ctx: context.Background(), target: "bot", uri: filepath.Join(dir, "o.feature")}
+			err := tt.call(w)
+			if err == nil {
+				t.Fatal("want error for a body step against a shell adapter, got nil")
+			}
+			if !strings.Contains(err.Error(), "shell") {
+				t.Fatalf("error %q must name the offending %q adapter", err.Error(), "shell")
+			}
+		})
+	}
+}
+
+// TestSendRequestBodyFixtureMissing proves an unreadable fixture is a hard error
+// naming the RESOLVED path (not the raw relative arg), and that the failure fires
+// BEFORE any drive — so no engine is needed to reach it (No Silent Fallbacks).
+func TestSendRequestBodyFixtureMissing(t *testing.T) {
+	dir := t.TempDir()
+	w := &world{uri: filepath.Join(dir, "orders.feature")}
+	err := w.sendRequestBodyFixture("nope.json")
+	if err == nil {
+		t.Fatal("want error for a missing fixture, got nil")
+	}
+	resolved := filepath.Join(dir, "nope.json")
+	if !strings.Contains(err.Error(), resolved) {
+		t.Fatalf("error %q must name the resolved path %q", err.Error(), resolved)
+	}
 }

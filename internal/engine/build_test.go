@@ -10,6 +10,39 @@ import (
 	"github.com/thetonymaster/mentat/internal/registry"
 )
 
+// TestEngineAdapter proves the read-only Adapter accessor reports a configured
+// target's adapter (used by the steps layer to reject request-body steps against a
+// non-http target), and returns ("", false) for an unknown target so callers can
+// fall through to their existing "no target set"/"unknown target" paths.
+func TestEngineAdapter(t *testing.T) {
+	cfg := config.Config{OTLPEndpoint: "x", Targets: map[string]config.Target{
+		"agent": {Adapter: "shell"},
+		"api":   {Adapter: "http"},
+	}}
+	eng, err := Build(cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	tests := []struct {
+		name   string
+		target string
+		wantAd string
+		wantOK bool
+	}{
+		{name: "shell target", target: "agent", wantAd: "shell", wantOK: true},
+		{name: "http target", target: "api", wantAd: "http", wantOK: true},
+		{name: "unknown target", target: "ghost", wantAd: "", wantOK: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotAd, gotOK := eng.Adapter(tt.target)
+			if gotAd != tt.wantAd || gotOK != tt.wantOK {
+				t.Fatalf("Adapter(%q) = (%q, %v), want (%q, %v)", tt.target, gotAd, gotOK, tt.wantAd, tt.wantOK)
+			}
+		})
+	}
+}
+
 func TestBuildLoadsShapePatterns(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "p.yaml"),

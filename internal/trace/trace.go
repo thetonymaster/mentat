@@ -94,6 +94,12 @@ type Trace struct {
 	RunID string
 	Roots []*Span
 	Spans []*Span
+	// TraceIDs are the store trace ids this forest was merged from, in canonical
+	// (sorted) order (set by the correlator merge; US7 FR-009). It is a runtime-only
+	// projection of the correlation refs — json:"-" keeps it OUT of the serialized
+	// payload so FetchPayload/DecodePayload bytes (and the feature-004 change-detection
+	// hash) stay byte-identical to a forest without it.
+	TraceIDs []string `json:"-"`
 }
 
 // ByOp returns spans whose gen_ai.operation.name == op, stable-sorted by start

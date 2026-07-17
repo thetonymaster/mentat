@@ -4,7 +4,7 @@ poll: { interval: "200ms", stableFor: 3, timeout: "30s" }
 targets:
   research-agent:
     adapter: shell
-    command: ["go", "run", "./tracelab/researchbot/cmd/researchbot"]
+    command: ["./bin/researchbot"]
   # A deliberately hung SUT for the feature-003 lifecycle L3 proof: it never exits
   # and spawns a child, so its whole process tree must be bounded by run_timeout
   # (2s) and reaped. The distinctive sleep marker (987654s) lets the e2e test pgrep
