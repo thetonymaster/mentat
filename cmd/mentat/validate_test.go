@@ -316,6 +316,41 @@ func TestValidateBadConfigIsFinding(t *testing.T) {
 	}
 }
 
+// TestValidateRejectsExtractOnHTTP proves the T030 guard reaches the product
+// surface: a marker/pattern extract policy on a non-shell (http) target is a
+// config-load rejection that `mentat validate` surfaces as a config finding with
+// exit 1 — end-to-end proof the guard is not merely a unit-level Load error. The
+// failure is at config load, before any scenario is driven, so validate (not a
+// godog drive-scenario) is the correct end-to-end vehicle for it.
+func TestValidateRejectsExtractOnHTTP(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	featuresDir := filepath.Join(root, "features")
+	mustMkdir(t, featuresDir)
+	mustWrite(t, filepath.Join(featuresDir, "f.feature"), defectsFeature)
+	cfgPath := filepath.Join(root, "mentat.yaml")
+	// A valid http target (url+method present) whose ONLY defect is a marker extract
+	// on a non-shell adapter, so config.Load fails on the T030 guard specifically.
+	mustWrite(t, cfgPath, "targets:\n  web:\n    adapter: http\n    http:\n      url: http://localhost:9999/x\n      method: POST\n    extract:\n      mode: marker\n      marker: \"ANSWER:\"\n")
+
+	var out bytes.Buffer
+	code, err := validateCmd([]string{"--config", cfgPath, featuresDir}, &out)
+	if err != nil {
+		t.Fatalf("validateCmd error: %v", err)
+	}
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1\n%s", code, out.String())
+	}
+	if got := classesIn(out.String()); !got["config"] {
+		t.Errorf("want a config finding, got:\n%s", out.String())
+	}
+	// The finding must name the shell-adapter requirement, proving it is the T030
+	// guard and not some unrelated config error.
+	if !strings.Contains(out.String(), "shell adapter") {
+		t.Errorf("config finding should name the shell-adapter requirement (T030), got:\n%s", out.String())
+	}
+}
+
 // TestValidateParseErrorIsFinding proves a malformed feature file is a hard
 // finding (class "parse"), never a silent skip.
 func TestValidateParseErrorIsFinding(t *testing.T) {

@@ -330,6 +330,113 @@ func TestLoadExtract(t *testing.T) {
 	}
 }
 
+// TestLoadRejectsExtractOnNonShellAdapter pins FR-010 / Constitution IV (no silent
+// fallbacks): answer extraction is stdout-scoped and only the shell adapter produces
+// stdout, so a marker/pattern extract policy on a non-shell adapter (e.g. http) is a
+// LOUD config-load failure naming the target, the adapter, and the shell requirement
+// — rather than being silently accepted and then ignored at runtime (http.go sets
+// Answer = whole body and never reads the policy). whole/empty/absent extract remains
+// valid for every adapter (it is the default no-op), which is load-bearing for SC-008
+// (zero verdict changes for existing http targets that carry no extract block).
+func TestLoadRejectsExtractOnNonShellAdapter(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		yaml    string
+		wantErr bool
+		errSubs []string // all must appear when wantErr
+	}{
+		{
+			name: "http adapter with marker extract is rejected naming target, adapter, and shell",
+			yaml: `targets:
+  web:
+    adapter: http
+    http: { url: "http://localhost:8080", method: GET }
+    extract: { mode: marker, marker: "ANSWER:" }
+`,
+			wantErr: true,
+			errSubs: []string{"web", "http", "shell", "marker"},
+		},
+		{
+			name: "http adapter with pattern extract is rejected naming target, adapter, and shell",
+			yaml: `targets:
+  web:
+    adapter: http
+    http: { url: "http://localhost:8080", method: GET }
+    extract: { mode: pattern, pattern: 'id=(\w+)' }
+`,
+			wantErr: true,
+			errSubs: []string{"web", "http", "shell", "pattern"},
+		},
+		{
+			name: "shell adapter with marker extract still loads (primary supported case)",
+			yaml: `targets:
+  a:
+    adapter: shell
+    command: ["true"]
+    extract: { mode: marker, marker: "ANSWER:" }
+`,
+			wantErr: false,
+		},
+		{
+			name: "shell adapter with pattern extract still loads (primary supported case)",
+			yaml: `targets:
+  a:
+    adapter: shell
+    command: ["true"]
+    extract: { mode: pattern, pattern: 'id=(\w+)' }
+`,
+			wantErr: false,
+		},
+		{
+			name: "http adapter with no extract block still loads (SC-008 zero verdict changes)",
+			yaml: `targets:
+  web:
+    adapter: http
+    http: { url: "http://localhost:8080", method: GET }
+`,
+			wantErr: false,
+		},
+		{
+			name: "http adapter with whole extract mode still loads",
+			yaml: `targets:
+  web:
+    adapter: http
+    http: { url: "http://localhost:8080", method: GET }
+    extract: { mode: whole }
+`,
+			wantErr: false,
+		},
+		{
+			name: "http adapter with empty extract mode still loads",
+			yaml: `targets:
+  web:
+    adapter: http
+    http: { url: "http://localhost:8080", method: GET }
+    extract: { mode: "" }
+`,
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Load([]byte(tt.yaml))
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Load err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if !tt.wantErr {
+				return
+			}
+			for _, sub := range tt.errSubs {
+				if !strings.Contains(err.Error(), sub) {
+					t.Fatalf("error %q does not contain %q", err.Error(), sub)
+				}
+			}
+		})
+	}
+}
+
 func TestLoadPricing(t *testing.T) {
 	data := []byte(`
 store: tempo

@@ -37,7 +37,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   where `mode` is `whole` (default — trimmed stdout), `marker` (text after the last
   occurrence of `marker`), or `pattern` (first capture group of `pattern`). A missing
   marker/pattern match fails loud naming it; config validation requires the field per
-  mode and a pattern with ≥1 capture group.
+  mode and a pattern with ≥1 capture group. Marker/pattern extraction requires the
+  shell adapter (it reads stdout); a non-shell target (e.g. `http`) carrying such a
+  policy is rejected at config load, never silently ignored.
 - **`mentatctl agent run` enrichment (US7).** The summary gains additive lines
   `tokens: in <n> out <n>`, `cost: $<x.xxxx>`, `latency: <ms> ms`, and
   `traces: <root trace ids>` (existing lines byte-stable). New flags: `--prompt-file`

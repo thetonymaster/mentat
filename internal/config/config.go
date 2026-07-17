@@ -230,7 +230,7 @@ func Load(data []byte) (Config, error) {
 			return Config{}, terr
 		}
 		t.Budget = RunBudget{Timeout: tt, Unbounded: tu, KillGrace: killGrace}
-		re, eerr := validateExtract(name, t.Extract)
+		re, eerr := validateExtract(name, t.Adapter, t.Extract)
 		if eerr != nil {
 			return Config{}, eerr
 		}
@@ -290,16 +290,29 @@ func validateJudge(j JudgeConfig) error {
 // missing its required field, a pattern that will not compile, or a pattern with
 // no capture group (there would be nothing to extract), and an unknown mode value.
 // No silent fallback to whole (Constitution IV).
-func validateExtract(target string, e ExtractConfig) (*regexp.Regexp, error) {
+//
+// marker and pattern extraction are stdout-scoped and only the shell adapter
+// produces stdout (core.ExtractAnswer runs in the shell driver; http sets Answer to
+// the whole response body and never reads the policy). So a marker/pattern policy on
+// any non-shell adapter is a LOUD load failure naming the target, adapter, and the
+// shell requirement — never silently accepted and then ignored at runtime (FR-010,
+// Constitution IV). whole/empty mode is the default no-op and stays valid everywhere.
+func validateExtract(target, adapter string, e ExtractConfig) (*regexp.Regexp, error) {
 	switch e.Mode {
 	case "", core.ExtractWhole:
 		return nil, nil
 	case core.ExtractMarker:
+		if adapter != "shell" {
+			return nil, fmt.Errorf("target %q: extract mode %q requires the shell adapter (extraction reads stdout), but adapter is %q", target, core.ExtractMarker, adapter)
+		}
 		if e.Marker == "" {
 			return nil, fmt.Errorf("target %q: extract marker is required when mode is %q", target, core.ExtractMarker)
 		}
 		return nil, nil
 	case core.ExtractPattern:
+		if adapter != "shell" {
+			return nil, fmt.Errorf("target %q: extract mode %q requires the shell adapter (extraction reads stdout), but adapter is %q", target, core.ExtractPattern, adapter)
+		}
 		if e.Pattern == "" {
 			return nil, fmt.Errorf("target %q: extract pattern is required when mode is %q", target, core.ExtractPattern)
 		}
