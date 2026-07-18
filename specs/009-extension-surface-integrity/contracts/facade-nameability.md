@@ -55,7 +55,7 @@ All four hang off **seam** types (`Reporter`, `Verdict`, `RunSpec`), not off
 `Config`/`Results`, so they fall outside this contract's reachable-set definition
 and outside US3's scope. Aliasing them is a public-surface widening — a one-way
 door — so it is **deferred to spec 010** rather than taken here, and the boundary
-is stated in `docs/extending/stability.md` (boundary 5) so it is not tribal
+is stated in `docs/extending/stability.md` (boundary 4) so it is not tribal
 knowledge. Spec 010 should consider extending the reachable-set definition to
 cover seam-interface parameter and result types.
 

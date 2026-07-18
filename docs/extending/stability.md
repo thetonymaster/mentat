@@ -67,9 +67,9 @@ It runs under plain `go test` (part of the standard gate), so:
   declaration: it expands each aliased struct into **one line per exported field**,
   named by the facade alias.
 
-  ```
-  field (Verdict) Qualifiers []string
-  field (Target) Completeness Completeness
+  ```text
+  field (Verdict)[02] Qualifiers []string
+  field (Target)[07] Completeness Completeness
   ```
 
   **Adding, removing, or re-typing an exported field of a re-exported struct fails
@@ -77,6 +77,15 @@ It runs under plain `go test` (part of the standard gate), so:
   parentheses. The field type is rendered exactly as written in the aliased
   package's source, so renaming a named field type is drift too. Unexported fields
   are omitted — they are not a public promise.
+
+- **The declaration ORDER of those fields**, via the bracketed zero-padded ordinal.
+  Permuting two fields changes no field name and no field type, but it is a real
+  break: an unkeyed composite literal (`mentat.Verdict{true, nil, …}`) and
+  positional reflection both bind by position, and neither errors at the consumer's
+  call site. **Reordering fails `TestPublicSurfaceGolden`, naming both fields on
+  both sides with their swapped positions.** Unexported fields do not consume an
+  ordinal, so adding one is still invisible to the gate — an internal change stays
+  internal.
 
 ### What the gate does not catch
 
@@ -98,25 +107,19 @@ and accepted; none is a TODO.
    every user's `mentat.yaml` — and it produces **zero golden diff**. Tag changes
    are governed by author discipline and review, not by CI.
 
-3. **Field reordering is not detected.** The renderer collapses every symbol to one
-   line and then sorts the whole set (`surface_test.go:294`), a deliberate
-   determinism choice documented at `surface_test.go:48` so that source declaration
-   order never churns the golden. Reordering the fields of a struct therefore
-   produces zero diff — the same as it has always done for interface methods. This
-   is intentional: declaration order is not treated as part of the promised surface.
-
-4. **Expansion is one level deep, and only through facade aliases.** A struct's
+3. **Expansion is one level deep, and only through facade aliases.** A struct's
    fields are frozen when the facade itself re-exports that struct. A struct
-   reachable only as the *type of a field* is not expanded in turn: `field (Verdict)
-   Detail *AggregateDetail`, `field (RunSpec) Extract ExtractPolicy`, and `field
-   (RunSpec) HTTP HTTPSpec` freeze those field names and type names, but the field
+   reachable only as the *type of a field* is not expanded in turn: `field
+   (Verdict)[03] Detail *AggregateDetail`, `field (RunSpec)[…] Extract
+   ExtractPolicy`, and `field (RunSpec)[…] HTTP HTTPSpec` freeze those field
+   names, positions and type names, but the field
    sets of `AggregateDetail`, `ExtractPolicy`, and `HTTPSpec` are not themselves in
    the golden, because no `type AggregateDetail = core.AggregateDetail` alias exists
    on the facade. Adding a field to one of them is invisible to the gate. The
    mechanical fix, when one of these matters, is to re-export it from the facade —
    the alias line brings its field set into the golden with it.
 
-5. **Types reachable through *seam* signatures are not guaranteed nameable.** The
+4. **Types reachable through *seam* signatures are not guaranteed nameable.** The
    nameability sweep that feature 009 froze walks outward from `Config` and
    `Results` (see
    [`facade-nameability.md`](../../specs/009-extension-surface-integrity/contracts/facade-nameability.md));

@@ -22,24 +22,41 @@ renders:
      a public promise);
    - embedded fields rendered as written (the embedded type, if public, is frozen
      by its own entry);
-   - fields are emitted in declaration order, but see the scope note below —
-     declaration order is deliberately NOT frozen.
+   - each field carries a bracketed, zero-padded ORDINAL — its position among the
+     struct's surface fields (`field (Verdict)[02] Qualifiers []string`) — which
+     is what makes declaration order frozen; unexported fields are skipped and do
+     not consume an ordinal, so an internal-only field addition does not churn the
+     golden.
 
-**Scope note (amended 2026-07-18 during T004, corrected against the source).**
-This rule originally claimed "reordering is a golden diff by design — declaration
-order is visible surface". That is false, and it contradicts a deliberate
-pre-existing decision: `surfaceRender` `sort.Strings`'s the whole line set
-(`surface_test.go:294`), which the T014-era comment at `surface_test.go:48`
-documents as intentional — "the whole set is sort.Strings'd, so source
-declaration order never churns the golden". Reordering fields therefore produces
-**zero** diff, exactly as it already did for T028 interface methods. Nothing in
-[spec.md](../spec.md) requires reorder detection, so the sort stands and the
-claim is withdrawn rather than the code changed.
+**Ordering: what is and is not observable.** Declaration order *within a struct*
+is frozen. Declaration order *of top-level symbols* is not: `surfaceRender`
+`sort.Strings`'s the whole line set (`surface_test.go`), so the serialized golden
+has no dependence on which file a symbol lives in or where it sits in that file —
+moving a func between `mentat.go` and `run.go` is deliberately not a diff. Within
+a struct, the ordinal survives that sort and additionally keeps each alias's field
+block in declaration order in the file.
 
-**Second scope boundary: struct tags are not rendered.** The gate freezes field
-name + type only, so renaming a `yaml:"..."` tag — a real config-surface break —
-remains invisible. Both boundaries are stated in `docs/extending/stability.md`
-rather than left as tribal knowledge.
+**Amendment history (2026-07-18, two reversals — recorded so the reasoning is
+auditable).** This rule originally claimed "reordering is a golden diff by design
+— declaration order is visible surface". During T004 that claim was *withdrawn*
+on the grounds that `sort.Strings` over the whole line set was a deliberate
+pre-existing determinism choice, which made reordering produce zero diff. That
+withdrawal was wrong, and PR review caught it: the sort's documented rationale
+concerns *top-level* declaration order, and struct fields merely inherited the
+behaviour when field expansion was added. Field order **is** observable — unkeyed
+composite literals (`mentat.Verdict{true, nil, …}`) and positional reflection both
+bind by position, and neither errors at the consumer's call site. The original
+claim is therefore **reinstated and now enforced in code** via the ordinal, proved
+by a mutation rehearsal (permuting `core.Verdict.Pass`/`Reasons` goes RED naming
+both fields on both sides) and by a unit test,
+`TestSurfaceRenderStructFieldOrder`. The golden regen that introduced the ordinal
+was verified to be pure re-annotation: 105 field lines before and after, stripping
+the ordinals reproduces the previous set exactly, no non-field line touched.
+
+**Remaining scope boundary: struct tags are not rendered.** The gate freezes field
+name + type + position only, so renaming a `yaml:"..."` tag — a real
+config-surface break — remains invisible. This boundary is stated in
+`docs/extending/stability.md` rather than left as tribal knowledge.
 3. **Explicitly out**: aliases of map, func, and `any` types keep single-line
    rendering. This scope boundary is restated in `stability.md`.
 

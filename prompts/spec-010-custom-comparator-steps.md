@@ -9,9 +9,13 @@ now freezes exported fields of aliased structs, so any public surface this featu
 adds is machine-enforced. Two consequences for planning:
 
 - Every facade alias added here produces an alias line AND its expanded field
-  lines in `specs/007-public-extension-api/contracts/public-surface.golden`.
+  lines in `specs/007-public-extension-api/contracts/public-surface.golden`, each
+  field line carrying a positional ordinal (`field (RunReport)[00] …`).
   Regenerate deliberately (`MENTAT_UPDATE_GOLDEN=1`) and itemize each diff in the
-  PR body.
+  PR body. Note the ordinal's consequence for this work: inserting a field into
+  the MIDDLE of an already-frozen struct renumbers every field after it, so the
+  diff is larger than the one field touched — that is honest (positional
+  consumers all shift), not noise to suppress.
 - The gate has four documented boundaries it does NOT catch
   (`docs/extending/stability.md` — authoritative, do not re-derive). The one that
   bites this feature: **struct tags are not rendered**, so if this work touches
@@ -115,7 +119,7 @@ either is defensible; silently ignoring it is not.
 
 Evidence: `specs/009-extension-surface-integrity/contracts/facade-nameability.md`
 ("Verified gap, deferred to spec 010") and `docs/extending/stability.md`
-boundary 5.
+boundary 4.
 
 **Opportunistic refactor (same feature, separate commit):** this work lands in
 `internal/steps/steps.go`, already 750 lines against the repo's own split rule —
