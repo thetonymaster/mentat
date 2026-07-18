@@ -1,0 +1,82 @@
+name: nightly-l3
+# Machine-enforces 008 SC-001: zero green outcomes across 20 consecutive
+# late-flush runs (e2e/completeness_meta_test.go's TestMetaLateFlushNeverGreen).
+# Per-PR CI stays at the 3-run code default (e2e/l3runs.go) — raising it there
+# would cost ~7x e2e wall-clock on every PR for a property that needs daily,
+# not per-commit, proof. The steps below deliberately mirror ci.yml's e2e job;
+# ci.yml is the source of truth, keep the two in sync.
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+# A manual dispatch landing near the 03:00 cron would otherwise run two 20-run
+# e2e jobs at once. Unlike ci.yml, this lane NEVER cancels: each run is the
+# SC-001 evidence for its trigger, and cancelling one destroys that evidence
+# (and would report as a non-green lane). Overlapping runs queue instead.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  l3:
+    runs-on: ubuntu-latest
+    env:
+      # The whole point of this lane. Consumed by e2e/l3runs.go's parseL3Runs;
+      # unset would silently mean 3, which is the per-PR default, not the gate.
+      MENTAT_L3_RUNS: "20"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false  # source-keyed cache below; see ci.yml's check job for why.
+      - name: cache go build (e2e)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-gobuild-e2e-${{ hashFiles('**/go.sum', '**/*.go') }}
+          restore-keys: |
+            ${{ runner.os }}-gobuild-e2e-
+      - name: build lab SUTs
+        # US9: mentat.yaml drives shell SUTs via prebuilt binaries (./bin/researchbot,
+        # ./bin/orderflow); make harness-up builds them locally via `labs`, but this job
+        # starts compose directly, so build them here or the shell scenarios fork/exec-fail.
+        run: make labs
+      - name: start Tempo + Collector
+        run: docker compose -f deploy/docker-compose.yml up -d
+      - name: wait for Tempo
+        run: |
+          ready=0
+          for _ in $(seq 1 30); do
+            if curl -sf http://localhost:3200/ready; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "Tempo did not become ready within 60s"
+            exit 1
+          fi
+      # Scenarios are I/O-bound (each waits on Tempo trace ingestion), so -parallel
+      # overrides the GOMAXPROCS default to overlap their waits. A single mentat
+      # binary is built once in TestMain and reused across scenarios. Same direct
+      # invocation as ci.yml:116 — there is no e2e make target, and adding one here
+      # would create a second, divergent invocation path.
+      - run: go test -tags e2e ./e2e/ -v -parallel 16
+      # Teardown below is `down -v`, which destroys the Tempo/Collector volumes.
+      # Dump the stack's logs first on failure, or a red run leaves nothing to
+      # diagnose but the test output — and trace-ingestion failures live in
+      # Tempo's log, not Go's. This lane exists to catch rare flakes, so
+      # discarding the evidence of one would be self-defeating. ci.yml carries
+      # the same step; the two jobs stay step-for-step identical.
+      - if: failure()
+        run: docker compose -f deploy/docker-compose.yml logs --no-color
+      - if: always()
+        run: docker compose -f deploy/docker-compose.yml down -v

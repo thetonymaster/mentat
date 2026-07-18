@@ -16,7 +16,7 @@ does not get exported.**
 
 | Group | Membership rule |
 |-------|-----------------|
-| Seam interfaces | the six seams; four have registration hooks (driver, store, comparator, judge); correlator/reporter are types-only until three real demands exist |
+| Seam interfaces | the PUBLIC-HOOK axis: four seams have registration hooks (driver, store, comparator, judge); correlator/reporter are types-only until three real demands exist; matcher/aggregate-comparator are internal-only and absent from this surface. This is not the same set as the registry-ownership axis — for the canonical table of both, see [docs/extending/new-seam.md](../../../docs/extending/new-seam.md) |
 | Contract types | a type is exported iff a seam method signature or documented seam contract requires it |
 | Registration | `With*` options consumed by `Run` — no package-level mutable registration, no exported registries |
 | Entry point | `Run`, `Config`/`LoadConfig`, `Results`/`ScenarioResult` |

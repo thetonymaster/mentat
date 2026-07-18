@@ -28,16 +28,36 @@
 //
 //	method (Correlator) Resolve(ctx context.Context, store TraceStore, req ResolveRequest) (*trace.Trace, error)
 //
-// Non-interface aliases (structs, maps, `= any`) are unaffected — they stay the
-// alias line only. This still honors R4: NO go/types / importer / x/tools — the
-// interface method set is read from the aliased package's AST, not resolved by a
-// type checker. Non-module aliases (stdlib) have no local source to parse and so
-// stay alias-line-only (none such today).
+// Re-exported STRUCT aliases (feature 009 F1) are expanded the same way and for
+// the same reason: "type Verdict = core.Verdict" is blind to a field being added,
+// removed or re-typed, so every EXPORTED field of an aliased struct is rendered as
+//
+//	field (Verdict)[02] Qualifiers []string
+//
+// The bracketed, zero-padded ORDINAL is the field's position among the struct's
+// surface fields, and it makes DECLARATION ORDER part of the frozen surface:
+// permuting two fields is a break for unkeyed composite literals
+// (`mentat.Verdict{true, nil, …}`) and for positional reflection, neither of which
+// errors at the consumer's call site. Without the ordinal, any permutation rendered
+// byte-identically (the whole line set is sorted). Unexported fields are omitted
+// (not a public promise) and do NOT consume an ordinal, so a purely internal field
+// addition does not churn the golden. The field type is printed as written in the
+// aliased source.
+// Map, func and `= any` aliases stay alias-line-only — their declaration text
+// already IS their complete shape (contracts/surface-golden-v2.md rule 3).
+//
+// This still honors R4: NO go/types / importer / x/tools — the method and field
+// sets are read from the aliased package's AST, not resolved by a type checker.
+// Non-module aliases (stdlib) have no local source to parse and so stay
+// alias-line-only (none such today).
 //
 // Every rendered symbol is collapsed to a single whitespace-normalized line, and
-// the whole set is sort.Strings'd, so source declaration order never churns the
-// golden (determinism). Unexported identifiers (runOptions, driverReg, toResults,
-// …) are skipped.
+// the whole set is sort.Strings'd, so the order symbols are DECLARED IN / SPREAD
+// ACROSS SOURCE FILES never churns the golden (determinism): moving a func between
+// mentat.go and run.go is not surface. That sort is why struct fields carry an
+// explicit ordinal — for fields, order IS surface, so it has to survive the sort
+// rather than be erased by it. Unexported identifiers (runOptions, driverReg,
+// toResults, …) are skipped.
 //
 // MUTATION REHEARSAL (T014, performed once, reverted):
 // With the golden present and green, a scratch file `zz_surface_mutation.go`
@@ -68,10 +88,52 @@
 // the test returned GREEN. This proves the gate now bites method-set changes on
 // re-exported interfaces — the 008 Correlator.Resolve signature change would no
 // longer slip through with zero golden diff.
+//
+// MUTATION REHEARSAL (feature 009 T006, struct-FIELD drift, 2026-07-18, performed
+// once, reverted): the golden was blind to struct-alias fields too — a bare
+// "type Verdict = core.Verdict" line cannot see a field appear, which is precisely
+// how Verdict.Qualifiers and Target.Completeness reached the public surface with
+// zero golden diff. With the field-set-aware golden present and green, an exported
+// field `XProbe bool` was added to core.Verdict in internal/core/core.go. Running
+// this test went RED with:
+//
+//	public surface drifted from golden "specs/007-public-extension-api/contracts/public-surface.golden".
+//	  symbols present now but NOT in golden (added/changed):
+//	        - field (Verdict) XProbe bool
+//	  symbols in golden but NOT present now (removed/changed):
+//	        (none)
+//
+// naming exactly the drifted type (Verdict) and the injected field, then core.go
+// was reverted (byte-identical, `git diff` empty) and the test returned GREEN.
+// This proves the gate now bites field-set changes on re-exported structs.
+// (That rehearsal predates the field ordinal, so its transcript above shows the
+// pre-ordinal line form; the drift it demonstrates is unaffected.)
+//
+// MUTATION REHEARSAL (field ORDER drift, 2026-07-18, performed once, reverted):
+// raised in review of the 009 field expansion — the gate froze the field SET but
+// not its ORDER, so permuting fields was a silent break. With the ordinal-bearing
+// golden present and green, `Pass` and `Reasons` were swapped in core.Verdict
+// (internal/core/core.go) — a pure permutation: no field added, removed or
+// re-typed, and the module still compiles because every construction site is
+// keyed. Running this test went RED with:
+//
+//	symbols present now but NOT in golden (added/changed):
+//	    - field (Verdict)[00] Reasons []string
+//	    - field (Verdict)[01] Pass bool
+//	symbols in golden but NOT present now (removed/changed):
+//	    - field (Verdict)[00] Pass bool
+//	    - field (Verdict)[01] Reasons []string
+//
+// naming both fields on both sides with their swapped positions, then core.go was
+// reverted (byte-identical, `git diff` empty) and the test returned GREEN. The
+// ordinal-introducing golden regen was itself proved to be pure re-annotation:
+// 105 field lines before and after, and stripping the ordinals reproduced the
+// previous set exactly, with no non-field line touched.
 package mentat_test
 
 import (
 	"bytes"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/printer"
@@ -144,6 +206,138 @@ func TestPublicSurfaceGolden(t *testing.T) {
 		surfaceGoldenPath, surfaceIndent(added), surfaceIndent(removed), goldenUpdateEnv)
 }
 
+// TestSurfaceRenderStructFields is the feature 009 US1 renderer contract
+// (contracts/surface-golden-v2.md rendering rules 2 and 3): a re-exported STRUCT
+// alias must expand to its exported field set, so an added/removed/re-typed field
+// of `core.Verdict` or `config.Target` is drift the gate can see. A bare alias
+// line ("type Verdict = core.Verdict") is blind to it — exactly the blindness that
+// let Verdict.Qualifiers and Target.Completeness land with zero golden diff.
+//
+// The rows are the contract's three obligations plus their violation cases:
+// expansion happens (Verdict/Target/ExtractConfig exported fields), unexported
+// fields are NOT surface (ExtractConfig.compiled), and non-struct aliases stay
+// single-line (the map alias Pricing, the interface alias Correlator).
+func TestSurfaceRenderStructFields(t *testing.T) {
+	t.Parallel()
+	lines := surfaceRender(t)
+
+	tests := []struct {
+		name  string
+		line  string // exact rendered line when exact, else a substring of one
+		exact bool
+		want  bool // whether the rendering must contain such a line
+	}{
+		{name: "struct alias expands the drifted Verdict.Qualifiers field", line: "field (Verdict)[02] Qualifiers []string", exact: true, want: true},
+		{name: "struct alias expands the drifted Target.Completeness field", line: "field (Target)[07] Completeness Completeness", exact: true, want: true},
+		{name: "field type is rendered as written in the aliased source", line: "field (Verdict)[04] Judge *JudgeUsage", exact: true, want: true},
+		{name: "struct alias expands ExtractConfig exported fields", line: "field (ExtractConfig)[00] Mode string", exact: true, want: true},
+		// Substring, not prefix: the ordinal sits between the alias and the field
+		// name, so a prefix of "field (ExtractConfig) compiled" could never match
+		// any line and would pass vacuously whether or not `compiled` is rendered.
+		{name: "unexported field is not surface", line: "] compiled ", exact: false, want: false},
+		{name: "map alias stays single-line", line: "field (Pricing)", exact: false, want: false},
+		{name: "interface alias renders methods, not fields", line: "field (Correlator)", exact: false, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var got bool
+			for _, l := range lines {
+				if (tt.exact && l == tt.line) || (!tt.exact && strings.Contains(l, tt.line)) {
+					got = true
+					break
+				}
+			}
+			if got != tt.want {
+				kind := "substring"
+				if tt.exact {
+					kind = "line"
+				}
+				t.Fatalf("rendered surface: %s %q present = %v, want %v", kind, tt.line, got, tt.want)
+			}
+		})
+	}
+}
+
+// surfaceRenderStructSrc renders the fields of a single `type S struct { … }`
+// literal given as source text, using the same renderer the golden uses. It exists
+// so field-ORDER behaviour can be pinned against synthetic structs without moving
+// fields around in real facade types.
+func surfaceRenderStructSrc(t *testing.T, fields string) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "synthetic.go", "package p\n\ntype S struct {\n"+fields+"\n}\n", 0)
+	if err != nil {
+		t.Fatalf("parsing synthetic struct: %v", err)
+	}
+	var st *ast.StructType
+	ast.Inspect(f, func(n ast.Node) bool {
+		if s, ok := n.(*ast.StructType); ok && st == nil {
+			st = s
+		}
+		return st == nil
+	})
+	if st == nil {
+		t.Fatalf("no struct literal parsed from:\n%s", fields)
+	}
+	c := &surfaceCtx{fset: fset}
+	out := c.renderStructFields(t, "S", st)
+	sort.Strings(out) // mirror surfaceRender's global sort — the golden is sorted
+	return out
+}
+
+// TestSurfaceRenderStructFieldOrder pins DECLARATION ORDER of a re-exported
+// struct's exported fields as part of the frozen surface.
+//
+// Why order is surface, not an internal detail: an external module may write an
+// UNKEYED composite literal of a re-exported struct (`mentat.Verdict{true, nil,
+// …}`), and reflection (`reflect.Type.Field(i)`) indexes fields positionally.
+// Permuting two same-typed fields therefore silently changes the meaning of
+// already-compiled consumer code — a break with no compiler error at the call
+// site. Before this test, renderStructFields emitted no ordinal and
+// surfaceRender sorted the whole line set, so ANY permutation produced a
+// byte-identical golden. Found in review of the feature-009 field expansion.
+func TestSurfaceRenderStructFieldOrder(t *testing.T) {
+	t.Parallel()
+
+	t.Run("permuting two exported fields changes the rendering", func(t *testing.T) {
+		t.Parallel()
+		before := surfaceRenderStructSrc(t, "\tAlpha string\n\tBeta string")
+		after := surfaceRenderStructSrc(t, "\tBeta string\n\tAlpha string")
+		if strings.Join(before, "\n") == strings.Join(after, "\n") {
+			t.Fatalf("permuting exported fields produced an identical rendering; order is not frozen:\n%s",
+				strings.Join(before, "\n"))
+		}
+	})
+
+	t.Run("ordinal sorts numerically past nine fields", func(t *testing.T) {
+		t.Parallel()
+		// Names descend (Fl, Fk, … Fa) while positions ascend, so sorting by NAME
+		// yields the exact reverse of declaration order. This subtest can only
+		// pass if a zero-padded positional ordinal drives the sort — an unpadded
+		// ordinal additionally misplaces [10] and [11] before [2].
+		var fields []string
+		want := make([]string, 0, 12)
+		for i := 0; i < 12; i++ {
+			name := "F" + string(rune('l'-i))
+			fields = append(fields, "\t"+name+" int")
+			want = append(want, name)
+		}
+		got := surfaceRenderStructSrc(t, strings.Join(fields, "\n"))
+		if len(got) != len(want) {
+			t.Fatalf("rendered %d field lines, want %d:\n%s", len(got), len(want), strings.Join(got, "\n"))
+		}
+		// The lines are SORTED; if the ordinal is zero-padded, sorted order and
+		// declaration order coincide. An unpadded ordinal puts [10] before [2].
+		for i, name := range want {
+			if !strings.HasSuffix(got[i], " "+name+" int") {
+				t.Fatalf("sorted line %d = %q, want the field declared at position %d (%s)\nall:\n%s",
+					i, got[i], i, name, strings.Join(got, "\n"))
+			}
+		}
+	})
+}
+
 // surfaceCtx carries the cross-file state the renderer needs to resolve a
 // re-exported interface alias (e.g. `type Correlator = core.Correlator`) into its
 // METHOD SET. R4 stays honored — STDLIB ONLY, no go/types / importer / x/tools:
@@ -160,6 +354,13 @@ type surfaceCtx struct {
 	// ifaces caches, per parsed aliased dir, its exported interface type literals by
 	// name. A dir is parsed lazily on first lookup.
 	ifaces map[string]map[string]*ast.InterfaceType
+	// structs caches, per parsed aliased dir, its exported struct type literals by
+	// name (feature 009 F1 — struct-alias field expansion). Same lazy-parse shape as
+	// ifaces.
+	structs map[string]map[string]*ast.StructType
+	// typeSpecs caches the exported top-level type specs of each aliased dir, so the
+	// dir is read and parsed once for both indexers.
+	typeSpecs map[string][]*ast.TypeSpec
 }
 
 // surfaceRender parses every non-test source file in the package dir and returns
@@ -172,10 +373,12 @@ func surfaceRender(t *testing.T) []string {
 		t.Fatalf("read package dir: %v", err)
 	}
 	c := &surfaceCtx{
-		fset:    token.NewFileSet(),
-		modPath: surfaceModulePath(t),
-		imports: map[string]string{},
-		ifaces:  map[string]map[string]*ast.InterfaceType{},
+		fset:      token.NewFileSet(),
+		modPath:   surfaceModulePath(t),
+		imports:   map[string]string{},
+		ifaces:    map[string]map[string]*ast.InterfaceType{},
+		structs:   map[string]map[string]*ast.StructType{},
+		typeSpecs: map[string][]*ast.TypeSpec{},
 	}
 	var files []*ast.File
 	for _, e := range entries {
@@ -271,6 +474,13 @@ func (c *surfaceCtx) renderGenDecl(t *testing.T, d *ast.GenDecl) []string {
 						if iface := c.lookupInterface(t, pkg.Name, sel.Sel.Name); iface != nil {
 							out = append(out, c.renderInterfaceMethods(t, s.Name.Name, iface)...)
 						}
+						// Symmetrically, a re-exported STRUCT alias renders its EXPORTED FIELD
+						// SET (feature 009 F1): the alias line alone is blind to a field being
+						// added, removed or re-typed — which is how Verdict.Qualifiers and
+						// Target.Completeness reached users with zero golden diff.
+						if st := c.lookupStruct(t, pkg.Name, sel.Sel.Name); st != nil {
+							out = append(out, c.renderStructFields(t, s.Name.Name, st)...)
+						}
 					}
 				}
 			}
@@ -308,11 +518,28 @@ func (c *surfaceCtx) lookupInterface(t *testing.T, pkg, name string) *ast.Interf
 	return c.ifaces[dir][name]
 }
 
-// indexInterfaces parses every non-test .go file in dir and indexes its exported
-// `type X interface { … }` declarations by name.
+// indexInterfaces indexes dir's exported `type X interface { … }` declarations by name.
 func (c *surfaceCtx) indexInterfaces(t *testing.T, dir string) map[string]*ast.InterfaceType {
 	t.Helper()
 	out := map[string]*ast.InterfaceType{}
+	for _, ts := range c.exportedTypeSpecs(t, dir) {
+		if iface, ok := ts.Type.(*ast.InterfaceType); ok {
+			out[ts.Name.Name] = iface
+		}
+	}
+	return out
+}
+
+// exportedTypeSpecs parses every non-test .go file in an aliased package dir and
+// returns its exported top-level type specs, cached per dir so a dir is walked
+// once no matter how many alias kinds (interface, struct) index it. Both indexers
+// share this walk so they can never drift apart on which files count as source.
+func (c *surfaceCtx) exportedTypeSpecs(t *testing.T, dir string) []*ast.TypeSpec {
+	t.Helper()
+	if cached, ok := c.typeSpecs[dir]; ok {
+		return cached
+	}
+	var out []*ast.TypeSpec
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("read aliased package dir %q: %v", dir, err)
@@ -336,10 +563,101 @@ func (c *surfaceCtx) indexInterfaces(t *testing.T, dir string) map[string]*ast.I
 				if !ok || !ts.Name.IsExported() {
 					continue
 				}
-				if iface, ok := ts.Type.(*ast.InterfaceType); ok {
-					out[ts.Name.Name] = iface
-				}
+				out = append(out, ts)
 			}
+		}
+	}
+	c.typeSpecs[dir] = out
+	return out
+}
+
+// lookupStruct resolves a re-exported alias target `pkg.name` to its struct type
+// literal in the aliased package's source, or nil when pkg is non-local or name is
+// not a struct (an interface/map/func/`= any` alias stays alias-line-only — rule 3
+// of contracts/surface-golden-v2.md).
+func (c *surfaceCtx) lookupStruct(t *testing.T, pkg, name string) *ast.StructType {
+	t.Helper()
+	dir, ok := c.imports[pkg]
+	if !ok {
+		return nil
+	}
+	if c.structs[dir] == nil {
+		c.structs[dir] = c.indexStructs(t, dir)
+	}
+	return c.structs[dir][name]
+}
+
+// indexStructs indexes dir's exported `type X struct { … }` declarations by name.
+func (c *surfaceCtx) indexStructs(t *testing.T, dir string) map[string]*ast.StructType {
+	t.Helper()
+	out := map[string]*ast.StructType{}
+	for _, ts := range c.exportedTypeSpecs(t, dir) {
+		if st, ok := ts.Type.(*ast.StructType); ok {
+			out[ts.Name.Name] = st
+		}
+	}
+	return out
+}
+
+// renderStructFields renders each EXPORTED field of a re-exported struct as a
+// normalized, alias-named one-line declaration:
+//
+//	field (Verdict) Qualifiers []string
+//
+// so adding, removing or re-typing an exported field is caught as drift, and the
+// failure message names the drifted type via the alias in parentheses. Rules
+// (contracts/surface-golden-v2.md rule 2): exported fields only (an unexported
+// field like config.ExtractConfig.compiled is not a public promise); the type is
+// printed exactly as written in the aliased package's source, so a rename of the
+// named type is drift; embedded fields are rendered as written (the embedded type,
+// when public, is frozen by its own entry); fields are emitted in declaration order.
+// Struct TAGS are deliberately not rendered — the contract freezes name + type.
+func (c *surfaceCtx) renderStructFields(t *testing.T, alias string, st *ast.StructType) []string {
+	t.Helper()
+	if st.Fields == nil {
+		return nil
+	}
+	var out []string
+	// pos is the field's position AMONG THE RENDERED (surface) fields, not among all
+	// fields. Unexported fields are skipped and do not consume a position: they are
+	// not a public promise (see the named-field branch), a struct carrying them
+	// cannot be composite-literal'd from another package at all, and counting them
+	// would churn the golden on purely internal edits. The ordinal is what freezes
+	// declaration ORDER — see TestSurfaceRenderStructFieldOrder for why order is
+	// surface. It is zero-padded so the global sort.Strings in surfaceRender orders
+	// positions numerically ([02] before [10]) and thus keeps each alias's field
+	// block in declaration order.
+	pos := 0
+	ordinal := func() string {
+		if pos > 99 {
+			t.Fatalf("struct alias %s has %d surface fields; the 2-digit field ordinal "+
+				"no longer sorts numerically — widen the padding and regenerate the golden", alias, pos+1)
+		}
+		s := fmt.Sprintf("field (%s)[%02d] ", alias, pos)
+		pos++
+		return s
+	}
+	for _, field := range st.Fields.List {
+		typ := surfacePrint(t, c.fset, field.Type)
+		if len(field.Names) == 0 {
+			// Embedded field: the type IS the field, so render it as written.
+			//
+			// Deliberately NOT filtered by IsExported, unlike the named-field
+			// branch below. An embedded type promotes its exported members into
+			// the outer struct's surface even when the embedded type itself is
+			// unexported, so the embedding is a public promise either way.
+			// Skipping it would under-report drift; rendering it can only
+			// over-report, and for a drift gate over-reporting is the safe
+			// direction. No unexported embedded type exists on the surface
+			// today, so this branch changes no current golden line.
+			out = append(out, ordinal()+typ)
+			continue
+		}
+		for _, n := range field.Names {
+			if !n.IsExported() {
+				continue
+			}
+			out = append(out, ordinal()+n.Name+" "+typ)
 		}
 	}
 	return out

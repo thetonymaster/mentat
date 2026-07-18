@@ -8,6 +8,7 @@ package mentat_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/thetonymaster/mentat"
 )
@@ -65,6 +66,98 @@ var (
 	_ mentat.TraceStore = toyStore{}
 	_ mentat.Comparator = toyComparator{}
 	_ mentat.Judge      = toyJudge{}
+)
+
+// Nameability proof (feature 009 US3, contracts/facade-nameability.md).
+//
+// REACHABLE SET — the transitive closure of exported struct types found in
+// exported fields starting from mentat.Config and mentat.Results, following slice
+// element, map key/value, pointer element and embedded types. Swept 2026-07-18;
+// each row records HOW the type is reached and whether the facade could name it:
+//
+//	from mentat.Config:
+//	  Config         (the root)                                alias, pre-existing
+//	  Endpoint       Config.Tempo                              alias, pre-existing
+//	  PollSpec       Config.Poll                               alias, pre-existing
+//	  Pricing        Config.Pricing (named map type)           alias, pre-existing
+//	  ModelRate      Pricing's map value type                  alias, pre-existing
+//	  JudgeConfig    Config.Judge                              alias, pre-existing
+//	  RunBudget      Config.Budget, Target.Budget              alias, pre-existing
+//	  Target         Config.Targets' map value type            alias, pre-existing
+//	  HTTP           Target.HTTP                               alias, pre-existing
+//	  ExtractConfig  Target.Extract                            alias, pre-existing
+//	  Completeness   Target.Completeness                       ALIAS ADDED (US3)
+//	from mentat.Results:
+//	  Results        (the root)                                facade-owned struct
+//	  ScenarioResult Results.Scenarios' slice element          facade-owned struct
+//	  JudgeUsage     Results.JudgeTotal, ScenarioResult.Judge  alias, pre-existing
+//
+// Completeness was the single gap: Target.Completeness has type config.Completeness
+// and the facade aliased only CompletenessContract, a DIFFERENT (core-side) type.
+// No exported field in the set is embedded, and every field type not listed above
+// is predeclared or time.Duration, so the closure terminates here.
+//
+// One composite literal per member follows. Each sets at least one field and names
+// every composite-typed field through the facade, so a field whose OWN type is an
+// un-aliased internal type breaks this build. Because this file imports ONLY the
+// facade, compiling IS the proof — no runtime assertion is needed beyond keeping
+// the values referenced.
+var (
+	// --- reachable from mentat.Config ---
+	_ = mentat.Config{
+		Store:        "tempo",
+		StorePath:    "testdata/traces",
+		OTLPEndpoint: "localhost:4317",
+		Expectations: "expectations",
+		RunTimeout:   "5m",
+		KillGrace:    "10s",
+		Tempo:        mentat.Endpoint{Endpoint: "http://localhost:3200"},
+		Poll:         mentat.PollSpec{Interval: "500ms", Timeout: "30s", StableFor: 2, SearchLimit: 100},
+		Pricing:      mentat.Pricing{"claude-haiku-4-5": mentat.ModelRate{InputPerMTok: 1, OutputPerMTok: 5}},
+		Judge:        mentat.JudgeConfig{Backend: "claude", Model: "claude-haiku-4-5", Votes: 1},
+		Budget:       mentat.RunBudget{Timeout: 5 * time.Minute, KillGrace: 10 * time.Second},
+		Targets:      map[string]mentat.Target{"agent": {Adapter: "shell"}},
+	}
+	_ = mentat.Endpoint{Endpoint: "http://localhost:3200"}
+	_ = mentat.PollSpec{Interval: "500ms", Timeout: "30s", StableFor: 2, SearchLimit: 100}
+	_ = mentat.Pricing{"claude-haiku-4-5": mentat.ModelRate{InputPerMTok: 1, OutputPerMTok: 5}}
+	_ = mentat.ModelRate{InputPerMTok: 1, OutputPerMTok: 5}
+	_ = mentat.JudgeConfig{Backend: "claude", Model: "claude-haiku-4-5", Votes: 3, Temperature: 0.7, MaxCostUSD: 1.50}
+	_ = mentat.RunBudget{Timeout: 5 * time.Minute, Unbounded: false, KillGrace: 10 * time.Second}
+	_ = mentat.Target{
+		Adapter:        "shell",
+		Command:        []string{"echo", "hello"},
+		MaxConcurrency: 4,
+		RunTimeout:     "1m",
+		HTTP:           mentat.HTTP{URL: "http://localhost:8080/ask", Method: "POST", Headers: map[string]string{"content-type": "application/json"}},
+		Budget:         mentat.RunBudget{Timeout: time.Minute, KillGrace: time.Second},
+		Extract:        mentat.ExtractConfig{Mode: "marker", Marker: "ANSWER:"},
+		Completeness:   mentat.Completeness{Mode: "strict", SettleRaw: "2s", Settle: 2 * time.Second},
+	}
+	_ = mentat.HTTP{URL: "http://localhost:8080/ask", Method: "POST", Headers: map[string]string{"content-type": "application/json"}}
+	_ = mentat.ExtractConfig{Mode: "pattern", Marker: "ANSWER:", Pattern: `ANSWER:\s*(.*)`}
+	_ = mentat.Completeness{Mode: "strict", SettleRaw: "2s", Settle: 2 * time.Second}
+
+	// --- reachable from mentat.Results ---
+	_ = mentat.Results{
+		Scenarios:   []mentat.ScenarioResult{{Name: "a scenario"}},
+		Passed:      1,
+		Failed:      0,
+		Interrupted: false,
+		TotalCost:   0.0125,
+		JudgeTotal:  &mentat.JudgeUsage{Calls: 1, Model: "claude-haiku-4-5"},
+	}
+	_ = mentat.ScenarioResult{
+		Name:           "a scenario",
+		FeatureFile:    "features/smoke.feature",
+		Pass:           true,
+		Reasons:        []string{"tool order matched"},
+		Cost:           0.0125,
+		RunIDs:         []string{"run-1", "run-2"},
+		DerivationNote: "aggregated over 2 runs",
+		Judge:          &mentat.JudgeUsage{Calls: 1, Model: "claude-haiku-4-5"},
+	}
+	_ = mentat.JudgeUsage{Calls: 1, InputTokens: 120, OutputTokens: 34, CostUsd: 0.0125, Model: "claude-haiku-4-5"}
 )
 
 // TestFacadeSurfaceExercisesContractTypes touches the evidence/contract types a
