@@ -37,6 +37,7 @@ method (TraceStore) FetchPayload(ctx context.Context, id string) ([]byte, error)
 method (TraceStore) Query(ctx context.Context, q TraceQuery) ([]TraceRef, error)
 type Comparator = core.Comparator
 type ComparatorFactory = func(Config) (Comparator, error)
+type CompletenessContract = core.CompletenessContract
 type Config = config.Config
 type Correlator = core.Correlator
 type Driver = core.Driver
@@ -58,6 +59,7 @@ type Output = core.Output
 type PollSpec = config.PollSpec
 type Pricing = config.Pricing
 type Reporter = core.Reporter
+type ResolveRequest = core.ResolveRequest
 type Results struct { Scenarios []ScenarioResult Passed int Failed int Interrupted bool TotalCost float64 JudgeTotal *JudgeUsage }
 type RunBudget = config.RunBudget
 type RunResult = core.RunResult

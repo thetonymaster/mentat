@@ -67,6 +67,16 @@ type RunSpec = core.RunSpec
 // RunResult is the driver output (the Driver.Run return value).
 type RunResult = core.RunResult
 
+// CompletenessContract is the per-run trace-completeness barrier set the engine
+// derives from a target (adapter kind + completeness config) and carries in a
+// ResolveRequest. Re-exported so an external Correlator implementation can name it.
+type CompletenessContract = core.CompletenessContract
+
+// ResolveRequest is the live Correlator.Resolve argument: the run's correlation tag
+// plus its CompletenessContract. Re-exported so an external Correlator can name the
+// parameter it must accept and a caller can construct the request.
+type ResolveRequest = core.ResolveRequest
+
 // TraceQuery is the tag-first store lookup (the TraceStore.Query argument).
 type TraceQuery = core.TraceQuery
 

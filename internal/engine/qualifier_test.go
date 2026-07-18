@@ -131,6 +131,42 @@ func TestCompareStrictSuppressesQualifierFR009(t *testing.T) {
 	}
 }
 
+// TestComparePinnedSuppressesQualifier pins the known-complete guard: a pinned
+// engine resolves through ResolveComplete (replay/diff), whose evidence is exact by
+// definition. Even against the bounded request-scoped "web" target with a
+// completeness-sensitive expectation — the case that DOES carry the qualifier when
+// unpinned (TestCompareAttachesBoundedQualifier) — a pinned engine must attach none:
+// labelling known-complete evidence as ingestion-window bounded is a false claim about
+// certainty. Guards both Compare and Aggregate.
+func TestComparePinnedSuppressesQualifier(t *testing.T) {
+	tr := &trace.Trace{Spans: []*trace.Span{{Name: "root"}}, Roots: []*trace.Span{{Name: "root"}}}
+	evs := []core.Evidence{{RunID: "r1", Trace: tr}, {RunID: "r2", Trace: tr}}
+
+	t.Run("compare", func(t *testing.T) {
+		eng := qualifierEngine(t, stubVerdictComparator{v: core.Verdict{Pass: true}})
+		eng.PinRun("saved-run")
+		v, err := eng.Compare(context.Background(), "web", "stub-verdict", core.Evidence{}, nil, true)
+		if err != nil {
+			t.Fatalf("Compare: %v", err)
+		}
+		if len(v.Qualifiers) != 0 {
+			t.Fatalf("pinned Compare attached %v; known-complete evidence must carry no ingestion-window qualifier", v.Qualifiers)
+		}
+	})
+
+	t.Run("aggregate", func(t *testing.T) {
+		eng := qualifierEngine(t, stubVerdictComparator{})
+		eng.PinRun("saved-run")
+		v, err := eng.Aggregate(context.Background(), "web", "aggregate-cel", evs, comparator.AggregateCELExpectation{Expr: "count(r, r.failed) == 0"}, true)
+		if err != nil {
+			t.Fatalf("Aggregate: %v", err)
+		}
+		if len(v.Qualifiers) != 0 {
+			t.Fatalf("pinned Aggregate attached %v; known-complete evidence must carry no ingestion-window qualifier", v.Qualifiers)
+		}
+	})
+}
+
 // TestCompareUnknownComparator proves Compare hard-errors on an unregistered
 // comparator name rather than silently returning a zero verdict (Constitution IV).
 func TestCompareUnknownComparator(t *testing.T) {

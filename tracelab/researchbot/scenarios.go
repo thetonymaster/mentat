@@ -135,14 +135,14 @@ func EmitLateFlush(ctx context.Context, tp *sdktrace.TracerProvider, delay time.
 func RunLateFlush(ctx context.Context, exp sdktrace.SpanExporter, delay time.Duration, stdout, stderr io.Writer) error {
 	tp, err := NewTracerProvider(ctx, exp)
 	if err != nil {
-		return err
+		return fmt.Errorf("run late-flush: create tracer provider: %w", err)
 	}
 	if err := EmitLateFlush(ctx, tp, delay); err != nil {
 		_ = tp.Shutdown(ctx) // best-effort cleanup; the Emit error is the primary failure
-		return err
+		return fmt.Errorf("run late-flush: emit scenario: %w", err)
 	}
 	if err := tp.Shutdown(ctx); err != nil {
-		return fmt.Errorf("shutdown tracer provider: %w", err)
+		return fmt.Errorf("run late-flush: shutdown tracer provider: %w", err)
 	}
 	if _, err := fmt.Fprintln(stdout, lateFlushAnswer); err != nil {
 		return fmt.Errorf("write answer to stdout: %w", err)
@@ -272,14 +272,14 @@ func EmitSentinel(ctx context.Context, tp *sdktrace.TracerProvider, declared ...
 func runSentinel(ctx context.Context, exp sdktrace.SpanExporter, stdout io.Writer, declared ...int) error {
 	tp, err := NewTracerProvider(ctx, exp)
 	if err != nil {
-		return err
+		return fmt.Errorf("run sentinel (declared %v): create tracer provider: %w", declared, err)
 	}
 	if err := EmitSentinel(ctx, tp, declared...); err != nil {
 		_ = tp.Shutdown(ctx) // best-effort cleanup; the Emit error is the primary failure
-		return err
+		return fmt.Errorf("run sentinel (declared %v): emit scenario: %w", declared, err)
 	}
 	if err := tp.Shutdown(ctx); err != nil {
-		return fmt.Errorf("shutdown tracer provider: %w", err)
+		return fmt.Errorf("run sentinel (declared %v): shutdown tracer provider: %w", declared, err)
 	}
 	if _, err := fmt.Fprintln(stdout, sentinelAnswer); err != nil {
 		return fmt.Errorf("write answer to stdout: %w", err)

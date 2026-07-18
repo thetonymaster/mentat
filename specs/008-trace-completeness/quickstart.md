@@ -57,7 +57,7 @@ Expected:
 ## 4. Qualifier visibility (request-scoped honesty)
 
 ```sh
-mentat run features/checkout.feature --config mentat.yaml --junit /tmp/orderflow.xml
+mentat run --config mentat.yaml --junit /tmp/orderflow.xml features/checkout.feature
 ```
 
 With the orderflow http target (non-strict): every absence/count/budget verdict

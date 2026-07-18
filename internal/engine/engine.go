@@ -121,7 +121,10 @@ func (e *Engine) Compare(ctx context.Context, target, name string, ev core.Evide
 	if err != nil {
 		return v, err
 	}
-	if sensitive {
+	// A pinned engine resolves through ResolveComplete (known-complete replay/diff):
+	// that evidence is exact by definition, not ingestion-window bounded, so it never
+	// carries the qualifier — even for an http target whose live contract is bounded.
+	if sensitive && e.pinned == "" {
 		if q, ok := boundedQualifier(completenessContract(e.cfg.Targets[target])); ok {
 			v.Qualifiers = append(v.Qualifiers, q)
 		}
@@ -143,7 +146,8 @@ func (e *Engine) Aggregate(ctx context.Context, target, name string, evs []core.
 	if err != nil {
 		return v, err
 	}
-	if sensitive {
+	// Known-complete (pinned) evidence is exact, not bounded — no qualifier (see Compare).
+	if sensitive && e.pinned == "" {
 		if q, ok := boundedQualifier(completenessContract(e.cfg.Targets[target])); ok {
 			v.Qualifiers = append(v.Qualifiers, q)
 		}
