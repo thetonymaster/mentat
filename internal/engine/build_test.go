@@ -122,14 +122,24 @@ func TestBuildAppliesExtraSeams(t *testing.T) {
 // time. A factory that cannot produce a judge must error (Constitution IV: no
 // zero-value success).
 func TestBuildRejectsNilJudgeFromFactory(t *testing.T) {
-	nilJudge := func(config.Config) (core.Judge, error) { return nil, nil }
 	cfg := config.Config{OTLPEndpoint: "x", Judge: config.JudgeConfig{Backend: "xjudge"}}
-	_, err := Build(cfg, nil, nil, WithExtraJudge("xjudge", nilJudge))
-	if err == nil {
-		t.Fatal("Build must reject a judge factory returning (nil, nil), got nil error")
+	tests := []struct {
+		name    string
+		factory func(config.Config) (core.Judge, error)
+	}{
+		{name: "nil judge", factory: func(config.Config) (core.Judge, error) { return nil, nil }},
+		{name: "typed-nil judge", factory: func(config.Config) (core.Judge, error) { return (*extraStubJudge)(nil), nil }},
 	}
-	if !strings.Contains(err.Error(), "xjudge") {
-		t.Fatalf("Build error = %q, want it to name the judge backend %q", err, "xjudge")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Build(cfg, nil, nil, WithExtraJudge("xjudge", tt.factory))
+			if err == nil {
+				t.Fatalf("Build must reject a judge factory returning %s, got nil error", tt.name)
+			}
+			if !strings.Contains(err.Error(), "xjudge") {
+				t.Fatalf("Build error = %q, want it to name the judge backend %q", err, "xjudge")
+			}
+		})
 	}
 }
 
@@ -147,6 +157,7 @@ func TestBuildRejectsFailingOrNilDriverFactory(t *testing.T) {
 	}{
 		{name: "factory errors", factory: func(config.Config) (core.Driver, error) { return nil, errors.New("boom") }, wantSub: []string{"WithDriver", "xd", "boom"}},
 		{name: "factory returns nil driver", factory: func(config.Config) (core.Driver, error) { return nil, nil }, wantSub: []string{"WithDriver", "xd", "nil"}},
+		{name: "factory returns typed-nil driver", factory: func(config.Config) (core.Driver, error) { return (*extraStubDriver)(nil), nil }, wantSub: []string{"WithDriver", "xd", "nil"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -174,6 +185,7 @@ func TestBuildRejectsFailingOrNilComparatorFactory(t *testing.T) {
 	}{
 		{name: "factory errors", factory: func(config.Config) (core.Comparator, error) { return nil, errors.New("boom") }, wantSub: []string{"WithComparator", "xc", "boom"}},
 		{name: "factory returns nil comparator", factory: func(config.Config) (core.Comparator, error) { return nil, nil }, wantSub: []string{"WithComparator", "xc", "nil"}},
+		{name: "factory returns typed-nil comparator", factory: func(config.Config) (core.Comparator, error) { return (*extraStubComparator)(nil), nil }, wantSub: []string{"WithComparator", "xc", "nil"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -62,13 +62,23 @@ func TestBuildStoreAppliesExtraStore(t *testing.T) {
 // (nil, nil) is a loud BuildStore error, not a silently-returned nil store that
 // would panic at drive time (Constitution IV: no zero-value success).
 func TestBuildStoreRejectsNilStoreFromFactory(t *testing.T) {
-	nilStore := func(config.Config) (core.TraceStore, error) { return nil, nil }
-	_, err := BuildStore(config.Config{Store: "xnil"}, WithExtraStore("xnil", nilStore))
-	if err == nil {
-		t.Fatal("BuildStore must reject a store factory returning (nil, nil), got nil error")
+	tests := []struct {
+		name    string
+		factory func(config.Config) (core.TraceStore, error)
+	}{
+		{name: "nil store", factory: func(config.Config) (core.TraceStore, error) { return nil, nil }},
+		{name: "typed-nil store", factory: func(config.Config) (core.TraceStore, error) { return (*store.InMemStore)(nil), nil }},
 	}
-	if !strings.Contains(err.Error(), "xnil") {
-		t.Fatalf("BuildStore error = %q, want it to name the store %q", err, "xnil")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := BuildStore(config.Config{Store: "xnil"}, WithExtraStore("xnil", tt.factory))
+			if err == nil {
+				t.Fatalf("BuildStore must reject a store factory returning %s, got nil error", tt.name)
+			}
+			if !strings.Contains(err.Error(), "xnil") {
+				t.Fatalf("BuildStore error = %q, want it to name the store %q", err, "xnil")
+			}
+		})
 	}
 }
 

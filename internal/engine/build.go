@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -91,7 +92,7 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator, opts ...O
 	if err != nil {
 		return nil, fmt.Errorf("build judge %q: %w", backend, err)
 	}
-	if j == nil {
+	if isNilSeam(j) {
 		return nil, fmt.Errorf("build judge %q: factory returned a nil judge with no error", backend)
 	}
 	votes := cfg.Judge.Votes
@@ -147,6 +148,25 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator, opts ...O
 	return &Engine{cfg: cfg, cor: cor, st: st, sems: sems, pricing: pricing, patterns: pats, logger: o.logger, reg: reg}, nil
 }
 
+// isNilSeam reports whether v is a nil seam — either a direct nil interface or an
+// interface holding a typed-nil pointer/func/map/etc (e.g. (*customDriver)(nil)). A
+// factory that returns such a value with no error would otherwise register a landmine
+// that panics when the seam is first invoked; rejecting it at Build keeps failures
+// loud and early (Constitution IV: no zero-value success). A concrete non-pointer
+// value (a struct seam) is never nil.
+func isNilSeam(v any) bool {
+	if v == nil {
+		return true
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return rv.IsNil()
+	default:
+		return false
+	}
+}
+
 // applyExtras registers the facade-funneled driver/comparator/judge seams into the
 // (open) per-engine registry reg, each guarded by a collision check that fails loudly
 // naming the seam and the conflicting name (FR-002). It runs inside Build, between
@@ -166,7 +186,7 @@ func applyExtras(cfg config.Config, o options, reg *registry.Registry) error {
 		if err != nil {
 			return fmt.Errorf("engine: WithDriver: build driver %q: %w", ed.name, err)
 		}
-		if drv == nil {
+		if isNilSeam(drv) {
 			return fmt.Errorf("engine: WithDriver: driver %q: factory returned a nil driver with no error", ed.name)
 		}
 		reg.RegisterDriver(ed.name, drv)
@@ -182,7 +202,7 @@ func applyExtras(cfg config.Config, o options, reg *registry.Registry) error {
 		if err != nil {
 			return fmt.Errorf("engine: WithComparator: build comparator %q: %w", ec.name, err)
 		}
-		if cmp == nil {
+		if isNilSeam(cmp) {
 			return fmt.Errorf("engine: WithComparator: comparator %q: factory returned a nil comparator with no error", ec.name)
 		}
 		reg.RegisterComparator(ec.name, cmp)
