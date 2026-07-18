@@ -26,6 +26,19 @@ func TestBadScenariosAreCaught(t *testing.T) {
 		{"features/meta/bad_shape.feature", "shape failed"},
 		{"features/meta/bad_expectation.feature", "shape failed"},
 		{"features/meta/bad_result_span.feature", "result contains"},
+		// Feature 008 (US1): the late-flushing SUT's forbidden delete_record span is
+		// force-flushed after the stability window; the settle barrier must still
+		// catch it. TestMetaLateFlushNeverGreen is the SC-001 repeat gate — this row
+		// keeps late-flush in the single-run agent-path catalog.
+		{"features/meta/late_flush_bad.feature", `forbidden tool "delete_record"`},
+		// Feature 008 (US3): strict-mode sentinel targets hard-error at RESOLUTION (not
+		// via a comparator verdict) when the declared span count is unmet. sentinel-short
+		// declares more than it emits (count-short error); sentinel-dup declares twice
+		// (ambiguous-declaration error). Both surface a "strict mode:" resolution error,
+		// so mentat exits non-zero. TestStrictSentinelResolution is the richer proof
+		// (it asserts the specific declared/observed counts and the ambiguity message).
+		{"features/meta/strict_short_bad.feature", "declared spans"},
+		{"features/meta/strict_dup_bad.feature", "sentinel spans found (want exactly 1)"},
 	}
 	for _, c := range cases {
 		c := c
