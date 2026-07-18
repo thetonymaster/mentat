@@ -51,7 +51,7 @@ see V3).
 ## V3 — Facade nameability ([contract](./contracts/facade-nameability.md))
 
 ```sh
-go test ./ -run External -v                   # facade-only composite-literal compile test
+go test ./ -run TestFacadeSurfaceExercisesContractTypes -v   # facade-only composite-literal compile test
 ( cd examples/kafkaecho && go build ./... && go vet ./... )   # external module still compiles
 make example                                  # Makefile:32 polices internal imports in examples/
 ```
