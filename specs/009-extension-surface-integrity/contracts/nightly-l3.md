@@ -1,19 +1,20 @@
 # Contract: Nightly L3 stability lane
 
-**Consumers**: 008 SC-001 (20-consecutive-run requirement); `e2e/l3runs.go:8-10`
-(comment that currently describes a lane that does not exist);
-maintainers watching the Actions page.
+**Consumers**: 008 SC-001 (20-consecutive-run requirement); the `defaultL3Runs`
+doc comment in `e2e/l3runs.go`, which names this lane (T024 synced it — before
+009 it described a lane that did not exist); maintainers watching the Actions
+page.
 **Fulfils**: FR-013, SC-005. Decision: [research.md R5](../research.md).
 
 ## Workflow
 
-`.github/workflows/nightly-l3.yml` (new — `ci.yml` is today the repo's only
-workflow).
+`.github/workflows/nightly-l3.yml` (added by 009; before it, `ci.yml` was the
+repo's only workflow).
 
 | Aspect | Contract |
 |---|---|
 | Triggers | `schedule:` nightly cron (e.g. `0 3 * * *`) **and** `workflow_dispatch:` |
-| Parameterization | job-level env `MENTAT_L3_RUNS: "20"` — consumed by `e2e/l3runs.go:19-30` (`TestMetaLateFlushNeverGreen`, `e2e/completeness_meta_test.go:31`); unset default is 3 (`l3runs.go:11`) |
+| Parameterization | job-level env `MENTAT_L3_RUNS: "20"` — consumed by `parseL3Runs` in `e2e/l3runs.go` (via `TestMetaLateFlushNeverGreen`, `e2e/completeness_meta_test.go`); unset default is 3 (`defaultL3Runs`) |
 | Steps | mirror `ci.yml`'s e2e job: checkout, setup-go, `make labs`, `docker compose -f deploy/docker-compose.yml up -d` (+ readiness wait as in ci.yml), `go test -tags e2e ./e2e/ -v -parallel 16`, teardown/log-dump on failure |
 | Invocation idiom | direct `go test -tags e2e` like `ci.yml:116` — no new make target (none exists for e2e today; do not create a second divergent invocation path) |
 | Failure visibility | runs on the default branch; a red run appears on the repo's Actions page like any CI failure (spec edge case: no silent-failure channel) |
@@ -25,6 +26,11 @@ both files say so in comments — but only a one-time hand-diff at 009 close eve
 verified it (parsed both YAMLs, compared step lists: 9 steps, identical). Two
 files that must agree, with no mechanism keeping them agreeing, will drift.
 
+The mirror covers the **job's steps only**. Workflow-level settings deliberately
+differ: `ci.yml` cancels superseded in-progress runs per PR, while this lane sets
+`cancel-in-progress: false` — each nightly run is the SC-001 evidence for its
+trigger, so cancelling one would destroy that evidence rather than save time.
+
 Fix when someone touches either lane: extract the e2e job into a reusable
 workflow (`workflow_call`) or a composite action parameterised on
 `MENTAT_L3_RUNS`, so ci.yml passes 3 and nightly passes 20 into one definition.
@@ -34,9 +40,13 @@ small enough to ride along with whichever feature next edits CI.
 
 ## Side effect on code
 
-`e2e/l3runs.go:8-10`'s comment ("The release/nightly lane sets
-MENTAT_L3_RUNS=20") becomes true. If wording drifts from the final lane name,
-update the comment — the comment and the workflow must agree.
+The `defaultL3Runs` doc comment in `e2e/l3runs.go` used to promise a lane that
+did not exist ("The release/nightly lane sets MENTAT_L3_RUNS=20"); T024 rewrote
+it to name `.github/workflows/nightly-l3.yml` outright, so it is now true. The
+comment and the workflow must agree — if either lane name changes, change both.
+Symbol names, not line numbers, are used as anchors here deliberately: the
+earlier `l3runs.go:8-10` references in this contract went stale the moment the
+comment they pointed at was edited.
 
 ## Acceptance
 

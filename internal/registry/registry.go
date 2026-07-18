@@ -25,9 +25,10 @@ type JudgeFactory func(cfg config.Config) (core.Judge, error)
 // parameter and never a registry entry, reporters are package-global (see below),
 // and matchers/aggregate comparators are registry-owned but internal-only. For the
 // canonical table of both axes, plus the new-seam checklist, see
-// docs/extending/new-seam.md. engine.Build
-// constructs a fresh Registry per call (via New), registers every seam, then Seal()s
-// it — so two Runs never share seam state (spec 007 US2, T010/T011): sequential runs
+// docs/extending/new-seam.md.
+//
+// engine.Build constructs a fresh Registry per call (via New), registers every seam,
+// then Seal()s it — so two Runs never share seam state (spec 007 US2, T010/T011): sequential runs
 // cannot leak a custom registration into one another, and concurrent runs cannot race
 // a shared map. A single RWMutex guards the maps and a sealed flag (FR-009):
 // registration is allowed only while open (during the composition root); once sealed,

@@ -71,15 +71,23 @@ taxonomy; both old sites reference it; the internal-only exclusion sentence hits
 
 ## V5 — Nightly L3 lane ([contract](./contracts/nightly-l3.md))
 
-```sh
-gh workflow run nightly-l3.yml && gh run watch   # manual dispatch; expect green at 20 runs
-```
-
-Local equivalent (long: 20 meta-runs against live Tempo):
+**Pre-merge** — the local equivalent is the only form available (long: 20
+meta-runs against live Tempo). This exercises the real 20-run gate; what it does
+not exercise is the workflow YAML on a runner:
 
 ```sh
 make harness-up
 MENTAT_L3_RUNS=20 go test -tags e2e ./e2e/ -v -parallel 16
+```
+
+**Post-merge, still required** — `workflow_dispatch` resolves workflows only on
+the **default branch**, so a new workflow can never be dispatched from the branch
+that introduces it (attempting it returns `HTTP 404: workflow nightly-l3.yml not
+found on the default branch`). Once merged, dispatch once and record the run URL;
+SC-005 is only partly met until then:
+
+```sh
+gh workflow run nightly-l3.yml && gh run watch   # expect green at 20 runs
 ```
 
 ## Full gates before PR

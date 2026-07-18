@@ -90,9 +90,12 @@ assignments:
   T024:
     agent: "go-coder"
     reason: "Comment sync in e2e/l3runs.go to name the real lane"
-  T025:
+  T025a:
     agent: "default"
-    reason: "gh workflow dispatch + run watch; operational, records green-run URL"
+    reason: "Pre-merge: local 20-run equivalent (MENTAT_L3_RUNS=20 go test -tags e2e). Branch dispatch is impossible — workflow_dispatch resolves only on the default branch"
+  T025b:
+    agent: "default"
+    reason: "POST-MERGE only: gh workflow dispatch + run watch on the default branch; records green-run URL. Cannot be done in this PR"
   T026:
     agent: "default"
     reason: "/coverage skill invocation across packages (80% floor)"

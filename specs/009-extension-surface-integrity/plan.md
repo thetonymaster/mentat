@@ -37,11 +37,11 @@ the canonical taxonomy + checklist referenced from both divergent locations; add
 
 **Storage**: N/A (artifacts are the committed golden `specs/007-public-extension-api/contracts/public-surface.golden` and YAML fixture files for parity tests)
 
-**Testing**: `go test` — table-driven, hermetic by default; documented mutation rehearsals for the surface gate (precedent: `surface_test.go:42-52`, `54-70`); facade-only compile test (`mentat_external_test.go` + `examples/kafkaecho` external module); `//go:build e2e` for the L3 lane (`e2e/completeness_meta_test.go:31` consumes `MENTAT_L3_RUNS`, parser `e2e/l3runs.go:19-30`)
+**Testing**: `go test` — table-driven, hermetic by default; documented mutation rehearsals for the surface gate (precedent: `surface_test.go:42-52`, `54-70`); facade-only compile test (`mentat_external_test.go` + `examples/kafkaecho` external module); `//go:build e2e` for the L3 lane (`e2e/completeness_meta_test.go:31` consumes `MENTAT_L3_RUNS`, parser `parseL3Runs` in `e2e/l3runs.go`)
 
 **Target Platform**: any Go 1.25 platform for the library; ubuntu GitHub Actions runners for CI/nightly
 
-**Project Type**: single Go module — library facade + two CLIs; this feature is dev-infra hardening of the public surface (no runtime product behaviour added)
+**Project Type**: single Go module — library facade + two CLIs. Mostly dev-infra hardening of the public surface, with one deliberate RUNTIME change: `mentat.Run` now applies `config.Resolve` (US2), so library callers get the same defaults, twin resolution and hard errors the YAML path has always had. That is behaviour, not tooling — it is why US2 goes through go-test-writer and carries its own regression tests.
 
 **Performance Goals**: surface test stays sub-seconds (stdlib parsing of ~4 internal dirs, cached per run); nightly L3 lane completes within existing e2e wall-clock (suite already `t.Parallel`, ~7× overlap of trace-ingestion waits; 20 sequential meta-runs is the long pole, budget ≤ ~30 min on a cold runner)
 
@@ -101,9 +101,9 @@ internal/core/core.go            # unchanged — its exported fields become froz
 docs/extending/stability.md      # restore the strong struct-field-freezing claim (drop the interim-gap section)
 docs/extending/new-seam.md       # NEW — seam-addition checklist, three tribal decisions, canonical taxonomy
 specs/007-public-extension-api/contracts/public-surface.md      # taxonomy site #2 → references canonical list; AggregateComparator exclusion sentence
-specs/007-public-extension-api/contracts/public-surface.golden  # regenerated ONCE via MENTAT_UPDATE_GOLDEN=1 (deliberate churn, PR-called-out)
+specs/007-public-extension-api/contracts/public-surface.golden  # regenerated PER STORY via MENTAT_UPDATE_GOLDEN=1, each regen isolated and PR-called-out: US1 struct-field expansion (+102), US3 Completeness alias (+4), then the review-driven field ordinal (105 lines re-annotated, no field added or lost)
 .github/workflows/nightly-l3.yml # NEW — cron + workflow_dispatch; harness up; go test -tags e2e with MENTAT_L3_RUNS=20
-e2e/l3runs.go                    # comment at :8-10 becomes true (nightly lane exists)
+e2e/l3runs.go                    # defaultL3Runs doc comment becomes true (nightly lane exists)
 examples/kafkaecho/              # live external-module consumer; benefits from parity fix (main_test.go:23 builds Config in code)
 ```
 

@@ -122,11 +122,11 @@
 ### Implementation for User Story 5
 
 - [X] T023 [P] [US5] Create `.github/workflows/nightly-l3.yml`: `schedule: cron '0 3 * * *'` + `workflow_dispatch`; job env `MENTAT_L3_RUNS: "20"`; steps mirroring `ci.yml`'s e2e job verbatim (checkout, setup-go, `make labs`, `docker compose -f deploy/docker-compose.yml up -d` + the same readiness wait, `go test -tags e2e ./e2e/ -v -parallel 16`, the same teardown/log-dump on failure); no new make target (contract: don't create a second divergent invocation path)
-- [X] T024 [US5] Sync the comment at `e2e/l3runs.go:8-10` to name the actual lane (`nightly-l3.yml`); VERIFY `go vet ./e2e/` (comment-only) and `grep -n "nightly" e2e/l3runs.go .github/workflows/nightly-l3.yml` agree on the name
+- [X] T024 [US5] Sync the `defaultL3Runs` doc comment in `e2e/l3runs.go` to name the actual lane (`nightly-l3.yml`); VERIFY `go vet ./e2e/` (comment-only) and `grep -n "nightly" e2e/l3runs.go .github/workflows/nightly-l3.yml` agree on the name
 - [X] T025a [US5] Prove the 20-run threshold pre-merge via the local equivalent (`MENTAT_L3_RUNS=20 go test -tags e2e ./e2e/ -v -parallel 16` against `make harness-up`). Dispatching on the feature branch was ATTEMPTED and is IMPOSSIBLE: `gh workflow run nightly-l3.yml --ref 009-extension-surface-integrity` returns `HTTP 404: workflow nightly-l3.yml not found on the default branch` — GitHub resolves `workflow_dispatch` only on the default branch, so a new workflow can never be dispatched from the branch introducing it. Contract amended (see contracts/nightly-l3.md acceptance 2a/2b)
 - [ ] T025b [US5] **POST-MERGE, still required**: `gh workflow run nightly-l3.yml && gh run watch` on the default branch; VERIFY green at 20 runs; record the run URL. SC-005 is only PARTLY met until this is done — merging does not close it. If the dispatched run is red, STOP and diagnose per RULE 0 before rerunning (a red 20-run lane is exactly the signal this story exists to surface)
 
-**Checkpoint**: SC-005 met (workflow + one green dispatched run).
+**Checkpoint**: SC-005 **PARTLY met, and stays partly met until T025b**. The workflow exists and the 20-run threshold is proven locally (T025a); the dispatched-run half is post-merge by platform constraint. Do not read the merge as closing this.
 
 ---
 
@@ -163,14 +163,22 @@ is itself invalid.
 
 ---
 
+## Phase 7d: Review finding on US1 (CodeRabbit, PR #36)
+
+**Goal**: US1 froze each re-exported struct's field SET but not its ORDER. `surfaceRender` sorts the whole line set for top-level determinism, and field lines carried no ordinal, so permuting two fields rendered byte-identically. Order is observable — unkeyed composite literals (`mentat.Verdict{true, nil, …}`) and positional reflection both bind by position, and neither errors at the consumer's call site — so this was a silent break the gate would pass. It also reverses a wrong call made in T004, which withdrew the contract's reorder-detection claim instead of changing the code.
+
+- [X] T032 RED→GREEN: add `TestSurfaceRenderStructFieldOrder` — (a) permuting two exported fields must change the rendering, (b) a 12-field struct with DESCENDING names must still render in declaration order, which only a zero-padded ordinal can satisfy (guards against `[10]` sorting before `[2]`, and against the subtest passing vacuously on alphabetical names). VERIFY both subtests RED first. Then emit a zero-padded positional ordinal per surface field (`field (Verdict)[02] Qualifiers []string`); unexported fields skipped and NOT consuming a position, so internal-only additions still do not churn the golden. Regenerate the golden and PROVE the regen is pure re-annotation (105 field lines before and after; stripping ordinals reproduces the previous set exactly; no non-field line touched). Mutation-rehearse by permuting `core.Verdict.Pass`/`Reasons` — VERIFY RED naming both fields on both sides — then revert byte-identically and VERIFY green. Update `stability.md` (boundary 3 removed — the gate now catches this; remaining boundaries renumbered) and `contracts/surface-golden-v2.md` (reinstate the reorder claim, record both amendments)
+
+---
+
 ## Phase 8: Polish & Cross-Cutting Concerns
 
 **Purpose**: Whole-feature gates before PR.
 
 - [X] T026 [P] Run the `/coverage` skill across all packages; VERIFY every touched package ≥80% (floor is per-package, constitution Principle V); add targeted tests if any package dipped
 - [X] T027 Run the local e2e suite once against the harness (`make harness-up && go test -tags e2e ./e2e/ -v -parallel 16`, default 3 runs): US2 touched the config path every e2e scenario loads, and the SC-005 stdout goldens are e2e-only (known gap: green `make ci` ≠ current e2e golden); VERIFY green, record output
-- [X] T028 Execute quickstart.md V1–V4 end-to-end as written plus `make ci`; VERIFY all green; fix anything red before proceeding (V5 already proven by T025)
-- [X] T029 Pre-PR: run **go-reviewer** in `gate` mode on the staged diff; resolve any BLOCK findings; open the PR with every golden diff itemized (T005, T017, T018 summaries), the T025 nightly run URL, and the mutation-rehearsal narrative referenced — Conventional Commit title `feat(009): extension-surface integrity`
+- [X] T028 Execute quickstart.md V1–V4 end-to-end as written plus `make ci`; VERIFY all green; fix anything red before proceeding (V5's pre-merge half already proven by T025a; its dispatch half is T025b, post-merge)
+- [X] T029 Pre-PR: run **go-reviewer** in `gate` mode on the staged diff; resolve any BLOCK findings; open the PR with every golden diff itemized (T005, T017, T018 summaries) and the mutation-rehearsal narrative referenced. The nightly run URL is explicitly NOT a precondition here — it cannot exist pre-merge and is owned solely by T025b — Conventional Commit title `feat(009): extension-surface integrity`
 
 ---
 
@@ -228,4 +236,4 @@ Task: "T023 Create .github/workflows/nightly-l3.yml"              # go-coder
 
 - Every VERIFY line is an observable checkpoint (run it, read output, record) — per the repo's testing protocol, a task with `VERIFY: DID NOT RUN` cannot be checked off.
 - US1's renderer lives in test files (`surface_test.go`) — no library code changes in that story; US2 is the only story touching runtime behaviour (`config.go`, `run.go`).
-- Golden regens happen exactly twice (T005 mass field capture; T017/T018 alias additions) — both deliberate, both itemized in the PR body.
+- Golden regens happen three times: T005 (mass field capture, +102), T017/T018 (alias additions, +4), and T032 (review-driven field ordinal — 105 lines re-annotated, no field added or lost). All deliberate, all itemized in the PR body.

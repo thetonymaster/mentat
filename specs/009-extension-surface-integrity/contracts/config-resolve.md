@@ -16,8 +16,11 @@ func Resolve(c *Config) error
 - `Load` ≡ read file + strict decode + `Resolve` (behaviour of the YAML path is
   byte-identical to today — refactor, not change).
 - `mentat.Run` calls `Resolve` on its Config before any composition call; a
-  `Resolve` error aborts the run before the SUT is driven, wrapped per repo
-  convention (`fmt.Errorf("resolving config: %w", err)`).
+  `Resolve` error aborts the run before the SUT is driven, wrapped per the
+  facade's convention that every error it returns is `mentat:`-prefixed —
+  verbatim: `fmt.Errorf("mentat: resolving config: %w", err)` (`run.go`). The
+  prefix is part of the diagnostic callers and tests may match on; keep this
+  byte-accurate.
 
 ## Laws
 
@@ -27,11 +30,29 @@ func Resolve(c *Config) error
 2. **Explicit-value-wins**: a default applies only to a zero-valued field. A
    non-zero value set in code is never overwritten.
 3. **Raw/resolved twins**: where a raw string field exists beside its resolved
-   twin (`Completeness.SettleRaw` / `Settle`), non-empty raw is parsed and wins;
-   empty raw + non-zero resolved keeps the resolved value (code-path idiom);
-   empty raw + zero resolved gets the kind default. A raw value that parses to a
-   conflicting non-zero resolved value set simultaneously is a hard error naming
-   both fields (ambiguity is never guessed — Constitution IV).
+   twin, non-empty raw is parsed and wins; empty raw + non-zero resolved keeps
+   the resolved value (code-path idiom); empty raw + zero resolved gets the
+   default. A raw value that parses to a value conflicting with a non-zero
+   resolved twin set simultaneously is a hard error naming both fields and
+   telling the caller to "set exactly one of them" (ambiguity is never guessed —
+   Constitution IV). The explicit half is validated by the *same rule and the
+   same error wording* as the raw half (Law 4), so a negative duration cannot
+   reach the engine through the code path and silently disarm a deadline.
+
+   The twins are **three**, and all three follow this law — a partial
+   implementation is the failure mode this enumeration exists to prevent:
+
+   | Raw field | Resolved twin | Resolver | Default |
+   |---|---|---|---|
+   | `Completeness.SettleRaw` | `Completeness.Settle` | `resolveCompleteness` | adapter kind-default window |
+   | `RunTimeout` (suite and per-target) | `Budget.Timeout` + `Budget.Unbounded` | `resolveBudgetTwin` | suite default; `"unbounded"` sets the bool |
+   | `KillGrace` (suite-wide in YAML) | `Budget.KillGrace` | `resolveKillGraceTwin` | `DefaultKillGrace` |
+
+   `RunTimeout` is a *two-field* resolved twin: a conflict is detected against
+   either `Budget.Timeout` **or** `Budget.Unbounded`, because "unbounded" and a
+   finite deadline are different answers to the same question. `KillGrace` has no
+   per-target raw twin — it is suite-wide in YAML — but a per-target explicit
+   `Budget.KillGrace` is still validated.
 4. **Same errors both paths**: every hard error Load raises today is raised by
    `Resolve`, so the code path inherits them verbatim.
 
