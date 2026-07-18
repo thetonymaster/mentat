@@ -506,6 +506,15 @@ func (c *surfaceCtx) renderStructFields(t *testing.T, alias string, st *ast.Stru
 		typ := surfacePrint(t, c.fset, field.Type)
 		if len(field.Names) == 0 {
 			// Embedded field: the type IS the field, so render it as written.
+			//
+			// Deliberately NOT filtered by IsExported, unlike the named-field
+			// branch below. An embedded type promotes its exported members into
+			// the outer struct's surface even when the embedded type itself is
+			// unexported, so the embedding is a public promise either way.
+			// Skipping it would under-report drift; rendering it can only
+			// over-report, and for a drift gate over-reporting is the safe
+			// direction. No unexported embedded type exists on the surface
+			// today, so this branch changes no current golden line.
 			out = append(out, "field ("+alias+") "+typ)
 			continue
 		}

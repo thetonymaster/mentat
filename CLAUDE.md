@@ -117,10 +117,10 @@ from Tempo, and run **comparators** that assert how it behaved and what it produ
 
 <!-- SPECKIT START -->
 Features 001–008 are shipped (through `specs/008-trace-completeness`). The
-in-flight feature is **009-extension-surface-integrity** (planned 2026-07-18):
-spec at `specs/009-extension-surface-integrity/spec.md`, current plan at
-`specs/009-extension-surface-integrity/plan.md` (research, data-model,
-contracts/, quickstart alongside; tasks.md not yet generated). For additional
+in-flight feature is **009-extension-surface-integrity** (planned and implemented
+2026-07-18): spec at `specs/009-extension-surface-integrity/spec.md`, current plan
+at `specs/009-extension-surface-integrity/plan.md`, with research, data-model,
+contracts/, quickstart and `tasks.md` alongside. For additional
 context about technologies used, project structure, shell commands, and other
 important information, read `specs/` as history — each feature dir carries its
 `spec.md`, `plan.md`, `tasks.md`, and `contracts/`. When work is in flight, the

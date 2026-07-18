@@ -91,7 +91,7 @@
 
 - [X] T017 [US3] GREEN: add `type Completeness = config.Completeness` to `mentat.go` (doc comment in facade style); VERIFY T016 compiles and passes; regenerate the golden (`MENTAT_UPDATE_GOLDEN=1`) — VERIFY the diff is exactly the new alias + its expanded field lines (US1 renderer at work); itemize for the PR body
 - [X] T018 [US3] Sweep the reachable set: walk exported struct field types transitively from `mentat.Config` and `mentat.Results` (slice/map/pointer elements and embedded types included); for EVERY reachable exported struct add a composite literal (each setting ≥1 field) to the compile test in `mentat_external_test.go`; alias any further reachable-unnameable type found (each new alias = golden regen line, itemized). VERIFY: test compiles facade-only; record the swept type list in a test comment as the sweep's evidence
-- [ ] T019 [US3] External-module witness: VERIFY `cd examples/kafkaecho && go build ./... && go vet ./...` and `make example` (internal-import policing, `Makefile:32`) both pass untouched
+- [X] T019 [US3] External-module witness: VERIFY `cd examples/kafkaecho && go build ./... && go vet ./...` and `make example` (internal-import policing, `Makefile:32`) both pass untouched
 
 **Checkpoint**: quickstart V3 fully green; SC-002 met.
 
@@ -140,7 +140,25 @@ under `-race`, not theorized. This regresses the **spec-007 T010/T011 guarantee 
 documented prior behaviour; declaring that `Run` takes ownership of the caller's
 Config would be the actual API change, and nothing asked for that.
 
-- [ ] T030 RED→GREEN: add a test that shares ONE `Config` across two concurrent `mentat.Run` calls and asserts (a) no data race under `-race` and (b) the caller's `cfg.Targets` is unmutated after `Run` returns. VERIFY RED first (the race must actually reproduce). Then fix by shallow-copying `cfg.Targets` into a fresh map at the top of `Run` before `Resolve`. VERIFY: new test green under `-race`; `TestRunConcurrentIndependent` still green; `make ci` exit 0
+- [X] T030 RED→GREEN: add a test that shares ONE `Config` across two concurrent `mentat.Run` calls and asserts (a) no data race under `-race` and (b) the caller's `cfg.Targets` is unmutated after `Run` returns. VERIFY RED first (the race must actually reproduce). Then fix by shallow-copying `cfg.Targets` into a fresh map at the top of `Run` before `Resolve`. VERIFY: new test green under `-race`; `TestRunConcurrentIndependent` still green; `make ci` exit 0
+
+---
+
+## Phase 7c: BLOCK finding from the T029 gate audit
+
+**Why this exists**: the raw half of every raw/resolved twin is hard-rejected on a
+bad value, but the resolved half was returned with no value validation at all. Each
+unvalidated negative then hits a positive-guard downstream and silently DISARMS the
+mechanism it configures — `engine.go:274` arms no deadline, `shell.go:87` no kill
+escalation, `correlate.go:315` disarms the settle barrier and with it 008's
+soundness guarantee for absence assertions. This falsified `Resolve`'s own doc
+comment ("byte-identical effective contract", "no silent fallback on bad input").
+Not a regression against main, but an incomplete delivery of FR-008..FR-010 living
+entirely in code this feature added. Coverage could not catch it: 99.4% with no
+branch to miss, and `TestResolveBudgetLaws` had zero rows where the explicit half
+is itself invalid.
+
+- [X] T031 RED→GREEN: parity rows asserting IDENTICAL error text from both paths for `Budget.Timeout < 0`, non-zero `Budget.KillGrace <= 0`, `Completeness.Settle < 0`, and a `Target.Budget` carrying either; then validate the explicit half inside `resolveBudgetTwin`/`resolveKillGraceTwin`/`resolveCompleteness` reusing the raw path's error text. Also settle the `Budget{Timeout, Unbounded:true}` contradiction (hard error naming both fields, or documented opt-out). VERIFY: rows RED first; full suite green; `make ci` exit 0
 
 ---
 
@@ -148,10 +166,10 @@ Config would be the actual API change, and nothing asked for that.
 
 **Purpose**: Whole-feature gates before PR.
 
-- [ ] T026 [P] Run the `/coverage` skill across all packages; VERIFY every touched package ≥80% (floor is per-package, constitution Principle V); add targeted tests if any package dipped
-- [ ] T027 Run the local e2e suite once against the harness (`make harness-up && go test -tags e2e ./e2e/ -v -parallel 16`, default 3 runs): US2 touched the config path every e2e scenario loads, and the SC-005 stdout goldens are e2e-only (known gap: green `make ci` ≠ current e2e golden); VERIFY green, record output
-- [ ] T028 Execute quickstart.md V1–V4 end-to-end as written plus `make ci`; VERIFY all green; fix anything red before proceeding (V5 already proven by T025)
-- [ ] T029 Pre-PR: run **go-reviewer** in `gate` mode on the staged diff; resolve any BLOCK findings; open the PR with every golden diff itemized (T005, T017, T018 summaries), the T025 nightly run URL, and the mutation-rehearsal narrative referenced — Conventional Commit title `feat(009): extension-surface integrity`
+- [X] T026 [P] Run the `/coverage` skill across all packages; VERIFY every touched package ≥80% (floor is per-package, constitution Principle V); add targeted tests if any package dipped
+- [X] T027 Run the local e2e suite once against the harness (`make harness-up && go test -tags e2e ./e2e/ -v -parallel 16`, default 3 runs): US2 touched the config path every e2e scenario loads, and the SC-005 stdout goldens are e2e-only (known gap: green `make ci` ≠ current e2e golden); VERIFY green, record output
+- [X] T028 Execute quickstart.md V1–V4 end-to-end as written plus `make ci`; VERIFY all green; fix anything red before proceeding (V5 already proven by T025)
+- [X] T029 Pre-PR: run **go-reviewer** in `gate` mode on the staged diff; resolve any BLOCK findings; open the PR with every golden diff itemized (T005, T017, T018 summaries), the T025 nightly run URL, and the mutation-rehearsal narrative referenced — Conventional Commit title `feat(009): extension-surface integrity`
 
 ---
 
