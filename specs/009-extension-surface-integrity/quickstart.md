@@ -87,8 +87,19 @@ found on the default branch`). Once merged, dispatch once and record the run URL
 SC-005 is only partly met until then:
 
 ```sh
-gh workflow run nightly-l3.yml && gh run watch   # expect green at 20 runs
+gh workflow run nightly-l3.yml
+sleep 5   # the run is not queryable the instant dispatch returns
+run_id=$(gh run list --workflow nightly-l3.yml --event workflow_dispatch \
+           --limit 1 --json databaseId --jq '.[0].databaseId')
+gh run watch "$run_id" --exit-status          # non-zero if the 20-run lane goes red
+gh run view "$run_id" --json url --jq .url    # the URL to record
 ```
+
+`gh workflow run` prints no run ID, and a bare `gh run watch` exits **0 even when
+the run fails** — so the naive `gh workflow run … && gh run watch` reports success
+on a red lane, which is precisely the signal this story exists to surface. Resolve
+the ID explicitly and pass `--exit-status`. The `--event workflow_dispatch` filter
+keeps the nightly cron run from being picked up instead.
 
 ## Full gates before PR
 

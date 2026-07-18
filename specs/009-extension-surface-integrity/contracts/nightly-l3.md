@@ -72,8 +72,12 @@ comment they pointed at was edited.
      `MENTAT_L3_RUNS=20 go test -tags e2e ./e2e/ -v -parallel 16` against the
      `deploy/` harness. This exercises the real gate; what it does not exercise
      is the workflow YAML on a runner.
-   - **2b (post-merge, required):** dispatch once on the default branch —
-     `gh workflow run nightly-l3.yml && gh run watch` — and record the run URL.
+   - **2b (post-merge, required):** dispatch once on the default branch and
+     record the run URL. Watch the dispatched run **by id, with
+     `--exit-status`** — `gh workflow run` emits no run id, and a bare
+     `gh run watch` exits 0 even when the run fails, so the obvious
+     `gh workflow run … && gh run watch` chain would report success on a red
+     20-run lane. The full snippet is in [quickstart.md](../quickstart.md) V5.
      Until 2b is done, SC-005 is only partly met. Do not treat the merge as
      closing this.
 3. Per-PR CI is untouched (3-run default stays — raising it was rejected in R5).
