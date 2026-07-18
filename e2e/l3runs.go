@@ -6,8 +6,9 @@ import (
 )
 
 // defaultL3Runs is the L3 repeat count when MENTAT_L3_RUNS is unset: fast for PR
-// CI. The release/nightly lane sets MENTAT_L3_RUNS=20 to machine-enforce SC-001's
-// threshold (zero green outcomes across 20 consecutive late-flush runs).
+// CI. The nightly lane — .github/workflows/nightly-l3.yml, cron plus manual
+// workflow_dispatch — pins MENTAT_L3_RUNS=20 in its job env to machine-enforce
+// SC-001's threshold (zero green outcomes across 20 consecutive late-flush runs).
 const defaultL3Runs = 3
 
 // parseL3Runs resolves the L3 meta-test repeat count from the raw MENTAT_L3_RUNS

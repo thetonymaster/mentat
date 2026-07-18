@@ -114,5 +114,11 @@ jobs:
       # overrides the GOMAXPROCS default to overlap their waits. A single mentat
       # binary is built once in TestMain and reused across scenarios.
       - run: go test -tags e2e ./e2e/ -v -parallel 16
+      # Teardown below is `down -v`, which destroys the Tempo/Collector volumes.
+      # Dump the stack's logs first on failure, or a red run leaves nothing to
+      # diagnose but the test output — and trace-ingestion failures live in
+      # Tempo's log, not Go's.
+      - if: failure()
+        run: docker compose -f deploy/docker-compose.yml logs --no-color
       - if: always()
         run: docker compose -f deploy/docker-compose.yml down -v
