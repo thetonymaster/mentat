@@ -75,7 +75,7 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator, opts ...O
 	// a duplicate pair sees the 1st already present — covering both custom-vs-built-in
 	// and custom-vs-custom. A collision is a loud, seam-and-name error, never a silent
 	// last-wins overwrite (Constitution IV).
-	if err := applyExtras(o, reg); err != nil {
+	if err := applyExtras(cfg, o, reg); err != nil {
 		return nil, err
 	}
 
@@ -151,24 +151,41 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator, opts ...O
 // (open) per-engine registry reg, each guarded by a collision check that fails loudly
 // naming the seam and the conflicting name (FR-002). It runs inside Build, between
 // built-in registration and Seal, so post-seal registration stays unrepresentable.
-func applyExtras(o options, reg *registry.Registry) error {
+func applyExtras(cfg config.Config, o options, reg *registry.Registry) error {
 	for _, ed := range o.extraDrivers {
-		if ed.driver == nil {
-			return fmt.Errorf("engine: WithDriver: driver %q is nil; a registered driver must be a non-nil instance", ed.name)
+		if ed.factory == nil {
+			return fmt.Errorf("engine: WithDriver: driver factory %q is nil; a registered driver factory must be non-nil", ed.name)
 		}
+		// Collision BEFORE construction: a colliding registration never runs ITS
+		// factory, so the caller sees the collision, not a factory error. (In a
+		// duplicate-name pair the first entry is not colliding and is still built.)
 		if _, exists := reg.Driver(ed.name); exists {
 			return fmt.Errorf("engine: WithDriver: adapter %q is already registered (a built-in or an earlier registration); adapter names must be unique", ed.name)
 		}
-		reg.RegisterDriver(ed.name, ed.driver)
+		drv, err := ed.factory(cfg)
+		if err != nil {
+			return fmt.Errorf("engine: WithDriver: build driver %q: %w", ed.name, err)
+		}
+		if drv == nil {
+			return fmt.Errorf("engine: WithDriver: driver %q: factory returned a nil driver with no error", ed.name)
+		}
+		reg.RegisterDriver(ed.name, drv)
 	}
 	for _, ec := range o.extraComparators {
-		if ec.comparator == nil {
-			return fmt.Errorf("engine: WithComparator: comparator %q is nil; a registered comparator must be a non-nil instance", ec.name)
+		if ec.factory == nil {
+			return fmt.Errorf("engine: WithComparator: comparator factory %q is nil; a registered comparator factory must be non-nil", ec.name)
 		}
 		if _, exists := reg.Comparator(ec.name); exists {
 			return fmt.Errorf("engine: WithComparator: comparator %q is already registered (a built-in or an earlier registration); comparator names must be unique", ec.name)
 		}
-		reg.RegisterComparator(ec.name, ec.comparator)
+		cmp, err := ec.factory(cfg)
+		if err != nil {
+			return fmt.Errorf("engine: WithComparator: build comparator %q: %w", ec.name, err)
+		}
+		if cmp == nil {
+			return fmt.Errorf("engine: WithComparator: comparator %q: factory returned a nil comparator with no error", ec.name)
+		}
+		reg.RegisterComparator(ec.name, cmp)
 	}
 	for _, ej := range o.extraJudges {
 		if ej.factory == nil {

@@ -1042,7 +1042,7 @@ func TestDriveNParallelStructuralErrorCancelsSiblings(t *testing.T) {
 	st := mocks.NewMockTraceStore(ctrl)
 	cor := mocks.NewMockCorrelator(ctrl)
 	cor.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("").AnyTimes() // empty runID → structural
-	eng, err := Build(cfg, st, cor, WithExtraDriver("counterr", drv))
+	eng, err := Build(cfg, st, cor, WithExtraDriver("counterr", stubDriverFactory(drv)))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -1103,7 +1103,7 @@ func TestDriveNParallelCancelledMidBatch(t *testing.T) {
 	cor.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("run-1").AnyTimes()
 	cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).Return(tr, nil).AnyTimes()
 
-	eng, err := Build(cfg, st, cor, WithExtraDriver("cancelfirst", drv))
+	eng, err := Build(cfg, st, cor, WithExtraDriver("cancelfirst", stubDriverFactory(drv)))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -1166,7 +1166,7 @@ func TestDriveNParallelResolveOverlapsOutsideSlot(t *testing.T) {
 			}
 		}).Times(n)
 
-	eng, err := Build(cfg, st, cor, WithExtraDriver("instant-overlap", instantDriver{}))
+	eng, err := Build(cfg, st, cor, WithExtraDriver("instant-overlap", stubDriverFactory(instantDriver{})))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -1231,7 +1231,7 @@ func TestDriveNParallelLimitOneKeepsDrivesSerialized(t *testing.T) {
 	cor.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("run-ser").AnyTimes()
 	cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).Return(tr, nil).Times(n)
 
-	eng, err := Build(cfg, st, cor, WithExtraDriver("recording-serial", drv))
+	eng, err := Build(cfg, st, cor, WithExtraDriver("recording-serial", stubDriverFactory(drv)))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -1302,7 +1302,7 @@ func TestDriveNParallelResolveConcurrencyCappedAtEight(t *testing.T) {
 			}
 		}).Times(n)
 
-	eng, err := Build(cfg, st, cor, WithExtraDriver("instant-bound", instantDriver{}))
+	eng, err := Build(cfg, st, cor, WithExtraDriver("instant-bound", stubDriverFactory(instantDriver{})))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -1609,7 +1609,7 @@ func TestDriveOnceInjectsOTLPEndpointConditionally(t *testing.T) {
 			cor.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("run-1")
 			cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).Return(tr, nil)
 
-			eng, err := Build(cfg, st, cor, WithExtraDriver("otlp-capture", drv))
+			eng, err := Build(cfg, st, cor, WithExtraDriver("otlp-capture", stubDriverFactory(drv)))
 			if err != nil {
 				t.Fatalf("Build: %v", err)
 			}

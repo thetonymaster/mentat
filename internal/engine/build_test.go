@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,6 +35,17 @@ func (extraStubJudge) Judge(context.Context, core.JudgeRequest) (core.JudgeVerdi
 	return core.JudgeVerdict{}, nil
 }
 
+// stubDriverFactory/stubComparatorFactory wrap a seam instance as the factory shape
+// WithExtraDriver/WithExtraComparator now take — construction is deferred past the
+// collision check, mirroring the store/judge seams.
+func stubDriverFactory(d core.Driver) func(config.Config) (core.Driver, error) {
+	return func(config.Config) (core.Driver, error) { return d, nil }
+}
+
+func stubComparatorFactory(c core.Comparator) func(config.Config) (core.Comparator, error) {
+	return func(config.Config) (core.Comparator, error) { return c, nil }
+}
+
 // TestBuildAppliesExtraSeams pins the composition-root half of FR-002: facade-funneled
 // driver/comparator/judge registrations land in the registry as first-class seams, and
 // a name colliding with a built-in OR with an earlier extra fails loudly naming the
@@ -53,17 +65,17 @@ func TestBuildAppliesExtraSeams(t *testing.T) {
 		wantComparator string   // non-empty ⇒ assert this comparator name is registered after Build
 		wantJudge      string   // non-empty ⇒ assert this judge name is registered after Build
 	}{
-		{name: "custom driver registers as first-class adapter", opts: []Option{WithExtraDriver("xdrv", drv)}, wantDriver: "xdrv"},
-		{name: "driver collides with built-in", opts: []Option{WithExtraDriver("shell", drv)}, wantErrSub: []string{"WithDriver", "shell"}},
-		{name: "driver collides with earlier extra", opts: []Option{WithExtraDriver("dup-d", drv), WithExtraDriver("dup-d", drv)}, wantErrSub: []string{"WithDriver", "dup-d"}},
-		{name: "custom comparator registers", opts: []Option{WithExtraComparator("xcmp", cmp)}, wantComparator: "xcmp"},
-		{name: "comparator collides with built-in", opts: []Option{WithExtraComparator("result", cmp)}, wantErrSub: []string{"WithComparator", "result"}},
-		{name: "comparator collides with earlier extra", opts: []Option{WithExtraComparator("dup-c", cmp), WithExtraComparator("dup-c", cmp)}, wantErrSub: []string{"WithComparator", "dup-c"}},
+		{name: "custom driver registers as first-class adapter", opts: []Option{WithExtraDriver("xdrv", stubDriverFactory(drv))}, wantDriver: "xdrv"},
+		{name: "driver collides with built-in", opts: []Option{WithExtraDriver("shell", stubDriverFactory(drv))}, wantErrSub: []string{"WithDriver", "shell"}},
+		{name: "driver collides with earlier extra", opts: []Option{WithExtraDriver("dup-d", stubDriverFactory(drv)), WithExtraDriver("dup-d", stubDriverFactory(drv))}, wantErrSub: []string{"WithDriver", "dup-d"}},
+		{name: "custom comparator registers", opts: []Option{WithExtraComparator("xcmp", stubComparatorFactory(cmp))}, wantComparator: "xcmp"},
+		{name: "comparator collides with built-in", opts: []Option{WithExtraComparator("result", stubComparatorFactory(cmp))}, wantErrSub: []string{"WithComparator", "result"}},
+		{name: "comparator collides with earlier extra", opts: []Option{WithExtraComparator("dup-c", stubComparatorFactory(cmp)), WithExtraComparator("dup-c", stubComparatorFactory(cmp))}, wantErrSub: []string{"WithComparator", "dup-c"}},
 		{name: "custom judge registers", opts: []Option{WithExtraJudge("xjudge", jf)}, wantJudge: "xjudge"},
 		{name: "judge collides with built-in", opts: []Option{WithExtraJudge("claude", jf)}, wantErrSub: []string{"WithJudge", "claude"}},
 		{name: "judge collides with earlier extra", opts: []Option{WithExtraJudge("dup-j", jf), WithExtraJudge("dup-j", jf)}, wantErrSub: []string{"WithJudge", "dup-j"}},
-		{name: "nil driver instance rejected", opts: []Option{WithExtraDriver("xnil", nil)}, wantErrSub: []string{"WithDriver", "xnil", "nil"}},
-		{name: "nil comparator instance rejected", opts: []Option{WithExtraComparator("xnil", nil)}, wantErrSub: []string{"WithComparator", "xnil", "nil"}},
+		{name: "nil driver factory rejected", opts: []Option{WithExtraDriver("xnil", nil)}, wantErrSub: []string{"WithDriver", "xnil", "nil"}},
+		{name: "nil comparator factory rejected", opts: []Option{WithExtraComparator("xnil", nil)}, wantErrSub: []string{"WithComparator", "xnil", "nil"}},
 		{name: "nil judge factory rejected", opts: []Option{WithExtraJudge("xnil", nil)}, wantErrSub: []string{"WithJudge", "xnil", "nil"}},
 	}
 	for _, tt := range tests {
@@ -119,6 +131,104 @@ func TestBuildRejectsNilJudgeFromFactory(t *testing.T) {
 	if !strings.Contains(err.Error(), "xjudge") {
 		t.Fatalf("Build error = %q, want it to name the judge backend %q", err, "xjudge")
 	}
+}
+
+// TestBuildRejectsFailingOrNilDriverFactory proves a custom driver factory that
+// errors, or returns (nil, nil), is a loud Build error naming the driver — not a
+// silently-registered nil driver that would panic at drive time (Constitution IV).
+// Construction is deferred past the collision check, so these paths execute at Build
+// (the facade no longer builds drivers eagerly).
+func TestBuildRejectsFailingOrNilDriverFactory(t *testing.T) {
+	cfg := config.Config{OTLPEndpoint: "x"}
+	tests := []struct {
+		name    string
+		factory func(config.Config) (core.Driver, error)
+		wantSub []string
+	}{
+		{name: "factory errors", factory: func(config.Config) (core.Driver, error) { return nil, errors.New("boom") }, wantSub: []string{"WithDriver", "xd", "boom"}},
+		{name: "factory returns nil driver", factory: func(config.Config) (core.Driver, error) { return nil, nil }, wantSub: []string{"WithDriver", "xd", "nil"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Build(cfg, nil, nil, WithExtraDriver("xd", tt.factory))
+			if err == nil {
+				t.Fatalf("Build must reject %s, got nil error", tt.name)
+			}
+			for _, sub := range tt.wantSub {
+				if !strings.Contains(err.Error(), sub) {
+					t.Errorf("Build error = %q, want substring %q", err, sub)
+				}
+			}
+		})
+	}
+}
+
+// TestBuildRejectsFailingOrNilComparatorFactory is the comparator counterpart to
+// TestBuildRejectsFailingOrNilDriverFactory.
+func TestBuildRejectsFailingOrNilComparatorFactory(t *testing.T) {
+	cfg := config.Config{OTLPEndpoint: "x"}
+	tests := []struct {
+		name    string
+		factory func(config.Config) (core.Comparator, error)
+		wantSub []string
+	}{
+		{name: "factory errors", factory: func(config.Config) (core.Comparator, error) { return nil, errors.New("boom") }, wantSub: []string{"WithComparator", "xc", "boom"}},
+		{name: "factory returns nil comparator", factory: func(config.Config) (core.Comparator, error) { return nil, nil }, wantSub: []string{"WithComparator", "xc", "nil"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Build(cfg, nil, nil, WithExtraComparator("xc", tt.factory))
+			if err == nil {
+				t.Fatalf("Build must reject %s, got nil error", tt.name)
+			}
+			for _, sub := range tt.wantSub {
+				if !strings.Contains(err.Error(), sub) {
+					t.Errorf("Build error = %q, want substring %q", err, sub)
+				}
+			}
+		})
+	}
+}
+
+// TestBuildValidatesCollisionBeforeInvokingFactory proves the driver/comparator
+// collision check runs BEFORE the extra factory is invoked (follow-up to the
+// CodeRabbit finding on PR #31): a factory registered under a name that collides
+// with a built-in surfaces the loud WithDriver/WithComparator collision error
+// (FR-002) and is never called — no wasted side effects, and the caller sees the
+// collision, not a factory error. This mirrors how the store/judge factories
+// already defer construction past the collision check.
+func TestBuildValidatesCollisionBeforeInvokingFactory(t *testing.T) {
+	cfg := config.Config{OTLPEndpoint: "x"}
+
+	t.Run("driver collision does not invoke the factory", func(t *testing.T) {
+		called := 0
+		f := func(config.Config) (core.Driver, error) {
+			called++
+			return extraStubDriver{}, nil
+		}
+		_, err := Build(cfg, nil, nil, WithExtraDriver("shell", f)) // "shell" is a built-in
+		if err == nil || !strings.Contains(err.Error(), "WithDriver") {
+			t.Fatalf("want a WithDriver collision error, got %v", err)
+		}
+		if called != 0 {
+			t.Fatalf("colliding driver factory must not run, ran %d time(s)", called)
+		}
+	})
+
+	t.Run("comparator collision does not invoke the factory", func(t *testing.T) {
+		called := 0
+		f := func(config.Config) (core.Comparator, error) {
+			called++
+			return extraStubComparator{}, nil
+		}
+		_, err := Build(cfg, nil, nil, WithExtraComparator("result", f)) // "result" is a built-in
+		if err == nil || !strings.Contains(err.Error(), "WithComparator") {
+			t.Fatalf("want a WithComparator collision error, got %v", err)
+		}
+		if called != 0 {
+			t.Fatalf("colliding comparator factory must not run, ran %d time(s)", called)
+		}
+	})
 }
 
 // TestEngineAdapter proves the read-only Adapter accessor reports a configured
