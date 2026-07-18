@@ -22,8 +22,10 @@ enforced definition below.
 
 A PR that changes the public surface MUST, in the *same* PR:
 
-1. **Update the golden surface file.** `contracts/public-surface.golden` records the
-   exact exported surface. Regenerating it to match your change is the
+1. **Update the golden surface file.**
+   `specs/007-public-extension-api/contracts/public-surface.golden` records the
+   exported surface (with the alias caveat below). Regenerating it to match your
+   change is the
    *acknowledgment act* — the diff to that file is the reviewer-visible record that
    the surface change was intended, not incidental.
 2. **Add a CHANGELOG entry.** Describe the change under the appropriate heading
@@ -38,20 +40,48 @@ A surface change that skips these is not a valid change; it is drift.
 ## The golden gate (how drift is caught)
 
 Silent surface drift is a **CI failure**, not a review judgment call. A golden
-surface test renders the package's exported surface — every exported type, function
-signature, and struct field — into a canonical text form and diffs it against
-`contracts/public-surface.golden`. It runs under plain `go test` (part of the
-standard gate), so:
+surface test (`surface_test.go`) renders the facade's exported surface into a
+canonical text form and diffs it against
+[`specs/007-public-extension-api/contracts/public-surface.golden`](../../specs/007-public-extension-api/contracts/public-surface.golden).
+It runs under plain `go test` (part of the standard gate), so:
 
 - If you change the surface but forget to regenerate the golden, the test **fails
   and names the drifted symbol** — the mismatch points straight at what moved.
 - To make it pass you regenerate the golden (act 1 above), which forces the change
   into the reviewed diff.
 
-That is the whole mechanism: the golden file is the source of truth for "what is
-exported", and the test makes any divergence from it loud. There is no way to change
-the surface quietly — the acknowledgment act (regenerating the golden) is exactly the
-step CI demands.
+### What the gate does and does not catch (interim state)
+
+Be precise about the gate's reach — it is strong at the facade level and has one
+known blind spot.
+
+**Caught today:**
+
+- Exported symbols **added, removed, or renamed** at the facade level.
+- **Function and method signatures** — a changed parameter or result is a diff.
+- **Interface method sets.** Each seam interface's methods are rendered
+  individually (e.g. `method (Comparator) Compare(ctx context.Context, ev Evidence,
+  e Expectation) (Verdict, error)`), so adding, removing, or re-signing a seam
+  method is loud. This landed in feature 008 (T028).
+- **Struct fields of types declared in the facade package itself** — `Results` and
+  `ScenarioResult` render with their fields inline.
+
+**Not caught yet (known gap):**
+
+Most of the public surface is built from **zero-cost type aliases** to internal
+types (`type Verdict = core.Verdict`, `type Target = config.Target`). The golden
+records the *alias declaration*, not the aliased struct's fields — so **adding a
+field to an aliased struct produces no golden diff at all**. Both
+`Verdict.Qualifiers` and `Target.Completeness` were added with zero golden churn.
+Argument types reached through aliases are likewise not expanded: a change inside
+`config.Config` is invisible behind `ComparatorFactory = func(Config) (Comparator,
+error)`.
+
+This is a known **interim** gap, not the intended end state. Closing it — expanding
+aliased struct fields and argument types into the golden — is planned for **spec
+009**, which will restore the strong claim that every exported type, signature, and
+struct field is frozen. Until then, treat a field added to an aliased struct as
+requiring the three acts *by author discipline*, because CI will not remind you.
 
 > Every symbol on the surface earns its place: the manifest rule is that a symbol
 > appears in the contract *with a justification, or it does not get exported*. See
