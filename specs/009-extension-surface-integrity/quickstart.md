@@ -87,19 +87,34 @@ found on the default branch`). Once merged, dispatch once and record the run URL
 SC-005 is only partly met until then:
 
 ```sh
+latest() { gh run list --workflow nightly-l3.yml --event workflow_dispatch \
+             --limit 1 --json databaseId --jq '.[0].databaseId // 0'; }
+
+before=$(latest)
 gh workflow run nightly-l3.yml
-sleep 5   # the run is not queryable the instant dispatch returns
-run_id=$(gh run list --workflow nightly-l3.yml --event workflow_dispatch \
-           --limit 1 --json databaseId --jq '.[0].databaseId')
+
+# Dispatch is async and returns no run id, so poll until a run newer than the
+# one we saw pre-dispatch appears. A fixed sleep is a guess; this is not.
+for _ in $(seq 30); do
+  run_id=$(latest); [ "$run_id" != "$before" ] && break; sleep 2
+done
+[ "$run_id" = "$before" ] && { echo "dispatch never registered" >&2; exit 1; }
+
 gh run watch "$run_id" --exit-status          # non-zero if the 20-run lane goes red
 gh run view "$run_id" --json url --jq .url    # the URL to record
 ```
 
-`gh workflow run` prints no run ID, and a bare `gh run watch` exits **0 even when
-the run fails** — so the naive `gh workflow run … && gh run watch` reports success
-on a red lane, which is precisely the signal this story exists to surface. Resolve
-the ID explicitly and pass `--exit-status`. The `--event workflow_dispatch` filter
-keeps the nightly cron run from being picked up instead.
+Three things this guards, none of them hypothetical:
+
+- **`gh workflow run` emits no run id**, so the id has to be resolved separately.
+- **A bare `gh run watch` exits 0 even when the run fails.** The obvious
+  `gh workflow run … && gh run watch` chain therefore reports success on a red
+  20-run lane — precisely the signal this story exists to surface. `--exit-status`
+  is what makes the check real.
+- **Resolving "the latest run" can pick the wrong one.** Filtering to
+  `--event workflow_dispatch` excludes the 03:00 cron run, and comparing against
+  the pre-dispatch id makes sure the run being watched is the one just started
+  rather than an earlier dispatch that happens to still be listed first.
 
 ## Full gates before PR
 
