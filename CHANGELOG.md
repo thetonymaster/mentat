@@ -8,6 +8,29 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- **Public extension API — extend without forking.** A root `github.com/thetonymaster/mentat`
+  package re-exports the seam interfaces (`Driver`, `TraceStore`, `Comparator`, `Judge`,
+  plus `Correlator`/`Reporter` as types), the `Evidence`/`Verdict`/`Output`/`Config`
+  contract types, and the trace-forest types (`Trace`/`Span`) as zero-cost aliases, so a
+  third-party module can implement a custom adapter without importing anything under
+  `internal/`. Custom seams register at the `mentat.Run` call via `WithDriver`/`WithStore`/
+  `WithComparator`/`WithJudge` (a duplicate name is a loud collision naming both
+  registrants, never a silent overwrite); `Run(ctx, Config, opts...)` embeds a suite
+  in-process and returns structured `Results`/`ScenarioResult`, and `LoadConfig` reads the
+  `mentat.yaml` surface. `docs/extending/` documents each seam and the pre-1.0 stability
+  policy; `examples/kafkaecho` is a standalone module proving the surface suffices.
+  (Registering a custom *comparator* composes today, but invoking one from a `.feature`
+  step needs new Gherkin grammar and is deferred to a future spec.)
+
+### Changed
+
+- **The `mentat` CLI is now consumer zero of the public API.** `mentat run` composes
+  entirely through `mentat.Run` (flags → `Config` + `With*` options → `Run` →
+  `Results.ExitCode`) — one composition path, no forked internal wiring. The green happy
+  path is byte-identical (SC-004). One consequence: the judge ledger is now priced
+  unconditionally (previously only when a report flag was set), so a run configured with
+  an unknown/ambiguous judge-model price now fails loudly even without `--junit`/
+  `--report-json`/`--report-html`, rather than silently skipping pricing.
 - **`mentat steps` — generated step reference.** Prints every registered Gherkin
   step (pattern, summary, example) grouped by concern, plus the shared
   selector/quantifier/ordinal grammar and CEL variables. `--format md` regenerates

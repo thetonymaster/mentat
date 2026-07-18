@@ -115,4 +115,6 @@ Its `Driver.Run` (see `driver.go`):
 The paired custom `TraceStore` (see `store.go`) serves that same bus back to the
 correlator by run id, so a fully custom driver + store pair drives the feature
 green end to end — no Tempo, no network. The store side is documented in the
-store guide; for a driver, the load-bearing lesson is obligations 1–3 above.
+[store guide](store.md); for a driver, the load-bearing lesson is obligations 1–3
+above. The `Output` a driver returns becomes the `Evidence.Output` comparators
+read — see the [Evidence primer](evidence.md).

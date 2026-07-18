@@ -1,9 +1,11 @@
 package report
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/registry"
@@ -15,17 +17,32 @@ import (
 // interrupted mid-write never leaves a truncated report (feature 003, FR-006
 // atomicity). An unknown reporter or any write/rename failure is returned wrapped
 // (no silent fallback); the caller turns it into a non-zero exit.
+//
+// Every target is attempted in deterministic (sorted-name) order and each failure
+// is collected, so one invalid destination never prevents a valid report from being
+// written (map order is otherwise nondeterministic). The collected failures are
+// returned via errors.Join — nil when none, and byte-identical to the single wrapped
+// error for a single-target caller.
 func EmitReports(rep core.RunReport, targets map[string]string) error {
-	for name, path := range targets {
+	names := make([]string, 0, len(targets))
+	for name := range targets {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var errs []error
+	for _, name := range names {
+		path := targets[name]
 		r, ok := registry.Reporter(name)
 		if !ok {
-			return fmt.Errorf("unknown reporter %q", name)
+			errs = append(errs, fmt.Errorf("unknown reporter %q", name))
+			continue
 		}
 		if err := emitAtomic(r, rep, path); err != nil {
-			return fmt.Errorf("writing %s report %q: %w", name, path, err)
+			errs = append(errs, fmt.Errorf("writing %s report %q: %w", name, path, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // emitAtomic renders rep through r into a temp file in path's directory, then

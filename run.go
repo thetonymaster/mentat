@@ -2,6 +2,7 @@ package mentat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -40,6 +41,28 @@ type Option func(*runOptions)
 type runOptions struct {
 	// featurePaths are the feature files/directories the suite runs (godog Paths).
 	featurePaths []string
+	// output is the destination for the godog pretty report. nil means library mode:
+	// narrate nothing (io.Discard). Set via WithOutput.
+	output io.Writer
+	// logWriter is the destination for the slog run narration. nil means library mode:
+	// a silent discard logger (unchanged default). Set via WithVerbosity.
+	logWriter io.Writer
+	// verbose/debug map to the -v/-vv level of the injected logger. Both false (the
+	// default) yield a discard handler regardless of logWriter. Set via WithVerbosity.
+	verbose bool
+	debug   bool
+	// concurrency is the godog scenario-concurrency level. <1 means the default (1).
+	// Set via WithConcurrency.
+	concurrency int
+	// tags is the godog tag expression selecting which scenarios run. "" means no
+	// filter (all scenarios). Set via WithTags.
+	tags string
+	// failFast maps to godog's StopOnFailure: stop the suite after the first failing
+	// scenario. false (run everything) is the default. Set via WithFailFast.
+	failFast bool
+	// reports maps a reporter name (json/html/junit) to an output path; empty (the
+	// default) writes no report files. Set via WithReports.
+	reports map[string]string
 	// drivers/stores/comparators/judges are custom-adapter registrations funneled into
 	// the composition root by Run (spec 007 FR-002); each is a name + a factory built
 	// from Config.
@@ -104,6 +127,61 @@ func WithFeatures(paths ...string) Option {
 	return func(o *runOptions) { o.featurePaths = append(o.featurePaths, paths...) }
 }
 
+// WithOutput narrates the godog pretty report to w. The default is library mode:
+// with no WithOutput, Run narrates nothing (io.Discard), so embedding Mentat never
+// writes to stdout unless the caller asks. A nil w is treated as the default
+// (Constitution IV: a zero value behaves as the documented default, never a crash).
+func WithOutput(w io.Writer) Option {
+	return func(o *runOptions) { o.output = w }
+}
+
+// WithVerbosity narrates the run to w via a log/slog text handler at the given
+// level: verbose maps to Info, debug (which implies verbose) to Debug — the same
+// -v/-vv mapping the CLI exposes (engine.NewLogger). The default is library mode:
+// with no WithVerbosity (or both flags false) Run injects a silent discard logger, so
+// embedding Mentat narrates nothing unless the caller asks. A nil w is treated as the
+// silent default (Constitution IV: a zero value behaves as the documented default,
+// never a nil-writer panic).
+func WithVerbosity(w io.Writer, verbose, debug bool) Option {
+	return func(o *runOptions) {
+		o.logWriter = w
+		o.verbose = verbose
+		o.debug = debug
+	}
+}
+
+// WithConcurrency sets the godog scenario-concurrency level. A value < 1 means the
+// default (1, unchanged); a value > 1 runs scenarios in parallel (godog wraps the
+// pretty formatter so per-scenario output stays segregated).
+func WithConcurrency(n int) Option {
+	return func(o *runOptions) { o.concurrency = n }
+}
+
+// WithTags sets the godog tag expression selecting which scenarios run (e.g.
+// "@smoke", "@a && ~@wip"). The empty string means no filter (all scenarios run) —
+// the default.
+func WithTags(expr string) Option {
+	return func(o *runOptions) { o.tags = expr }
+}
+
+// WithFailFast stops the suite after the first failing scenario (godog's
+// StopOnFailure). The default is false: run every scenario and report the full
+// tally.
+func WithFailFast(stop bool) Option {
+	return func(o *runOptions) { o.failFast = stop }
+}
+
+// WithReports writes each requested report after the suite runs and its judge ledger
+// is priced. targets maps a built-in reporter name (json/html/junit) to an output
+// path; each file is written atomically (temp+rename). The default is no reports (an
+// empty map): embedding Mentat writes no files unless the caller asks. A write failure
+// is a Run error that preserves the underlying reporter wording (e.g. "writing junit
+// report") and still returns the populated Results — the suite ran, only emission
+// failed (Constitution IV: no silent fallback).
+func WithReports(targets map[string]string) Option {
+	return func(o *runOptions) { o.reports = targets }
+}
+
 // WithDriver registers a custom Driver factory under name, funneling it into this
 // Run's composition root before sealing. The name works in config (Target.Adapter)
 // and feature files exactly like a built-in adapter (US1). A name already taken by
@@ -147,6 +225,22 @@ type Results struct {
 	JudgeTotal  *JudgeUsage
 }
 
+// ExitCode maps Results onto the process exit code the CLI uses, so a library
+// consumer (and the CLI as "consumer zero") can turn a Run into an os.Exit code with
+// one call: an interrupted run is 130 (128 + SIGINT, and it wins over a red suite so
+// CI can tell cancellation from a plain failure), else any failed scenario is 1, else
+// 0. This is the Results ⇔ CLI exit-semantics contract (public-surface.md).
+func (r Results) ExitCode() int {
+	switch {
+	case r.Interrupted:
+		return 130
+	case r.Failed > 0:
+		return 1
+	default:
+		return 0
+	}
+}
+
 // ScenarioResult is one scenario's outcome. It is a facade-owned struct (not an
 // alias) so the internal report record types (RunRecord etc.) never leak through the
 // public surface. RunIDs are the injected run ids of the scenario's runs (>1 for a
@@ -187,10 +281,17 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 		return Results{}, fmt.Errorf("mentat: no feature paths; pass at least one via WithFeatures")
 	}
 
-	// Library mode narrates nothing: a silent discard logger is injected into every
-	// seam (no package-global logger, no slog.SetDefault) — mirrors the CLI's no-flag
-	// default.
-	logger := engine.NewLogger(io.Discard, false, false)
+	// Narration: the same logger is injected into every seam (correlator + engine +
+	// drivers) — no package-global logger, no slog.SetDefault. With no WithVerbosity
+	// the writer is nil and both flags false, so NewLogger returns a discard handler:
+	// library mode narrates nothing, byte-identical to the pre-Batch-2 default. A nil
+	// writer with a level set narrates to io.Discard (Constitution IV: no nil-writer
+	// panic).
+	logWriter := ro.logWriter
+	if logWriter == nil {
+		logWriter = io.Discard
+	}
+	logger := engine.NewLogger(logWriter, ro.verbose, ro.debug)
 
 	cor, err := engine.BuildCorrelator(cfg, logger)
 	if err != nil {
@@ -253,15 +354,42 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 		return Results{}, fmt.Errorf("mentat: build engine: %w", err)
 	}
 
+	// Library mode narrates nothing by default: an unset WithOutput leaves the godog
+	// pretty report going to io.Discard (Constitution IV: a nil writer behaves as the
+	// documented default, never a nil-writer panic in godog).
+	out := ro.output
+	if out == nil {
+		out = io.Discard
+	}
+	// Default concurrency stays 1: an unset or non-positive value is the documented
+	// default, not a zero passed through to godog (Constitution IV).
+	concurrency := ro.concurrency
+	if concurrency < 1 {
+		concurrency = 1
+	}
+
+	// Judge-spend budget (US6): once completed judge cost crosses cfg.Judge.MaxCostUSD,
+	// the After hook cancels budgetCtx so no NEW scenario starts a judge call. budgetCtx
+	// is a CHILD of the passed ctx (a caller cancellation still cancels everything), but
+	// `interrupted` keys off the PASSED ctx alone below — a budget trip cancels budgetCtx
+	// yet must NOT mark the run interrupted. An unset/0 ceiling disables accounting:
+	// report.NewBudget with max<=0 makes Add a no-op, so an unbudgeted run stays
+	// byte-identical to the pre-Batch-2 flow.
+	budget := report.NewBudget(cfg.Judge.MaxCostUSD, eng.Pricing())
+	budgetCtx, budgetCancel := context.WithCancel(ctx)
+	defer budgetCancel()
+
 	col := report.NewCollector()
 	suite := godog.TestSuite{
-		ScenarioInitializer: steps.InitializerWithCollector(eng, col),
+		ScenarioInitializer: steps.InitializerWithBudget(eng, col, budget, budgetCancel),
 		Options: &godog.Options{
 			Format:         "pretty",
 			Paths:          ro.featurePaths,
-			Output:         io.Discard,
-			DefaultContext: ctx,
-			Concurrency:    1,
+			Output:         out,
+			DefaultContext: budgetCtx,
+			Concurrency:    concurrency,
+			Tags:           ro.tags,
+			StopOnFailure:  ro.failFast,
 		},
 	}
 
@@ -285,6 +413,34 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 	// fabricated $0 for a real call (Constitution IV).
 	if err := report.Price(&rep, eng.Pricing()); err != nil {
 		return Results{}, fmt.Errorf("mentat: price judge ledger: %w", err)
+	}
+
+	// Emit the requested report files AFTER pricing (so the judge ledger cost is
+	// rendered), mirroring the CLI. A write failure preserves the reporter wording
+	// (e.g. "writing junit report") and still returns the completed Results — the run
+	// happened, only emission failed (Constitution IV). No WithReports ⇒ no files. The
+	// error is captured (not early-returned) so a simultaneous budget trip is not masked.
+	var emitErr error
+	if len(ro.reports) > 0 {
+		if e := report.EmitReports(rep, ro.reports); e != nil {
+			emitErr = fmt.Errorf("mentat: emit reports: %w", e)
+		}
+	}
+
+	// A tripped judge budget is a hard Run error (US6), read AFTER pricing and report
+	// emission so the operator still gets the full accounting first (mirrors the CLI
+	// ordering). The wrapped Budget error names spend, ceiling, and the crossing
+	// scenario. An unset/0 ceiling never trips, so Err() is nil.
+	var budgetErr error
+	if berr := budget.Err(); berr != nil {
+		budgetErr = fmt.Errorf("mentat: judge budget: %w", berr)
+	}
+
+	// Surface BOTH failures when they coincide: neither the emit error nor the budget
+	// trip masks the other (the pre-recompose CLI printed both). errors.Join drops nils,
+	// so an emit-only or budget-only run keeps its single, original message intact.
+	if emitErr != nil || budgetErr != nil {
+		return toResults(rep), errors.Join(emitErr, budgetErr)
 	}
 
 	return toResults(rep), nil

@@ -7,13 +7,8 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
-	"github.com/cucumber/godog"
-	"github.com/thetonymaster/mentat/internal/config"
-	"github.com/thetonymaster/mentat/internal/engine"
-	"github.com/thetonymaster/mentat/internal/report"
-	"github.com/thetonymaster/mentat/internal/steps"
+	"github.com/thetonymaster/mentat"
 )
 
 // main dispatches to a subcommand. `run` drives behaviour scenarios (its flow is
@@ -52,9 +47,13 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  validate [paths...] [--format ...]  statically check the feature corpus")
 }
 
-// runMain is the unchanged `mentat run` flow (feature 003/005): its stdout is the
-// byte-stable happy path (SC-005), so this body must stay identical to the
-// pre-subcommand version — only its arg source moved from os.Args[2:] to args.
+// runMain is the CLI as "consumer zero" (spec 007, R7): a thin caller of the public
+// mentat.Run entry point. Every composition/reporting/budget/pricing concern lives in
+// mentat.Run, so there is exactly ONE composition path. The CLI keeps only the process
+// concerns the library deliberately leaves out — flag parsing, signal handling, and
+// mapping Results onto an os.Exit code. Its observable behaviour (byte-stable happy-path
+// stdout — SC-005; reports written with the interrupted marker; exit 130/1/0 precedence)
+// is preserved by mentat.Run + Results.ExitCode.
 func runMain(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	cfgPath := fs.String("config", "mentat.yaml", "config file")
@@ -72,42 +71,18 @@ func runMain(args []string) {
 		paths = []string{"features"}
 	}
 
-	data, err := os.ReadFile(*cfgPath)
+	cfg, err := mentat.LoadConfig(*cfgPath)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "mentat:", err)
-		os.Exit(1)
-	}
-	cfg, err := config.Load(data)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "mentat:", err)
+		// LoadConfig already prefixes its errors with "mentat: "; print as-is so the
+		// operator sees a single prefix, not a doubled "mentat: mentat:".
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
-	// Verbosity flags map to a stderr slog handler; the no-flag default is a
-	// discard handler so the happy path stays byte-identical (SC-005). The logger
-	// (and the store endpoint) are injected into the seams here at the composition
-	// root — no package-global logger, no slog.SetDefault.
-	logger := engine.NewLogger(os.Stderr, *verbose, *debug)
-
-	cor, err := engine.BuildCorrelator(cfg, logger)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "mentat:", err)
-		os.Exit(1)
-	}
-	st, err := engine.BuildStore(cfg)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "mentat:", err)
-		os.Exit(1)
-	}
-	eng, err := engine.Build(cfg, st, cor, engine.WithLogger(logger))
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "mentat:", err)
-		os.Exit(1)
-	}
-
-	// Signal handling (feature 003, FR-006): the first SIGINT/SIGTERM cancels the
-	// suite context so in-flight work stops and every configured report is still
-	// written; a second signal restores the default handler and force-quits.
+	// Signal handling (feature 003, FR-006) is a process concern kept in main: the first
+	// SIGINT/SIGTERM cancels sigCtx (which mentat.Run honours via godog's DefaultContext),
+	// so in-flight work stops and every configured report is still written with the
+	// interrupted marker; a second signal restores the default handler and force-quits.
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {
@@ -115,78 +90,44 @@ func runMain(args []string) {
 		stop() // a second signal now terminates the process by default
 	}()
 
-	// Judge-spend budget (feature 006, US6): once the post-scenario judge cost crosses
-	// cfg.Judge.MaxCostUSD, the After hook cancels budgetCtx so no new scenario starts a
-	// judge call. It is a CHILD of sigCtx (a signal still cancels everything) so that a
-	// budget trip does NOT mark the run interrupted (interrupted keys off sigCtx alone).
-	// An unset/0 ceiling disables accounting — byte-identical to the pre-006 flow.
-	budgetCtx, budgetCancel := context.WithCancel(sigCtx)
-	defer budgetCancel()
-	budget := report.NewBudget(cfg.Judge.MaxCostUSD, eng.Pricing())
-
-	opts := godog.Options{
-		Format:         "pretty",
-		Paths:          paths,
-		Tags:           *tags,
-		Concurrency:    *concurrency,
-		Output:         os.Stdout,
-		StopOnFailure:  *failFast,
-		DefaultContext: budgetCtx,
+	// Assemble the run over the public option surface. Verbosity always maps to a stderr
+	// handler; the no-flag default is a discard handler so the happy path stays
+	// byte-identical (SC-005). Reports are collected into a name->path map (json/html/junit)
+	// and passed only when at least one target is set — no WithReports means no files.
+	opts := []mentat.Option{
+		mentat.WithFeatures(paths...),
+		mentat.WithOutput(os.Stdout),
+		mentat.WithConcurrency(*concurrency),
+		mentat.WithTags(*tags),
+		mentat.WithFailFast(*failFast),
+		mentat.WithVerbosity(os.Stderr, *verbose, *debug),
 	}
-
-	col := report.NewCollector()
-	suite := godog.TestSuite{ScenarioInitializer: steps.InitializerWithBudget(eng, col, budget, budgetCancel), Options: &opts}
-	started := time.Now()
-	code := suite.Run()
-	interrupted := sigCtx.Err() != nil
-
-	// Always emit the configured reports — the scenarios that completed plus the
-	// interrupted marker — written atomically (temp+rename) so a signal arriving
-	// mid-write never leaves a truncated file. JUnit is emitted here from the
-	// collector too (not godog's format), so it carries the interrupted property.
-	targets := map[string]string{}
+	reports := map[string]string{}
 	if *reportJSON != "" {
-		targets["json"] = *reportJSON
+		reports["json"] = *reportJSON
 	}
 	if *reportHTML != "" {
-		targets["html"] = *reportHTML
+		reports["html"] = *reportHTML
 	}
 	if *junit != "" {
-		targets["junit"] = *junit
+		reports["junit"] = *junit
 	}
-	if len(targets) > 0 {
-		// Price fills the judge-ledger cost (US6) before rendering. An unknown/ambiguous
-		// judge model is a hard error here (never a fabricated $0 for a real call): print
-		// it and skip emission rather than write a lie. A run with no judge calls prices
-		// to a no-op, so the emitted bytes are byte-identical to the pre-006 flow.
-		rep := col.Report(started, time.Since(started), interrupted)
-		if err := report.Price(&rep, eng.Pricing()); err != nil {
-			fmt.Fprintln(os.Stderr, "mentat:", err)
-			if code == 0 {
-				code = 1
-			}
-		} else if err := report.EmitReports(rep, targets); err != nil {
-			fmt.Fprintln(os.Stderr, "mentat:", err)
-			if code == 0 {
-				code = 1
-			}
-		}
+	if len(reports) > 0 {
+		opts = append(opts, mentat.WithReports(reports))
 	}
 
-	// A tripped judge budget is a hard failure (US6): report it (naming spent, budget,
-	// and the crossing scenario) and exit non-zero. The reports above already emitted
-	// with the ledger, so the operator still gets the full accounting.
-	if err := budget.Err(); err != nil {
-		fmt.Fprintln(os.Stderr, "mentat:", err)
+	// Map Results onto the process exit code with the same precedence the CLI has always
+	// used: interrupted wins (130), else any failed scenario (1), else 0. A harness/emit
+	// error from Run is printed and forces a non-zero exit when the suite itself was green.
+	res, runErr := mentat.Run(sigCtx, cfg, opts...)
+	code := res.ExitCode()
+	if runErr != nil {
+		// Run already prefixes its errors with "mentat: "; print as-is so the operator
+		// sees a single prefix, not a doubled "mentat: mentat:".
+		fmt.Fprintln(os.Stderr, runErr)
 		if code == 0 {
 			code = 1
 		}
-	}
-
-	if interrupted {
-		// 128 + SIGINT(2) = 130, the conventional "interrupted" exit code — distinct
-		// from a plain assertion failure (1) so CI can tell cancellation from a red suite.
-		os.Exit(130)
 	}
 	os.Exit(code)
 }

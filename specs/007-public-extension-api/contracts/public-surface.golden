@@ -1,0 +1,62 @@
+const FailureKindDriver = core.FailureKindDriver
+const FailureKindResolve = core.FailureKindResolve
+const KindClient = trace.KindClient
+const KindConsumer = trace.KindConsumer
+const KindInternal = trace.KindInternal
+const KindProducer = trace.KindProducer
+const KindServer = trace.KindServer
+const KindUnspecified = trace.KindUnspecified
+const StatusError = trace.StatusError
+const StatusOk = trace.StatusOk
+const StatusUnset = trace.StatusUnset
+func (r Results) ExitCode() int
+func LoadConfig(path string) (Config, error)
+func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error)
+func WithComparator(name string, f ComparatorFactory) Option
+func WithConcurrency(n int) Option
+func WithDriver(name string, f DriverFactory) Option
+func WithFailFast(stop bool) Option
+func WithFeatures(paths ...string) Option
+func WithJudge(name string, f JudgeFactory) Option
+func WithOutput(w io.Writer) Option
+func WithReports(targets map[string]string) Option
+func WithStore(name string, f StoreFactory) Option
+func WithTags(expr string) Option
+func WithVerbosity(w io.Writer, verbose, debug bool) Option
+type Comparator = core.Comparator
+type ComparatorFactory = func(Config) (Comparator, error)
+type Config = config.Config
+type Correlator = core.Correlator
+type Driver = core.Driver
+type DriverFactory = func(Config) (Driver, error)
+type Endpoint = config.Endpoint
+type Evidence = core.Evidence
+type Expectation = core.Expectation
+type ExtractConfig = config.ExtractConfig
+type HTTP = config.HTTP
+type Judge = core.Judge
+type JudgeConfig = config.JudgeConfig
+type JudgeFactory = func(Config) (Judge, error)
+type JudgeRequest = core.JudgeRequest
+type JudgeUsage = core.JudgeUsage
+type JudgeVerdict = core.JudgeVerdict
+type ModelRate = config.ModelRate
+type Option func(*runOptions)
+type Output = core.Output
+type PollSpec = config.PollSpec
+type Pricing = config.Pricing
+type Reporter = core.Reporter
+type Results struct { Scenarios []ScenarioResult Passed int Failed int Interrupted bool TotalCost float64 JudgeTotal *JudgeUsage }
+type RunBudget = config.RunBudget
+type RunResult = core.RunResult
+type RunSpec = core.RunSpec
+type ScenarioResult struct { Name string FeatureFile string Pass bool Reasons []string Cost float64 RunIDs []string DerivationNote string Judge *JudgeUsage }
+type Span = trace.Span
+type StoreCaps = core.StoreCaps
+type StoreFactory = func(Config) (TraceStore, error)
+type Target = config.Target
+type Trace = trace.Trace
+type TraceQuery = core.TraceQuery
+type TraceRef = core.TraceRef
+type TraceStore = core.TraceStore
+type Verdict = core.Verdict

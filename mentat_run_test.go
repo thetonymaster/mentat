@@ -599,6 +599,70 @@ func TestRunDuplicateRegistrationFailsLoudly(t *testing.T) {
 	}
 }
 
+// TestRunGoesRedOnComparatorViolation is the mandatory L3 meta-test (constitution
+// Principle V, NON-NEGOTIABLE): a scenario that VIOLATES its comparator, driven
+// through the PUBLIC mentat.Run surface, must go RED — Results.Failed>0, the scenario
+// Pass==false carrying a non-empty Reasons, and Results.ExitCode()==1 (the CLI's FAIL
+// exit). This proves the library entry point fails loudly on bad behaviour, not only
+// on cancellation; a framework that cannot be shown to go red on a violation is not
+// proven to work.
+//
+// The custom driver+store resolve the trace GREEN, so the run reaches the comparator;
+// the comparator then fails because the scenario asserts a substring the driver's
+// answer ("meta ok") never contains.
+//
+// No t.Parallel(): mirrors the serial convention of the sibling Run tests in this file.
+func TestRunGoesRedOnComparatorViolation(t *testing.T) {
+	b := newBus()
+	dir := t.TempDir()
+	feature := `Feature: comparator violation goes red
+  Scenario: asserting an answer the driver never returns fails
+    Given the agent target "bot"
+    When I run scenario "echo"
+    Then the result contains "ANSWER-NEVER-RETURNED"
+`
+	featPath := writeFile(t, dir, "violation.feature", feature)
+	cfg := mentat.Config{
+		Store: "membus",
+		Targets: map[string]mentat.Target{
+			"bot": {Adapter: "membus", Command: []string{"noop"}, MaxConcurrency: 1},
+		},
+		Poll: mentat.PollSpec{Interval: "1ms", StableFor: 1},
+	}
+	res, err := mentat.Run(context.Background(), cfg,
+		mentat.WithFeatures(featPath),
+		mentat.WithDriver("membus", func(mentat.Config) (mentat.Driver, error) {
+			return busDriver{bus: b, answer: "meta ok"}, nil
+		}),
+		mentat.WithStore("membus", func(mentat.Config) (mentat.TraceStore, error) {
+			return busStore{bus: b}, nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("a comparator violation is not a harness error; Run must reflect it in Results: %v", err)
+	}
+	if res.Failed == 0 {
+		t.Fatalf("a violating scenario must fail the suite; got %+v", res)
+	}
+	if len(res.Scenarios) != 1 || res.Scenarios[0].Pass {
+		t.Fatalf("the violating scenario must not pass: %+v", res.Scenarios)
+	}
+	if len(res.Scenarios[0].Reasons) == 0 {
+		t.Fatal("a failed scenario must carry a non-empty reason")
+	}
+	// Prove the redness is the COMPARATOR verdict, not a resolve/harness error: the
+	// reason must name the substring the driver never returns. A resolve miss would
+	// carry a "no trace"/"no fixture" reason and satisfy the non-empty check above —
+	// this assertion is what makes the L3 meta-test bite (the comparator, not the
+	// harness, is what failed).
+	if joined := strings.Join(res.Scenarios[0].Reasons, " "); !strings.Contains(joined, "ANSWER-NEVER-RETURNED") {
+		t.Fatalf("reason must name the asserted-but-absent substring (comparator verdict, not a resolve error), got %q", joined)
+	}
+	if got := res.ExitCode(); got != 1 {
+		t.Fatalf("a red suite must map to exit 1 (CLI FAIL), got %d", got)
+	}
+}
+
 // TestLoadConfigErrors proves LoadConfig names the path on both failure modes — an
 // unreadable file and a malformed document — never a silent zero-value Config
 // (Constitution IV).

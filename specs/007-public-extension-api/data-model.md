@@ -79,6 +79,24 @@ config types", forced by the external-only in-code-construction test (SC-002):
 | `WithJudge(name, JudgeFactory)` | Option | same; the custom judge is USED only when `cfg.Judge.Backend == name`, but the collision check runs unconditionally; **implemented T004/T005** |
 | `Run(ctx, Config, ...Option) (Results, error)` | func | fresh sealed composition root per call; reentrant; honors ctx cancellation (feature 003 semantics) |
 
+#### Run-orchestration options (consumer-zero surface — T012, research R7)
+
+The CLI is "consumer zero": all of `cmd/mentat`'s run *execution and composition*
+flows through these options and `mentat.Run` — there is exactly one composition
+path. (Process concerns that are not run composition — signal handling and the
+`os.Exit` call — remain in `main`.) Each option defaults to the prior library-mode
+behaviour (silent, no reports, unlimited), so an embedding caller that passes none
+gets an unchanged silent `Run`.
+
+| Symbol | Signature (shape) | Rules |
+|--------|-------------------|-------|
+| `WithOutput(io.Writer)` | Option | destination for the godog pretty report; unset ⇒ `io.Discard` (library mode narrates nothing); a nil writer behaves as the default (Constitution IV, no nil-writer panic); CLI passes `os.Stdout` — **implemented T012** |
+| `WithConcurrency(int)` | Option | godog scenario-concurrency; `<1` ⇒ 1 (documented default, not a zero passed through); CLI `-concurrency` — **implemented T012** |
+| `WithTags(string)` | Option | godog tag expression selecting scenarios; `""` ⇒ all; CLI `-tags` — **implemented T012** |
+| `WithFailFast(bool)` | Option | godog `StopOnFailure`; `false` ⇒ run all; CLI `-fail-fast` — **implemented T012** |
+| `WithVerbosity(io.Writer, verbose, debug bool)` | Option | narration writer + level; unset ⇒ silent discard handler (SC-005 byte-identical happy path); a nil writer is the silent default; CLI passes `os.Stderr` + `-v`/`-vv` — **implemented T012** |
+| `WithReports(map[string]string)` | Option | reporter-name→path (`json`/`html`/`junit`); emitted after pricing; a write failure is a loud `Run` error preserving the reporter wording (Constitution IV), never a silent skip; CLI assembles from `-report-json`/`-report-html`/`-junit` — **implemented T012** |
+
 ### Factory types (registration) — T004/T005
 
 The `With*` hooks take a factory, not an instance, so a registered adapter is
@@ -100,6 +118,7 @@ importing anything internal (SC-006).
 |--------|--------|-------|
 | `Results` | `Scenarios []ScenarioResult`, `Passed/Failed int`, `Interrupted bool`, plus the suite report aggregates mirroring `core.RunReport`: `TotalCost float64` and `JudgeTotal *JudgeUsage` (suite-wide judge ledger; nil when no scenario made a judge call — no fabricated zeros) | status equivalent to CLI exit semantics; aggregates asserted in T008 — **implemented T008/T009** |
 | `ScenarioResult` | `Name string`, `FeatureFile string`, `Pass bool`, `Reasons []string`, `Cost float64`, `RunIDs []string`, `DerivationNote string`, `Judge *JudgeUsage` — facade-OWNED struct (not an alias) so `core.RunRecord` etc. never leak | mirrors report collector entries — **implemented T008/T009** |
+| `(Results) ExitCode() int` | method | Results⇔CLI exit-semantics contract: `Interrupted` ⇒ 130 (wins over a red suite so CI can tell cancellation from failure), else `Failed>0` ⇒ 1, else 0; the CLI (consumer-zero) maps its process exit through this — **implemented T012** |
 
 `FeatureFile` is populated from Godog's `scenario.Uri` threaded through
 `steps.go` → `report.Derive` → `core.ScenarioResult` → the facade, so a consumer
