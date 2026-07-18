@@ -231,6 +231,14 @@ func Load(data []byte) (Config, error) {
 // conflicting with a simultaneously-set resolved twin is a hard error naming both
 // fields — ambiguity is never guessed (Constitution IV).
 //
+// BOTH halves of a twin get the same value validation, in the same words: a
+// negative Budget.Timeout, a negative Budget.KillGrace or a negative
+// Completeness.Settle written in code fails exactly as the equivalent raw string
+// fails (contracts/config-resolve.md Law 4). This is not cosmetic — each of those
+// values is read downstream through a `> 0` guard (engine.go's deadline,
+// shell.go's WaitDelay, correlate.go's settle barrier), so accepting one would
+// silently DISARM the mechanism instead of bounding it.
+//
 // Every failure returns a descriptive, wrapped error naming the offending target,
 // field and value; there is no silent fallback to a default on bad input.
 func Resolve(c *Config) error {
@@ -259,7 +267,7 @@ func Resolve(c *Config) error {
 	if err != nil {
 		return err
 	}
-	killGrace, err = resolveKillGraceTwin(c.KillGrace, killGrace, c.Budget.KillGrace)
+	killGrace, err = resolveKillGraceTwin("kill_grace", c.KillGrace, killGrace, c.Budget.KillGrace)
 	if err != nil {
 		return err
 	}
@@ -304,12 +312,13 @@ func Resolve(c *Config) error {
 		if terr != nil {
 			return terr
 		}
-		// A zero KillGrace on an otherwise-explicit budget is not a choice — it
-		// disarms the driver's reap (shell.go only sets cmd.WaitDelay when it is
-		// positive), so it takes the suite value like any other zero field (Law 2).
-		targetKillGrace := killGrace
-		if t.Budget.KillGrace != 0 {
-			targetKillGrace = t.Budget.KillGrace
+		// kill_grace has no per-target raw twin (it is suite-wide in YAML), so the
+		// target level passes an empty raw: a zero explicit value inherits the suite
+		// value, a positive one overrides it, and a negative one is rejected in the
+		// suite rule's words.
+		targetKillGrace, kerr := resolveKillGraceTwin(fmt.Sprintf("target %q kill_grace", name), "", killGrace, t.Budget.KillGrace)
+		if kerr != nil {
+			return kerr
 		}
 		t.Budget = RunBudget{Timeout: tt, Unbounded: tu, KillGrace: targetKillGrace}
 		re, eerr := validateExtract(name, t.Adapter, t.Extract)
@@ -439,6 +448,15 @@ func resolveCompleteness(target, adapter string, c Completeness) (Completeness, 
 		// wins over the default (Law 2) — only a zero window takes it. Adapters with
 		// no registered default keep a zero window — not a speculative guarantee.
 		// A caller wanting a genuine zero window writes SettleRaw: "0s".
+		//
+		// A negative resolved window is not an explicit choice, it is a bad value, and
+		// it gets the raw half's rule in the raw half's exact words (Law 4). Letting it
+		// through would reach correlate.go's `Contract.Settle > 0` guard and silently
+		// disarm the settle barrier — discarding feature 008's soundness guarantee for
+		// absence assertions on a config the YAML path rejects.
+		if c.Settle < 0 {
+			return Completeness{}, fmt.Errorf("target %q: completeness.settle: must be >= 0, got %s", target, c.Settle)
+		}
 		if c.Settle == 0 {
 			c.Settle = defaultSettle[adapter]
 		}
@@ -545,6 +563,24 @@ func resolveBudgetTwin(key, raw string, fromRaw time.Duration, rawUnbounded bool
 	if !budgetIsExplicit(b) {
 		return fromRaw, rawUnbounded, nil
 	}
+	// Unbounded and a non-zero Timeout are contradictory halves of one decision, and
+	// YAML cannot express the pair at all (run_timeout is a duration OR the literal
+	// "unbounded"). Silently keeping Unbounded would discard a bound the caller
+	// actually wrote and run without any deadline, so it is a hard error naming both
+	// fields — the same rule every other contradictory pair here gets (Constitution IV).
+	if b.Unbounded && b.Timeout != 0 {
+		return 0, false, fmt.Errorf(
+			"%s: Budget.Unbounded is set together with Budget.Timeout %s; set exactly one of them (%q means no timeout)",
+			key, b.Timeout, unboundedValue)
+	}
+	// The explicit half is validated by resolveTimeout's rule, in resolveTimeout's
+	// exact words (Law 4 — same errors both paths). Without this a negative Timeout
+	// written in code sailed through, and engine.go arms a deadline only when
+	// `budget.Timeout > 0`: the caller got an UNBOUNDED run out of a value the YAML
+	// path rejects outright.
+	if b.Timeout < 0 {
+		return 0, false, fmt.Errorf("%s: must be > 0, got %q (use %q for no limit)", key, b.Timeout.String(), unboundedValue)
+	}
 	if strings.TrimSpace(raw) != "" && (b.Timeout != fromRaw || b.Unbounded != rawUnbounded) {
 		return 0, false, fmt.Errorf(
 			"%s %q resolves to %s but Budget.Timeout is already set to %s; set exactly one of them",
@@ -554,16 +590,28 @@ func resolveBudgetTwin(key, raw string, fromRaw time.Duration, rawUnbounded bool
 }
 
 // resolveKillGraceTwin applies the same two laws to the kill_grace/Budget.KillGrace
-// twin. A zero explicit value defers to the raw-derived one; a non-zero explicit
+// twin, at suite level (key "kill_grace", against the raw suite string) or target
+// level (key `target "x" kill_grace`, with no raw twin — kill_grace is suite-wide in
+// YAML). A zero explicit value defers to the raw-derived one; a non-zero explicit
 // value wins; both set and disagreeing is a hard error naming both.
-func resolveKillGraceTwin(raw string, fromRaw, explicit time.Duration) (time.Duration, error) {
+func resolveKillGraceTwin(key, raw string, fromRaw, explicit time.Duration) (time.Duration, error) {
+	// A zero KillGrace on an otherwise-explicit budget is not a choice — it disarms
+	// the driver's reap (shell.go only sets cmd.WaitDelay when it is positive) — so it
+	// takes the raw-derived value like any other zero field (Law 2).
 	if explicit == 0 {
 		return fromRaw, nil
 	}
+	// The explicit half is validated by resolveKillGrace's rule, in resolveKillGrace's
+	// exact words (Law 4). A negative value would otherwise reach shell.go's
+	// `spec.KillGrace > 0` guard, set no WaitDelay, and leave a signal-ignoring child
+	// unreaped — while breaking RunBudget's own "KillGrace is always > 0" contract.
+	if explicit < 0 {
+		return 0, fmt.Errorf("%s: must be > 0, got %q", key, explicit.String())
+	}
 	if strings.TrimSpace(raw) != "" && explicit != fromRaw {
 		return 0, fmt.Errorf(
-			"kill_grace %q resolves to %s but Budget.KillGrace is already set to %s; set exactly one of them",
-			strings.TrimSpace(raw), fromRaw, explicit)
+			"%s %q resolves to %s but Budget.KillGrace is already set to %s; set exactly one of them",
+			key, strings.TrimSpace(raw), fromRaw, explicit)
 	}
 	return explicit, nil
 }

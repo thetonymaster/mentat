@@ -1881,6 +1881,37 @@ func TestResolveBudgetLaws(t *testing.T) {
 			wantErr:        true,
 			wantErrSub:     []string{"kill_grace", "5s", "Budget.KillGrace", "9s"},
 		},
+		{
+			// T031 — code-path-only rule: kill_grace is suite-wide in YAML, so a
+			// per-target kill grace has no raw twin to compare against and cannot be a
+			// TestConfigPathParity row. It still needs the same guard: shell.go:87 sets
+			// cmd.WaitDelay only `if spec.KillGrace > 0`, and this is the budget the
+			// driver actually runs under. Zero still means "inherit the suite value"
+			// (asserted by the rows above) — only a negative value is rejected.
+			name:         "negative kill grace on the target budget is a hard error",
+			targetBudget: RunBudget{Timeout: 30 * time.Second, KillGrace: -2 * time.Second},
+			wantErr:      true,
+			wantErrSub:   []string{`target "a" kill_grace: must be > 0, got "-2s"`},
+		},
+		{
+			// T031 — Timeout and Unbounded are contradictory halves of one decision and
+			// YAML cannot express the pair at all (run_timeout is either a duration or
+			// the literal "unbounded"). Resolve used to silently discard the Timeout,
+			// which is the one outcome Constitution IV forbids: the caller wrote a bound
+			// and got an unbounded run. Every other contradictory pair in this feature is
+			// a hard error naming both fields, so this one is too.
+			name:         "a bounded timeout together with unbounded is a hard error naming both",
+			targetBudget: RunBudget{Timeout: 5 * time.Minute, Unbounded: true},
+			wantErr:      true,
+			wantErrSub:   []string{`target "a" run_timeout`, "Budget.Unbounded", "Budget.Timeout", "5m0s", "set exactly one of them"},
+		},
+		{
+			// The suite level carries the same contradiction and the same rule.
+			name:        "a bounded suite timeout together with unbounded is a hard error",
+			suiteBudget: RunBudget{Timeout: 90 * time.Second, Unbounded: true},
+			wantErr:     true,
+			wantErrSub:  []string{"run_timeout", "Budget.Unbounded", "Budget.Timeout", "1m30s", "set exactly one of them"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -2263,6 +2294,63 @@ targets:
 			code:       func() Config { return Config{Judge: JudgeConfig{MaxCostUSD: -1}} },
 			wantErr:    true,
 			wantErrSub: []string{"judge.max_cost_usd must be finite and >= 0", "-1"},
+		},
+		{
+			// T031 — Law 4 for the RESOLVED half of the run_timeout twin. The raw half
+			// has always been hard-rejected; the resolved half was returned unvalidated,
+			// and engine.go:274 arms a deadline only `if !budget.Unbounded &&
+			// budget.Timeout > 0`. So a negative Timeout written in code silently
+			// produced an UNBOUNDED run — the exact outcome the raw-path guard exists to
+			// prevent. Each row pins IDENTICAL error text (the harness compares
+			// loadErr.Error() to resolveErr.Error()), not merely both-non-nil.
+			name: "T031 negative suite Budget.Timeout",
+			yaml: "run_timeout: \"-5m0s\"\n",
+			code: func() Config {
+				return Config{Budget: RunBudget{Timeout: -5 * time.Minute}}
+			},
+			wantErr:    true,
+			wantErrSub: []string{`run_timeout: must be > 0, got "-5m0s" (use "unbounded" for no limit)`},
+		},
+		{
+			// T031 — same for the kill_grace twin. driver/shell.go:87 sets cmd.WaitDelay
+			// only `if spec.KillGrace > 0`, so a negative KillGrace disarms the kill
+			// escalation entirely and a signal-ignoring child is never reaped. It also
+			// falsifies RunBudget's own documented invariant ("KillGrace is always > 0").
+			name: "T031 negative suite Budget.KillGrace",
+			yaml: "kill_grace: \"-1s\"\n",
+			code: func() Config {
+				return Config{Budget: RunBudget{KillGrace: -time.Second}}
+			},
+			wantErr:    true,
+			wantErrSub: []string{`kill_grace: must be > 0, got "-1s"`},
+		},
+		{
+			// T031 — same for the completeness twin. correlate.go:315 applies the settle
+			// barrier only `if req.Contract.Settle > 0`, so a negative resolved Settle
+			// silently DISARMS feature 008's flush barrier and returns absence verdicts
+			// with no soundness guarantee behind them.
+			name: "T031 negative target Completeness.Settle",
+			yaml: "targets:\n  a: { adapter: shell, completeness: { settle: \"-3s\" } }\n",
+			code: func() Config {
+				return Config{Targets: map[string]Target{
+					"a": {Adapter: "shell", Completeness: Completeness{Settle: -3 * time.Second}},
+				}}
+			},
+			wantErr:    true,
+			wantErrSub: []string{`target "a": completeness.settle: must be >= 0, got -3s`},
+		},
+		{
+			// T031 — a per-target Budget carries the same hole as the suite one, and the
+			// target budget is the one the driver actually runs under.
+			name: "T031 negative target Budget.Timeout",
+			yaml: "targets:\n  a: { adapter: shell, run_timeout: \"-1s\" }\n",
+			code: func() Config {
+				return Config{Targets: map[string]Target{
+					"a": {Adapter: "shell", Budget: RunBudget{Timeout: -time.Second}},
+				}}
+			},
+			wantErr:    true,
+			wantErrSub: []string{`target "a" run_timeout: must be > 0, got "-1s" (use "unbounded" for no limit)`},
 		},
 	}
 
