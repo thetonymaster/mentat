@@ -26,7 +26,9 @@ lint:
 # (mentat/internal) package: a grep match is a non-zero `!`-negated exit, so CI
 # fails and names the offending file:line.
 example:
-	cd examples/kafkaecho && go build ./... && go test ./...
+	cd examples/kafkaecho && test -z "$$(gofmt -l .)" || { echo "gofmt needs formatting:"; gofmt -l .; exit 1; }
+	cd examples/kafkaecho && go vet ./... && go build ./... && go test ./...
+	[ ! -f examples/kafkaecho/.golangci.yml ] || (cd examples/kafkaecho && golangci-lint run ./...)
 	! grep -rn --include='*.go' "mentat/internal" examples/
 
 clean:

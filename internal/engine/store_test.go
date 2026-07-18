@@ -32,6 +32,7 @@ func TestBuildStoreAppliesExtraStore(t *testing.T) {
 		{name: "custom store resolves by name", storeName: "xstore", opts: []Option{WithExtraStore("xstore", sf)}},
 		{name: "store collides with built-in", storeName: "file", opts: []Option{WithExtraStore("file", sf)}, wantErrSub: []string{"WithStore", "file"}},
 		{name: "store collides with earlier extra", storeName: "dup-s", opts: []Option{WithExtraStore("dup-s", sf), WithExtraStore("dup-s", sf)}, wantErrSub: []string{"WithStore", "dup-s"}},
+		{name: "nil store factory rejected", storeName: "xnil", opts: []Option{WithExtraStore("xnil", nil)}, wantErrSub: []string{"WithStore", "xnil", "nil"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -54,6 +55,20 @@ func TestBuildStoreAppliesExtraStore(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestBuildStoreRejectsNilStoreFromFactory proves a store factory returning
+// (nil, nil) is a loud BuildStore error, not a silently-returned nil store that
+// would panic at drive time (Constitution IV: no zero-value success).
+func TestBuildStoreRejectsNilStoreFromFactory(t *testing.T) {
+	nilStore := func(config.Config) (core.TraceStore, error) { return nil, nil }
+	_, err := BuildStore(config.Config{Store: "xnil"}, WithExtraStore("xnil", nilStore))
+	if err == nil {
+		t.Fatal("BuildStore must reject a store factory returning (nil, nil), got nil error")
+	}
+	if !strings.Contains(err.Error(), "xnil") {
+		t.Fatalf("BuildStore error = %q, want it to name the store %q", err, "xnil")
 	}
 }
 

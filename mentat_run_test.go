@@ -129,9 +129,88 @@ func TestRunRequiresFeaturePaths(t *testing.T) {
 	}
 }
 
+// TestRunFailsOnUnloadableFeatures proves Run does not silently succeed when its
+// feature paths cannot be loaded: a nonexistent path or a malformed .feature makes
+// godog's suite return a non-zero status with zero collected scenarios, which —
+// if the status were discarded — would look like an empty green run. Run must
+// instead surface a descriptive harness error with empty Results (Constitution IV:
+// no silent fallback).
+func TestRunFailsOnUnloadableFeatures(t *testing.T) {
+	dir := t.TempDir()
+	malformed := writeFile(t, dir, "bad.feature", "this is not valid gherkin\n:::\n")
+	tests := []struct {
+		name    string
+		path    string
+		wantSub string
+	}{
+		{name: "nonexistent feature path", path: filepath.Join(dir, "does-not-exist.feature"), wantSub: "feature"},
+		{name: "malformed feature file", path: malformed, wantSub: "feature"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := mentat.Config{Store: "file", StorePath: dir, Targets: echoTarget()}
+			res, err := mentat.Run(context.Background(), cfg, mentat.WithFeatures(tt.path))
+			if err == nil {
+				t.Fatalf("Run with unloadable features must error, got results %+v", res)
+			}
+			if !strings.Contains(err.Error(), tt.wantSub) {
+				t.Fatalf("error should name the feature-load failure, got %q", err.Error())
+			}
+			if len(res.Scenarios) != 0 || res.Passed != 0 || res.Failed != 0 {
+				t.Fatalf("a harness error must return empty Results, got %+v", res)
+			}
+		})
+	}
+}
+
+// TestRunRejectsNilFactories proves the public With* registration options reject a
+// nil factory with a descriptive harness error instead of panicking deep in the
+// composition root. The facade is the supported extension surface (FR-002/SC-002:
+// "a third party can embed Mentat"), so a nil factory passed through it must fail
+// loudly and unconditionally — like a name collision does — never nil-pointer
+// dereference when the factory is invoked or wrapped (Constitution IV). This is the
+// facade-level counterpart to the engine-seam nil guards: the facade wraps
+// store/judge factories in a non-nil closure, so the engine guard cannot see the
+// caller's nil — it must be caught here.
+func TestRunRejectsNilFactories(t *testing.T) {
+	dir := t.TempDir()
+	feature := `Feature: f
+  Scenario: s
+    Given the agent target "bot"
+    When I run scenario "x"
+    Then total tokens are under 5000
+`
+	featPath := writeFile(t, dir, "f.feature", feature)
+	cfg := mentat.Config{Store: "file", StorePath: dir, Targets: echoTarget()}
+
+	tests := []struct {
+		name    string
+		opt     mentat.Option
+		wantSub string
+	}{
+		{name: "nil driver factory", opt: mentat.WithDriver("xd", nil), wantSub: "WithDriver"},
+		{name: "nil store factory", opt: mentat.WithStore("xs", nil), wantSub: "WithStore"},
+		{name: "nil comparator factory", opt: mentat.WithComparator("xc", nil), wantSub: "WithComparator"},
+		{name: "nil judge factory", opt: mentat.WithJudge("xj", nil), wantSub: "WithJudge"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res, err := mentat.Run(context.Background(), cfg, mentat.WithFeatures(featPath), tt.opt)
+			if err == nil {
+				t.Fatalf("Run with a %s must error, got results %+v", tt.name, res)
+			}
+			if !strings.Contains(err.Error(), tt.wantSub) {
+				t.Fatalf("error should name the seam option, got %q", err.Error())
+			}
+			if len(res.Scenarios) != 0 || res.Passed != 0 || res.Failed != 0 {
+				t.Fatalf("a harness error must return empty Results, got %+v", res)
+			}
+		})
+	}
+}
+
 // TestRunHarnessErrors proves a composition failure is a wrapped, path-named Run
-// error with empty Results — never a partial silent success (Constitution IV). These
-// calls mutate the package-global registry, so they stay serial (no t.Parallel).
+// error with empty Results — never a partial silent success (Constitution IV).
 func TestRunHarnessErrors(t *testing.T) {
 	dir := t.TempDir()
 	tests := []struct {

@@ -91,6 +91,9 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator, opts ...O
 	if err != nil {
 		return nil, fmt.Errorf("build judge %q: %w", backend, err)
 	}
+	if j == nil {
+		return nil, fmt.Errorf("build judge %q: factory returned a nil judge with no error", backend)
+	}
 	votes := cfg.Judge.Votes
 	if votes == 0 {
 		votes = 1
@@ -150,18 +153,27 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator, opts ...O
 // built-in registration and Seal, so post-seal registration stays unrepresentable.
 func applyExtras(o options, reg *registry.Registry) error {
 	for _, ed := range o.extraDrivers {
+		if ed.driver == nil {
+			return fmt.Errorf("engine: WithDriver: driver %q is nil; a registered driver must be a non-nil instance", ed.name)
+		}
 		if _, exists := reg.Driver(ed.name); exists {
 			return fmt.Errorf("engine: WithDriver: adapter %q is already registered (a built-in or an earlier registration); adapter names must be unique", ed.name)
 		}
 		reg.RegisterDriver(ed.name, ed.driver)
 	}
 	for _, ec := range o.extraComparators {
+		if ec.comparator == nil {
+			return fmt.Errorf("engine: WithComparator: comparator %q is nil; a registered comparator must be a non-nil instance", ec.name)
+		}
 		if _, exists := reg.Comparator(ec.name); exists {
 			return fmt.Errorf("engine: WithComparator: comparator %q is already registered (a built-in or an earlier registration); comparator names must be unique", ec.name)
 		}
 		reg.RegisterComparator(ec.name, ec.comparator)
 	}
 	for _, ej := range o.extraJudges {
+		if ej.factory == nil {
+			return fmt.Errorf("engine: WithJudge: judge factory %q is nil; a registered judge factory must be non-nil", ej.name)
+		}
 		if _, exists := reg.Judge(ej.name); exists {
 			return fmt.Errorf("engine: WithJudge: judge %q is already registered (a built-in or an earlier registration); judge names must be unique", ej.name)
 		}

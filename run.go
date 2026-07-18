@@ -202,6 +202,9 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 	// so a duplicate store name surfaces as a loud collision error from BuildStore.
 	var storeOpts []engine.Option
 	for _, s := range ro.stores {
+		if s.factory == nil {
+			return Results{}, fmt.Errorf("mentat: WithStore %q: nil factory; register a non-nil StoreFactory", s.name)
+		}
 		storeOpts = append(storeOpts, engine.WithExtraStore(s.name, func(c config.Config) (core.TraceStore, error) {
 			return s.factory(c)
 		}))
@@ -217,6 +220,9 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 	// silent nil driver (Constitution IV).
 	buildOpts := []engine.Option{engine.WithLogger(logger)}
 	for _, d := range ro.drivers {
+		if d.factory == nil {
+			return Results{}, fmt.Errorf("mentat: WithDriver %q: nil factory; register a non-nil DriverFactory", d.name)
+		}
 		inst, ferr := d.factory(cfg)
 		if ferr != nil {
 			return Results{}, fmt.Errorf("mentat: build driver %q: %w", d.name, ferr)
@@ -224,6 +230,9 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 		buildOpts = append(buildOpts, engine.WithExtraDriver(d.name, inst))
 	}
 	for _, c := range ro.comparators {
+		if c.factory == nil {
+			return Results{}, fmt.Errorf("mentat: WithComparator %q: nil factory; register a non-nil ComparatorFactory", c.name)
+		}
 		inst, ferr := c.factory(cfg)
 		if ferr != nil {
 			return Results{}, fmt.Errorf("mentat: build comparator %q: %w", c.name, ferr)
@@ -234,6 +243,9 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 	// the engine resolves one only when cfg.Judge.Backend names it, so a factory
 	// error surfaces at Build (build engine), not here.
 	for _, j := range ro.judges {
+		if j.factory == nil {
+			return Results{}, fmt.Errorf("mentat: WithJudge %q: nil factory; register a non-nil JudgeFactory", j.name)
+		}
 		buildOpts = append(buildOpts, engine.WithExtraJudge(j.name, func(c config.Config) (core.Judge, error) {
 			return j.factory(c)
 		}))
@@ -253,6 +265,16 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 			DefaultContext: ctx,
 			Concurrency:    1,
 		},
+	}
+
+	// Validate feature loading up front: suite.Run folds a load/parse failure into a
+	// non-zero exit code with zero collected scenarios, which would otherwise surface
+	// as an empty green Results — a silent fallback (Constitution IV). RetrieveFeatures
+	// parses the same Options.Paths, so a missing or malformed .feature is a loud,
+	// path-named harness error here instead of a fake success (and godog does not leak
+	// the parse error to stderr on the discarded Run path).
+	if _, ferr := suite.RetrieveFeatures(); ferr != nil {
+		return Results{}, fmt.Errorf("mentat: load features %v: %w", ro.featurePaths, ferr)
 	}
 
 	started := time.Now()

@@ -40,6 +40,9 @@ func BuildStore(cfg config.Config, opts ...Option) (core.TraceStore, error) {
 	// collision-checked so a name clashing with a built-in (tempo/file) or an earlier
 	// registration is a loud, seam-and-name error, never a silent last-wins overwrite.
 	for _, es := range o.extraStores {
+		if es.factory == nil {
+			return nil, fmt.Errorf("engine: WithStore: store %q has a nil factory; a registered store factory must be non-nil", es.name)
+		}
 		if _, exists := reg.Store(es.name); exists {
 			return nil, fmt.Errorf("engine: WithStore: store %q is already registered (a built-in or an earlier registration); store names must be unique", es.name)
 		}
@@ -53,6 +56,9 @@ func BuildStore(cfg config.Config, opts ...Option) (core.TraceStore, error) {
 	st, err := f(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("building store %q: %w", cfg.Store, err)
+	}
+	if st == nil {
+		return nil, fmt.Errorf("building store %q: factory returned a nil store with no error", cfg.Store)
 	}
 	reg.Seal()
 	return st, nil

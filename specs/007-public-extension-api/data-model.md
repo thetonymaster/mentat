@@ -99,14 +99,12 @@ importing anything internal (SC-006).
 | Symbol | Fields | Rules |
 |--------|--------|-------|
 | `Results` | `Scenarios []ScenarioResult`, `Passed/Failed int`, `Interrupted bool`, plus the suite report aggregates mirroring `core.RunReport`: `TotalCost float64` and `JudgeTotal *JudgeUsage` (suite-wide judge ledger; nil when no scenario made a judge call — no fabricated zeros) | status equivalent to CLI exit semantics; aggregates asserted in T008 — **implemented T008/T009** |
-| `ScenarioResult` | `Name string`, `Pass bool`, `Reasons []string`, `Cost float64`, `RunIDs []string`, `DerivationNote string`, `Judge *JudgeUsage` — facade-OWNED struct (not an alias) so `core.RunRecord` etc. never leak | mirrors report collector entries — **implemented T008/T009** |
+| `ScenarioResult` | `Name string`, `FeatureFile string`, `Pass bool`, `Reasons []string`, `Cost float64`, `RunIDs []string`, `DerivationNote string`, `Judge *JudgeUsage` — facade-OWNED struct (not an alias) so `core.RunRecord` etc. never leak | mirrors report collector entries — **implemented T008/T009** |
 
-> **Feature-file field gap (T008/T009):** the prose list above names a "feature file"
-> field on `ScenarioResult`, but the report collector (`core.ScenarioResult`) does not
-> capture the scenario's `.feature` URI — only the steps `world` sees `scenario.Uri`,
-> which never reaches `report.Derive`. The field is therefore **OMITTED** for now
-> rather than fabricated. Threading `scenario.Uri` → steps → collector → `Derive` is a
-> deferred decision; adding the field later is a backward-compatible surface addition.
+`FeatureFile` is populated from Godog's `scenario.Uri` threaded through
+`steps.go` → `report.Derive` → `core.ScenarioResult` → the facade, so a consumer
+running several feature files can tell scenarios apart by origin, not just by
+`Name` (which may collide across files).
 
 ## Not exported (explicit)
 

@@ -46,20 +46,25 @@ func TestBuildAppliesExtraSeams(t *testing.T) {
 	jf := func(config.Config) (core.Judge, error) { return extraStubJudge{}, nil }
 
 	tests := []struct {
-		name       string
-		opts       []Option
-		wantErrSub []string // nil ⇒ Build succeeds
-		wantDriver string   // non-empty ⇒ assert this driver name is registered after Build
+		name           string
+		opts           []Option
+		wantErrSub     []string // nil ⇒ Build succeeds
+		wantDriver     string   // non-empty ⇒ assert this driver name is registered after Build
+		wantComparator string   // non-empty ⇒ assert this comparator name is registered after Build
+		wantJudge      string   // non-empty ⇒ assert this judge name is registered after Build
 	}{
 		{name: "custom driver registers as first-class adapter", opts: []Option{WithExtraDriver("xdrv", drv)}, wantDriver: "xdrv"},
 		{name: "driver collides with built-in", opts: []Option{WithExtraDriver("shell", drv)}, wantErrSub: []string{"WithDriver", "shell"}},
 		{name: "driver collides with earlier extra", opts: []Option{WithExtraDriver("dup-d", drv), WithExtraDriver("dup-d", drv)}, wantErrSub: []string{"WithDriver", "dup-d"}},
-		{name: "custom comparator registers", opts: []Option{WithExtraComparator("xcmp", cmp)}},
+		{name: "custom comparator registers", opts: []Option{WithExtraComparator("xcmp", cmp)}, wantComparator: "xcmp"},
 		{name: "comparator collides with built-in", opts: []Option{WithExtraComparator("result", cmp)}, wantErrSub: []string{"WithComparator", "result"}},
 		{name: "comparator collides with earlier extra", opts: []Option{WithExtraComparator("dup-c", cmp), WithExtraComparator("dup-c", cmp)}, wantErrSub: []string{"WithComparator", "dup-c"}},
-		{name: "custom judge registers", opts: []Option{WithExtraJudge("xjudge", jf)}},
+		{name: "custom judge registers", opts: []Option{WithExtraJudge("xjudge", jf)}, wantJudge: "xjudge"},
 		{name: "judge collides with built-in", opts: []Option{WithExtraJudge("claude", jf)}, wantErrSub: []string{"WithJudge", "claude"}},
 		{name: "judge collides with earlier extra", opts: []Option{WithExtraJudge("dup-j", jf), WithExtraJudge("dup-j", jf)}, wantErrSub: []string{"WithJudge", "dup-j"}},
+		{name: "nil driver instance rejected", opts: []Option{WithExtraDriver("xnil", nil)}, wantErrSub: []string{"WithDriver", "xnil", "nil"}},
+		{name: "nil comparator instance rejected", opts: []Option{WithExtraComparator("xnil", nil)}, wantErrSub: []string{"WithComparator", "xnil", "nil"}},
+		{name: "nil judge factory rejected", opts: []Option{WithExtraJudge("xnil", nil)}, wantErrSub: []string{"WithJudge", "xnil", "nil"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -76,6 +81,16 @@ func TestBuildAppliesExtraSeams(t *testing.T) {
 						t.Fatalf("extra driver %q not registered after Build", tt.wantDriver)
 					}
 				}
+				if tt.wantComparator != "" {
+					if _, ok := eng.reg.Comparator(tt.wantComparator); !ok {
+						t.Fatalf("extra comparator %q not registered after Build", tt.wantComparator)
+					}
+				}
+				if tt.wantJudge != "" {
+					if _, ok := eng.reg.Judge(tt.wantJudge); !ok {
+						t.Fatalf("extra judge %q not registered after Build", tt.wantJudge)
+					}
+				}
 				return
 			}
 			if err == nil {
@@ -87,6 +102,22 @@ func TestBuildAppliesExtraSeams(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestBuildRejectsNilJudgeFromFactory proves a judge factory that returns (nil, nil)
+// is a loud Build error, not a silently-wired nil judge that would panic at match
+// time. A factory that cannot produce a judge must error (Constitution IV: no
+// zero-value success).
+func TestBuildRejectsNilJudgeFromFactory(t *testing.T) {
+	nilJudge := func(config.Config) (core.Judge, error) { return nil, nil }
+	cfg := config.Config{OTLPEndpoint: "x", Judge: config.JudgeConfig{Backend: "xjudge"}}
+	_, err := Build(cfg, nil, nil, WithExtraJudge("xjudge", nilJudge))
+	if err == nil {
+		t.Fatal("Build must reject a judge factory returning (nil, nil), got nil error")
+	}
+	if !strings.Contains(err.Error(), "xjudge") {
+		t.Fatalf("Build error = %q, want it to name the judge backend %q", err, "xjudge")
 	}
 }
 
