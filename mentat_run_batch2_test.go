@@ -160,6 +160,30 @@ func TestWithReports(t *testing.T) {
 	}
 }
 
+// --- Parallelism note for the judge-budget tests below ------------------------
+//
+// The judge-budget tests call t.Parallel(). The package-wide justification lives in
+// mentat_run_test.go ("Parallelism note for the Run tests"): seam registration is
+// PER-ENGINE (engine.Build mints a fresh registry.Registry per call and Seal()s it,
+// spec 007 T010/T011), the only package-global Run writes is the post-run reporter
+// map under its own mutex, and no test in this package uses t.Setenv/t.Chdir. The
+// group-specific facts:
+//
+//   - runJudgeBudget and runJudgeBudgetTwoScenarios are stateless factories: each
+//     CALL mints its own bus (newBus), its own fixture dir (t.TempDir) and its own
+//     Config/Targets/Pricing maps. Nothing is shared between calls.
+//   - countingBudgetJudge's counter is a per-call function-local int64 addressed by
+//     pointer and mutated only via sync/atomic, so it is -race clean.
+//   - Each test registers under a distinct name (budget-and-emit, budget-cancel-next,
+//     budget-trip, budget-off) — and even a REUSED name across concurrent Runs is
+//     proven green by TestRunConcurrentIndependent (mentat_run_reentrancy_test.go).
+//   - Prior art in this very file: TestRunEnforcesJudgeBudget's two subtests already
+//     drive runJudgeBudget concurrently under t.Parallel().
+//
+// The payoff is -race pressure on the registry-isolation invariant, NOT wall clock
+// (each run is ~0.00s) — CLAUDE.md: t.Parallel is a soft correctness default for unit
+// tests, not a CI-speed measure.
+
 // budgetJudge is a stub judge that always matches and reports a fixed token usage, so
 // its priced cost is deterministic — enough to cross a low MaxCostUSD ceiling. It is
 // implemented against the facade aliases only (Judge/JudgeRequest/JudgeVerdict/JudgeUsage).
@@ -217,9 +241,8 @@ func runJudgeBudget(t *testing.T, regName string, maxUSD float64, extra ...menta
 // printed both; the recomposed Run must not early-return on the emit error before reading
 // budget.Err(). Each individual message keeps its original wrapping (so the emit-only and
 // budget-only tests still match), and errors.Join carries both here.
-//
-// No t.Parallel(): reuses the shared runJudgeBudget harness (registry mutation).
 func TestRunSurfacesEmitAndBudgetErrorsTogether(t *testing.T) {
+	t.Parallel()
 	// A junit target whose parent dir is absent forces EmitReports to fail; the low
 	// $0.01 ceiling against the fixed $0.02 spend trips the budget in the same run.
 	badJunit := filepath.Join(t.TempDir(), "no-such-dir", "report.xml")
@@ -315,9 +338,8 @@ func runJudgeBudgetTwoScenarios(t *testing.T, regName string, maxUSD float64) (m
 // hook cancels the budget context, so scenario 2's drive step aborts before its judge
 // call — the counting judge must be invoked EXACTLY ONCE. Without the cancellation,
 // scenario 2 would drive and judge too (count == 2).
-//
-// No t.Parallel(): reuses the shared registry-mutating Run path.
 func TestRunBudgetCancellationStopsNextScenario(t *testing.T) {
+	t.Parallel()
 	res, calls, err := runJudgeBudgetTwoScenarios(t, "budget-cancel-next", 0.01)
 
 	if err == nil {
