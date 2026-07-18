@@ -3,11 +3,74 @@ package engine
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/thetonymaster/mentat/internal/config"
+	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/store"
+	"github.com/thetonymaster/mentat/internal/trace"
 )
+
+// TestBuildStoreAppliesExtraStore pins the store half of FR-002: a facade-funneled
+// store factory (WithExtraStore) is registered and resolvable by name, and a name
+// colliding with a built-in (tempo/file) or an earlier extra fails loudly naming the
+// seam and the conflicting name — never a silent last-wins overwrite (Constitution IV).
+//
+// No t.Parallel(): kept serial by convention (the store registry is per-BuildStore now).
+func TestBuildStoreAppliesExtraStore(t *testing.T) {
+	sf := func(config.Config) (core.TraceStore, error) {
+		return store.NewInMemStore(map[string]*trace.Trace{}), nil
+	}
+
+	tests := []struct {
+		name       string
+		storeName  string // cfg.Store
+		opts       []Option
+		wantErrSub []string // nil ⇒ BuildStore succeeds and resolves the custom store
+	}{
+		{name: "custom store resolves by name", storeName: "xstore", opts: []Option{WithExtraStore("xstore", sf)}},
+		{name: "store collides with built-in", storeName: "file", opts: []Option{WithExtraStore("file", sf)}, wantErrSub: []string{"WithStore", "file"}},
+		{name: "store collides with earlier extra", storeName: "dup-s", opts: []Option{WithExtraStore("dup-s", sf), WithExtraStore("dup-s", sf)}, wantErrSub: []string{"WithStore", "dup-s"}},
+		{name: "nil store factory rejected", storeName: "xnil", opts: []Option{WithExtraStore("xnil", nil)}, wantErrSub: []string{"WithStore", "xnil", "nil"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st, err := BuildStore(config.Config{Store: tt.storeName}, tt.opts...)
+			if len(tt.wantErrSub) == 0 {
+				if err != nil {
+					t.Fatalf("BuildStore with extra store: %v", err)
+				}
+				if st == nil {
+					t.Fatal("BuildStore resolved a nil custom store")
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("BuildStore must reject %s, got nil error", tt.name)
+			}
+			for _, sub := range tt.wantErrSub {
+				if !strings.Contains(err.Error(), sub) {
+					t.Errorf("BuildStore error = %q, want substring %q", err, sub)
+				}
+			}
+		})
+	}
+}
+
+// TestBuildStoreRejectsNilStoreFromFactory proves a store factory returning
+// (nil, nil) is a loud BuildStore error, not a silently-returned nil store that
+// would panic at drive time (Constitution IV: no zero-value success).
+func TestBuildStoreRejectsNilStoreFromFactory(t *testing.T) {
+	nilStore := func(config.Config) (core.TraceStore, error) { return nil, nil }
+	_, err := BuildStore(config.Config{Store: "xnil"}, WithExtraStore("xnil", nilStore))
+	if err == nil {
+		t.Fatal("BuildStore must reject a store factory returning (nil, nil), got nil error")
+	}
+	if !strings.Contains(err.Error(), "xnil") {
+		t.Fatalf("BuildStore error = %q, want it to name the store %q", err, "xnil")
+	}
+}
 
 func TestBuildStore(t *testing.T) {
 	tests := []struct {

@@ -235,13 +235,17 @@ func TestDerive(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			sr := Derive(tt.scenName, tt.tags, tt.v, tt.evs, tt.pricing)
+			featureFile := tt.scenName + ".feature"
+			sr := Derive(tt.scenName, featureFile, tt.tags, tt.v, tt.evs, tt.pricing)
 
 			if (sr.DerivationNote != "") != tt.wantNote {
 				t.Errorf("DerivationNote = %q, wantNote = %v", sr.DerivationNote, tt.wantNote)
 			}
 			if sr.Name != tt.scenName {
 				t.Errorf("Name = %q, want %q", sr.Name, tt.scenName)
+			}
+			if sr.FeatureFile != featureFile {
+				t.Errorf("FeatureFile = %q, want %q", sr.FeatureFile, featureFile)
 			}
 			if sr.Pass != tt.wantPass {
 				t.Errorf("Pass = %v, want %v", sr.Pass, tt.wantPass)
@@ -359,7 +363,7 @@ func TestDeriveDegradation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			sr := Derive("s", nil, tt.v, tt.evs, core.Pricing{})
+			sr := Derive("s", "s.feature", nil, tt.v, tt.evs, core.Pricing{})
 			if sr.Pass != tt.wantPass {
 				t.Errorf("Pass = %v, want %v (derivation must not flip the verdict)", sr.Pass, tt.wantPass)
 			}

@@ -1,14 +1,125 @@
 package engine
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/thetonymaster/mentat/internal/config"
-	"github.com/thetonymaster/mentat/internal/registry"
+	"github.com/thetonymaster/mentat/internal/core"
 )
+
+// extraStubDriver/Comparator/Judge are minimal seam stubs used to exercise the
+// facade-funneled extra-registration path (WithExtraDriver/Comparator/Judge) and its
+// collision detection at the composition root (spec 007 FR-002). They do no work —
+// the collision check fires before any of them is ever invoked.
+type extraStubDriver struct{}
+
+func (extraStubDriver) Run(context.Context, core.RunSpec) (core.RunResult, error) {
+	return core.RunResult{}, nil
+}
+
+type extraStubComparator struct{}
+
+func (extraStubComparator) Name() string { return "extra-stub" }
+func (extraStubComparator) Compare(context.Context, core.Evidence, core.Expectation) (core.Verdict, error) {
+	return core.Verdict{Pass: true}, nil
+}
+
+type extraStubJudge struct{}
+
+func (extraStubJudge) Judge(context.Context, core.JudgeRequest) (core.JudgeVerdict, error) {
+	return core.JudgeVerdict{}, nil
+}
+
+// TestBuildAppliesExtraSeams pins the composition-root half of FR-002: facade-funneled
+// driver/comparator/judge registrations land in the registry as first-class seams, and
+// a name colliding with a built-in OR with an earlier extra fails loudly naming the
+// seam and the conflicting name — never a silent last-wins overwrite (Constitution IV).
+//
+// No t.Parallel(): kept serial by convention (the seam registry is per-engine now).
+func TestBuildAppliesExtraSeams(t *testing.T) {
+	drv := extraStubDriver{}
+	cmp := extraStubComparator{}
+	jf := func(config.Config) (core.Judge, error) { return extraStubJudge{}, nil }
+
+	tests := []struct {
+		name           string
+		opts           []Option
+		wantErrSub     []string // nil ⇒ Build succeeds
+		wantDriver     string   // non-empty ⇒ assert this driver name is registered after Build
+		wantComparator string   // non-empty ⇒ assert this comparator name is registered after Build
+		wantJudge      string   // non-empty ⇒ assert this judge name is registered after Build
+	}{
+		{name: "custom driver registers as first-class adapter", opts: []Option{WithExtraDriver("xdrv", drv)}, wantDriver: "xdrv"},
+		{name: "driver collides with built-in", opts: []Option{WithExtraDriver("shell", drv)}, wantErrSub: []string{"WithDriver", "shell"}},
+		{name: "driver collides with earlier extra", opts: []Option{WithExtraDriver("dup-d", drv), WithExtraDriver("dup-d", drv)}, wantErrSub: []string{"WithDriver", "dup-d"}},
+		{name: "custom comparator registers", opts: []Option{WithExtraComparator("xcmp", cmp)}, wantComparator: "xcmp"},
+		{name: "comparator collides with built-in", opts: []Option{WithExtraComparator("result", cmp)}, wantErrSub: []string{"WithComparator", "result"}},
+		{name: "comparator collides with earlier extra", opts: []Option{WithExtraComparator("dup-c", cmp), WithExtraComparator("dup-c", cmp)}, wantErrSub: []string{"WithComparator", "dup-c"}},
+		{name: "custom judge registers", opts: []Option{WithExtraJudge("xjudge", jf)}, wantJudge: "xjudge"},
+		{name: "judge collides with built-in", opts: []Option{WithExtraJudge("claude", jf)}, wantErrSub: []string{"WithJudge", "claude"}},
+		{name: "judge collides with earlier extra", opts: []Option{WithExtraJudge("dup-j", jf), WithExtraJudge("dup-j", jf)}, wantErrSub: []string{"WithJudge", "dup-j"}},
+		{name: "nil driver instance rejected", opts: []Option{WithExtraDriver("xnil", nil)}, wantErrSub: []string{"WithDriver", "xnil", "nil"}},
+		{name: "nil comparator instance rejected", opts: []Option{WithExtraComparator("xnil", nil)}, wantErrSub: []string{"WithComparator", "xnil", "nil"}},
+		{name: "nil judge factory rejected", opts: []Option{WithExtraJudge("xnil", nil)}, wantErrSub: []string{"WithJudge", "xnil", "nil"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// No targets ⇒ the adapter-validation loop is skipped, isolating the
+			// extra-registration/collision behaviour under test.
+			cfg := config.Config{OTLPEndpoint: "x"}
+			eng, err := Build(cfg, nil, nil, tt.opts...)
+			if len(tt.wantErrSub) == 0 {
+				if err != nil {
+					t.Fatalf("Build with extra seam: %v", err)
+				}
+				if tt.wantDriver != "" {
+					if _, ok := eng.reg.Driver(tt.wantDriver); !ok {
+						t.Fatalf("extra driver %q not registered after Build", tt.wantDriver)
+					}
+				}
+				if tt.wantComparator != "" {
+					if _, ok := eng.reg.Comparator(tt.wantComparator); !ok {
+						t.Fatalf("extra comparator %q not registered after Build", tt.wantComparator)
+					}
+				}
+				if tt.wantJudge != "" {
+					if _, ok := eng.reg.Judge(tt.wantJudge); !ok {
+						t.Fatalf("extra judge %q not registered after Build", tt.wantJudge)
+					}
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("Build must reject %s, got nil error", tt.name)
+			}
+			for _, sub := range tt.wantErrSub {
+				if !strings.Contains(err.Error(), sub) {
+					t.Errorf("Build error = %q, want substring %q", err, sub)
+				}
+			}
+		})
+	}
+}
+
+// TestBuildRejectsNilJudgeFromFactory proves a judge factory that returns (nil, nil)
+// is a loud Build error, not a silently-wired nil judge that would panic at match
+// time. A factory that cannot produce a judge must error (Constitution IV: no
+// zero-value success).
+func TestBuildRejectsNilJudgeFromFactory(t *testing.T) {
+	nilJudge := func(config.Config) (core.Judge, error) { return nil, nil }
+	cfg := config.Config{OTLPEndpoint: "x", Judge: config.JudgeConfig{Backend: "xjudge"}}
+	_, err := Build(cfg, nil, nil, WithExtraJudge("xjudge", nilJudge))
+	if err == nil {
+		t.Fatal("Build must reject a judge factory returning (nil, nil), got nil error")
+	}
+	if !strings.Contains(err.Error(), "xjudge") {
+		t.Fatalf("Build error = %q, want it to name the judge backend %q", err, "xjudge")
+	}
+}
 
 // TestEngineAdapter proves the read-only Adapter accessor reports a configured
 // target's adapter (used by the steps layer to reject request-body steps against a
@@ -95,8 +206,8 @@ func TestBuildRejectsMalformedPattern(t *testing.T) {
 // TestBuildWiresSemanticJudge asserts the composition root resolves the judge
 // backend and registers the "semantic" result matcher (US3-AC1/AC2/AC3, FR-005).
 //
-// No t.Parallel(): Build mutates the registry's package-global maps; running the
-// rows concurrently would data-race those writes.
+// No t.Parallel(): kept serial by convention (the seam registry is per-engine now,
+// so a rebuild is independent — not a data-race requirement).
 func TestBuildWiresSemanticJudge(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -144,7 +255,7 @@ func TestBuildWiresSemanticJudge(t *testing.T) {
 			cfg := config.Config{OTLPEndpoint: "x"}
 			cfg.Judge.Backend = tt.backend
 			cfg.Judge.Votes = tt.votes
-			_, err := Build(cfg, nil, nil) // Build does not call st/cor; nil is safe
+			eng, err := Build(cfg, nil, nil) // Build does not call st/cor; nil is safe
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("Build() err = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -156,8 +267,8 @@ func TestBuildWiresSemanticJudge(t *testing.T) {
 				}
 				return
 			}
-			if _, ok := registry.Matcher("semantic"); !ok {
-				t.Errorf("registry.Matcher(%q) = false after Build, want it wired", "semantic")
+			if _, ok := eng.reg.Matcher("semantic"); !ok {
+				t.Errorf("eng.reg.Matcher(%q) = false after Build, want it wired", "semantic")
 			}
 		})
 	}
@@ -170,11 +281,10 @@ func TestBuildWiresSemanticJudge(t *testing.T) {
 // any scenario) with an error naming the target, the adapter, and the registered
 // set. The built-in shell/http drivers Build registers must still Build cleanly.
 //
-// Substring (not exact) assertions: the registry's driver map is package-global
-// and accumulates across Builds within the test binary, so the "registered:" set
-// may contain more than shell/http — we assert containment, not equality.
+// Substring (not exact) assertions: assert the "registered:" set CONTAINS the
+// built-in drivers, tolerant of any future built-ins, without pinning the exact set.
 //
-// No t.Parallel(): Build mutates the registry's package-global maps.
+// No t.Parallel(): kept serial by convention (the seam registry is per-engine now).
 func TestBuildRejectsUnregisteredAdapter(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -222,7 +332,7 @@ func TestBuildRejectsUnregisteredAdapter(t *testing.T) {
 // not whichever target Go's randomized map iteration visits first. Without the
 // sort this test is flaky; with it, the alphabetically-first target always wins.
 //
-// No t.Parallel(): Build mutates the registry's package-global maps.
+// No t.Parallel(): kept serial by convention (the seam registry is per-engine now).
 func TestBuildRejectsUnregisteredAdapterDeterministicOrder(t *testing.T) {
 	cfg := config.Config{OTLPEndpoint: "x", Targets: map[string]config.Target{
 		"aaa": {Adapter: "aphantom"},

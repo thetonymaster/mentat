@@ -1,4 +1,4 @@
-.PHONY: all test lint cover ci clean harness-up harness-down smoke labs captures
+.PHONY: all test lint cover ci clean harness-up harness-down smoke labs captures example
 
 # Go sources that each lab SUT binary is built from. Evaluated at parse time so
 # the file-target prerequisites below rebuild a binary only when its own source
@@ -14,10 +14,22 @@ test:
 cover:
 	bash .claude/skills/coverage/coverage.sh ./...
 
-ci: lint test cover
+ci: lint test cover example
 
 lint:
 	golangci-lint run ./...
+
+# example builds, tests, and import-lints the standalone extension module
+# (examples/kafkaecho). It is a SEPARATE Go module, so the root `go test ./...`
+# never reaches it — this target is what covers it in CI (spec 007 SC-001). The
+# import lint FAILS if any example .go file imports a module-private
+# (mentat/internal) package: a grep match is a non-zero `!`-negated exit, so CI
+# fails and names the offending file:line.
+example:
+	cd examples/kafkaecho && test -z "$$(gofmt -l .)" || { echo "gofmt needs formatting:"; gofmt -l .; exit 1; }
+	cd examples/kafkaecho && go vet ./... && go build ./... && go test ./...
+	[ ! -f examples/kafkaecho/.golangci.yml ] || (cd examples/kafkaecho && golangci-lint run ./...)
+	! grep -rn --include='*.go' "mentat/internal" examples/
 
 clean:
 	go clean ./...

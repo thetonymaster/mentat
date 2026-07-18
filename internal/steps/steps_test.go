@@ -24,7 +24,6 @@ import (
 	"github.com/thetonymaster/mentat/internal/correlate"
 	"github.com/thetonymaster/mentat/internal/engine"
 	"github.com/thetonymaster/mentat/internal/genai"
-	"github.com/thetonymaster/mentat/internal/registry"
 	"github.com/thetonymaster/mentat/internal/report"
 	"github.com/thetonymaster/mentat/internal/trace"
 )
@@ -163,8 +162,11 @@ func craftedTrace() *trace.Trace {
 	}
 }
 
-// buildEng returns an engine wired to a mock store returning tr.
-func buildEng(t *testing.T, tr *trace.Trace) *engine.Engine {
+// buildEng returns an engine wired to a mock store returning tr. Extra composition
+// options (e.g. engine.WithExtraComparator / WithExtraMatcher) are threaded into
+// engine.Build so a test can register a custom seam into this engine's own registry
+// instead of a package-global one.
+func buildEng(t *testing.T, tr *trace.Trace, opts ...engine.Option) *engine.Engine {
 	t.Helper()
 	cfg := config.Config{
 		OTLPEndpoint: "x",
@@ -177,7 +179,7 @@ func buildEng(t *testing.T, tr *trace.Trace) *engine.Engine {
 	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "r"}}, nil).AnyTimes()
 	stubStoredTrace(st, tr)
 	cor := correlate.New(func() string { return "r" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
-	eng, err := engine.Build(cfg, st, cor)
+	eng, err := engine.Build(cfg, st, cor, opts...)
 	if err != nil {
 		t.Fatalf("engine.Build: %v", err)
 	}
@@ -251,10 +253,15 @@ func TestToolsInOrderEmptyCell(t *testing.T) {
 		},
 	}
 
+	// The well-formed-row case reaches check("sequence", ...) (it asserts a check
+	// error that is NOT the cell-guard), which resolves the comparator from the
+	// engine's own registry — so a real engine is required. The error-row cases return
+	// before check() and ignore it. w.ev is zero, so check() fails on empty evidence.
+	eng := buildEng(t, happyTrace())
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			w := &world{} // no engine needed — error fires before check()
+			w := &world{eng: eng}
 			err := w.toolsInOrder(tt.tbl)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err=%v, wantErr=%v", err, tt.wantErr)
@@ -1786,19 +1793,17 @@ func TestResultMeansStep(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 
-			eng := buildEng(t, happyTrace())
-			// engine.Build (inside buildEng) re-registers the real Claude-backed
-			// "semantic" matcher into the global registry, clobbering any stand-in.
-			// Register the mock AFTER Build so it wins at dispatch time.
-			mockMatcher := mocks.NewMockMatcher(ctrl)
 			// The result comparator resolves the matcher by name and invokes only
 			// Match(ctx, ev, want, target); it never calls Name(). Asserting the
 			// captured meaning arrives as `want` is the whole point of this test.
+			mockMatcher := mocks.NewMockMatcher(ctrl)
 			mockMatcher.EXPECT().
 				Match(gomock.Any(), gomock.Any(), tt.want, gomock.Any()).
 				Return(core.Verdict{Pass: true}, nil)
-			registry.ResetForTest(t) // reopen to override the semantic matcher after Build sealed
-			registry.RegisterMatcher("semantic", mockMatcher)
+			// Build the engine WITH the semantic-matcher override: WithExtraMatcher is
+			// applied after Build registers the real Claude-backed "semantic" matcher,
+			// so the mock wins at dispatch time — in THIS engine's own registry.
+			eng := buildEng(t, happyTrace(), engine.WithExtraMatcher("semantic", mockMatcher))
 
 			w := &world{eng: eng}
 			w.ev = core.Evidence{Output: core.Output{Answer: "done"}}
@@ -1873,9 +1878,7 @@ func TestStepsThreadScenarioContext(t *testing.T) {
 
 	t.Run("compare receives the scenario context", func(t *testing.T) {
 		spy := &ctxSpyComparator{}
-		registry.ResetForTest(t) // reopen to register a test-only comparator seam
-		registry.RegisterComparator("ctx-spy", spy)
-		eng := buildEng(t, happyTrace())
+		eng := buildEng(t, happyTrace(), engine.WithExtraComparator("ctx-spy", spy))
 		ctx := context.WithValue(context.Background(), ctxMarkerKey{}, "scenario-marker")
 		w := &world{eng: eng, ctx: ctx}
 		if err := w.check("ctx-spy", nil); err != nil {

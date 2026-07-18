@@ -32,7 +32,8 @@ type Engine struct {
 	pinned   string                   // when set, Drive resolves this run id instead of driving
 	pricing  core.Pricing
 	patterns expectations.Patterns
-	logger   *slog.Logger // silent (discard) by default; emits drive.start lifecycle narration to stderr
+	logger   *slog.Logger       // silent (discard) by default; emits drive.start lifecycle narration to stderr
+	reg      *registry.Registry // this engine's own sealed seam registry (comparators/drivers/matchers)
 
 	// resolveSem gates cor.Resolve calls at maxConcurrentResolves. Lazily built on
 	// first use (sync.Once, race-free) rather than wired in Build: it is a fixed
@@ -101,14 +102,14 @@ func (e *Engine) Adapter(target string) (string, bool) {
 	return t.Adapter, ok
 }
 
-// Comparator resolves a named comparator from the global registry.
+// Comparator resolves a named comparator from this engine's own registry.
 func (e *Engine) Comparator(name string) (core.Comparator, bool) {
-	return registry.Comparator(name)
+	return e.reg.Comparator(name)
 }
 
-// AggregateComparator resolves a named aggregate comparator from the registry.
+// AggregateComparator resolves a named aggregate comparator from this engine's registry.
 func (e *Engine) AggregateComparator(name string) (core.AggregateComparator, bool) {
-	return registry.AggregateComparator(name)
+	return e.reg.AggregateComparator(name)
 }
 
 // Drive injects the run tag, runs the SUT, then resolves and merges its trace.
@@ -137,7 +138,7 @@ func (e *Engine) driveOnce(ctx context.Context, target string, args []string, in
 	if !ok {
 		return core.Evidence{}, fmt.Errorf("engine: unknown target %q", target)
 	}
-	drv, ok := registry.Driver(t.Adapter)
+	drv, ok := e.reg.Driver(t.Adapter)
 	if !ok {
 		return core.Evidence{}, fmt.Errorf("engine: no driver for adapter %q", t.Adapter)
 	}

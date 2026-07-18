@@ -8,7 +8,7 @@
 
 Publish the minimum viable extension surface (audit G1): a root `mentat` facade
 package exposing the six seam interfaces and evidence types via type aliases to
-the (unmoved) internal packages, `Register*` hooks and a `mentat.Run(ctx, cfg,
+the (unmoved) internal packages, `With*` registration options and a `mentat.Run(ctx, cfg,
 opts...) (Results, error)` entry point that compose with `engine.Build` and its
 sealing (feature 003); an `examples/kafkaecho` toy-driver module compiled and
 run in CI against the facade only; an API manifest + `go doc`-golden diff gate;
@@ -59,8 +59,10 @@ example module, 6 seam guides, CI wiring; internal packages unmoved
   registration funnels into the same registries at the same composition root;
   registries themselves stay unexported; `mentat.Run` builds a fresh root per
   call.
-- **IV. No Silent Fallbacks**: PASS. Duplicate-name and post-seal registration
-  fail loudly; `Run` returns errors, never partial silent results.
+- **IV. No Silent Fallbacks**: PASS. Duplicate-name registration fails loudly;
+  post-seal registration is unrepresentable on the public surface (options only
+  exist at `Run`) and stays loud internally (feature 003); `Run` returns errors,
+  never partial silent results.
 - **V. Test-First & Hermetic**: PASS. External-style tests + example module run
   hermetically on the file store; every acceptance scenario lands red→green.
 
@@ -82,7 +84,7 @@ specs/007-public-extension-api/
 ### Source Code (repository root)
 
 ```text
-mentat.go (root package)   # facade: aliases, Register* hooks, Run, Results
+mentat.go (root package)   # facade: aliases, With* options, Run, Results
 internal/…                 # unmoved; unexported to the outside as before
 examples/kafkaecho/        # separate module: toy driver + feature file + go.mod
 docs/extending/            # per-seam implementation guides (driver, store,

@@ -49,6 +49,11 @@ jobs:
       # replacing a separate `go test ./... -race` pass — the suite built+ran twice.
       - name: test + coverage gate (80%, race)
         run: COVERAGE_RACE=1 bash .claude/skills/coverage/coverage.sh ./...
+      # The example extension is a SEPARATE module, so `go test ./...` and the
+      # coverage gate above never reach it. `make example` builds + runs it and
+      # import-lints it (spec 007 SC-001: zero module-private imports).
+      - name: example extension (build + run + import-lint, SC-001)
+        run: make example
 
   mocks:
     runs-on: ubuntu-latest

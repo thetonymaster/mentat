@@ -188,6 +188,10 @@ func TestDriveUnknownAdapter(t *testing.T) {
 						"mytarget": {Adapter: tt.adapter, Command: []string{"echo"}, MaxConcurrency: 1},
 					},
 				},
+				// An empty per-engine registry has no drivers, so driveOnce hits its
+				// runtime "no driver for adapter" guard — the path under test — instead
+				// of Build's startup adapter validation.
+				reg: registry.New(),
 			}
 			_, err := eng.Drive(context.Background(), "mytarget", nil)
 			if err == nil {
@@ -1025,8 +1029,6 @@ func (d *countingDriver) Run(_ context.Context, _ core.RunSpec) (core.RunResult,
 func TestDriveNParallelStructuralErrorCancelsSiblings(t *testing.T) {
 	const n = 8
 	drv := &countingDriver{}
-	registry.ResetForTest(t) // reopen the (possibly sealed) registry to register a custom seam
-	registry.RegisterDriver("counterr", drv)
 
 	cfg := config.Config{
 		OTLPEndpoint: "x",
@@ -1040,7 +1042,7 @@ func TestDriveNParallelStructuralErrorCancelsSiblings(t *testing.T) {
 	st := mocks.NewMockTraceStore(ctrl)
 	cor := mocks.NewMockCorrelator(ctrl)
 	cor.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("").AnyTimes() // empty runID → structural
-	eng, err := Build(cfg, st, cor)
+	eng, err := Build(cfg, st, cor, WithExtraDriver("counterr", drv))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -1082,8 +1084,6 @@ func (d *cancelOnFirstDriveDriver) Run(_ context.Context, _ core.RunSpec) (core.
 func TestDriveNParallelCancelledMidBatch(t *testing.T) {
 	const n = 8
 	drv := &cancelOnFirstDriveDriver{}
-	registry.ResetForTest(t) // reopen the sealed registry to register a custom seam
-	registry.RegisterDriver("cancelfirst", drv)
 
 	cfg := config.Config{
 		OTLPEndpoint: "x",
@@ -1103,7 +1103,7 @@ func TestDriveNParallelCancelledMidBatch(t *testing.T) {
 	cor.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("run-1").AnyTimes()
 	cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).Return(tr, nil).AnyTimes()
 
-	eng, err := Build(cfg, st, cor)
+	eng, err := Build(cfg, st, cor, WithExtraDriver("cancelfirst", drv))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -1144,9 +1144,6 @@ func TestDriveNParallelResolveOverlapsOutsideSlot(t *testing.T) {
 		n   = 10
 		lag = 300 * time.Millisecond
 	)
-	registry.ResetForTest(t) // reopen the sealed registry to register a custom seam
-	registry.RegisterDriver("instant-overlap", instantDriver{})
-
 	cfg := config.Config{
 		OTLPEndpoint: "http://localhost:4318",
 		Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
@@ -1169,7 +1166,7 @@ func TestDriveNParallelResolveOverlapsOutsideSlot(t *testing.T) {
 			}
 		}).Times(n)
 
-	eng, err := Build(cfg, st, cor)
+	eng, err := Build(cfg, st, cor, WithExtraDriver("instant-overlap", instantDriver{}))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -1219,8 +1216,6 @@ func (d *recordingDriver) Run(context.Context, core.RunSpec) (core.RunResult, er
 func TestDriveNParallelLimitOneKeepsDrivesSerialized(t *testing.T) {
 	const n = 6
 	drv := &recordingDriver{hold: 30 * time.Millisecond}
-	registry.ResetForTest(t) // reopen the sealed registry to register a custom seam
-	registry.RegisterDriver("recording-serial", drv)
 
 	cfg := config.Config{
 		OTLPEndpoint: "http://localhost:4318",
@@ -1236,7 +1231,7 @@ func TestDriveNParallelLimitOneKeepsDrivesSerialized(t *testing.T) {
 	cor.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("run-ser").AnyTimes()
 	cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).Return(tr, nil).Times(n)
 
-	eng, err := Build(cfg, st, cor)
+	eng, err := Build(cfg, st, cor, WithExtraDriver("recording-serial", drv))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -1271,8 +1266,6 @@ func TestDriveNParallelLimitOneKeepsDrivesSerialized(t *testing.T) {
 // slot-held-through-resolve code drives all 16 resolves concurrently (>8): red.
 func TestDriveNParallelResolveConcurrencyCappedAtEight(t *testing.T) {
 	const n = 16
-	registry.ResetForTest(t) // reopen the sealed registry to register a custom seam
-	registry.RegisterDriver("instant-bound", instantDriver{})
 
 	cfg := config.Config{
 		OTLPEndpoint: "http://localhost:4318",
@@ -1309,7 +1302,7 @@ func TestDriveNParallelResolveConcurrencyCappedAtEight(t *testing.T) {
 			}
 		}).Times(n)
 
-	eng, err := Build(cfg, st, cor)
+	eng, err := Build(cfg, st, cor, WithExtraDriver("instant-bound", instantDriver{}))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -1592,7 +1585,6 @@ func TestDriveOnceInjectsOTLPEndpointConditionally(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			registry.ResetForTest(t) // reopen the sealed registry to register a capturing seam
 			ctrl := gomock.NewController(t)
 			drv := mocks.NewMockDriver(ctrl)
 			var gotEnv map[string]string
@@ -1601,7 +1593,6 @@ func TestDriveOnceInjectsOTLPEndpointConditionally(t *testing.T) {
 					gotEnv = spec.Env
 					return core.RunResult{Output: core.Output{Answer: "ok"}}, nil
 				})
-			registry.RegisterDriver("otlp-capture", drv)
 
 			cfg := config.Config{
 				OTLPEndpoint: tt.otlpEndpoint,
@@ -1618,7 +1609,7 @@ func TestDriveOnceInjectsOTLPEndpointConditionally(t *testing.T) {
 			cor.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("run-1")
 			cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).Return(tr, nil)
 
-			eng, err := Build(cfg, st, cor)
+			eng, err := Build(cfg, st, cor, WithExtraDriver("otlp-capture", drv))
 			if err != nil {
 				t.Fatalf("Build: %v", err)
 			}

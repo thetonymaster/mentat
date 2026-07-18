@@ -15,7 +15,6 @@ import (
 	"github.com/thetonymaster/mentat/internal/core/mocks"
 	"github.com/thetonymaster/mentat/internal/correlate"
 	"github.com/thetonymaster/mentat/internal/engine"
-	"github.com/thetonymaster/mentat/internal/registry"
 )
 
 // fakeNoMatchReason is the deterministic human-readable rationale the no-match
@@ -37,19 +36,20 @@ func (f fakeJudge) Judge(_ context.Context, _ core.JudgeRequest) (core.JudgeVerd
 	return core.JudgeVerdict{Match: f.match, Reason: f.reason}, nil
 }
 
-// registerFakeJudges installs two deterministic backends into the global judge
-// registry: "fake-nomatch" (always no-match, with fakeNoMatchReason) and
-// "fake-match" (always match). Distinct names let each factory close over its own
-// fixed verdict, keeping the cases deterministic with no shared mutable state.
-// Idempotent: re-registering simply overwrites the map entry.
-func registerFakeJudges(t *testing.T) {
-	registry.ResetForTest(t) // reopen the (possibly sealed) registry to register test backends
-	registry.RegisterJudge("fake-nomatch", func(config.Config) (core.Judge, error) {
-		return fakeJudge{match: false, reason: fakeNoMatchReason}, nil
-	})
-	registry.RegisterJudge("fake-match", func(config.Config) (core.Judge, error) {
-		return fakeJudge{match: true}, nil
-	})
+// fakeJudgeOpts funnels two deterministic backends into a single engine's own judge
+// registry: "fake-nomatch" (always no-match, with fakeNoMatchReason) and "fake-match"
+// (always match). Distinct names let each factory close over its own fixed verdict,
+// keeping the cases deterministic with no shared mutable state. cfg.Judge.Backend then
+// selects which one Build wires into the semantic matcher.
+func fakeJudgeOpts() []engine.Option {
+	return []engine.Option{
+		engine.WithExtraJudge("fake-nomatch", func(config.Config) (core.Judge, error) {
+			return fakeJudge{match: false, reason: fakeNoMatchReason}, nil
+		}),
+		engine.WithExtraJudge("fake-match", func(config.Config) (core.Judge, error) {
+			return fakeJudge{match: true}, nil
+		}),
+	}
 }
 
 // semanticMetaEng builds the REAL engine via engine.Build with cfg.Judge.Backend
@@ -80,7 +80,7 @@ func semanticMetaEngWithModel(t *testing.T, backend, model string) *engine.Engin
 	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "r"}}, nil).AnyTimes()
 	stubStoredTrace(st, happyTrace())
 	cor := correlate.New(func() string { return "r" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
-	eng, err := engine.Build(cfg, st, cor)
+	eng, err := engine.Build(cfg, st, cor, fakeJudgeOpts()...)
 	if err != nil {
 		t.Fatalf("engine.Build: %v", err)
 	}
@@ -110,9 +110,8 @@ func runMetaSemantic(t *testing.T, eng *engine.Engine) (int, string) {
 // it exercises the REAL wiring (engine.Build -> "fake-nomatch" judge backend ->
 // comparator.NewSemantic) and proves Mentat goes RED when the judge returns
 // no-match, surfacing the judge's human-readable reason (FR-008). Fully hermetic:
-// no network, no API key. Serial (registers into the global judge/matcher registries).
+// no network, no API key. The custom judge is registered per-engine (WithExtraJudge).
 func TestSemanticMetaGoesRedOnNoMatch(t *testing.T) {
-	registerFakeJudges(t)
 	eng := semanticMetaEng(t, "fake-nomatch")
 	status, out := runMetaSemantic(t, eng)
 	if status == 0 {
@@ -130,7 +129,6 @@ func TestSemanticMetaGoesRedOnNoMatch(t *testing.T) {
 // was wired and nothing hit the network. t.Setenv forbids t.Parallel(), so serial.
 func TestSemanticMetaGoesGreenOnMatch(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "") // zero-network proof: no key, yet the suite passes
-	registerFakeJudges(t)
 	eng := semanticMetaEng(t, "fake-match")
 	status, out := runMetaSemantic(t, eng)
 	if status != 0 {
@@ -143,10 +141,9 @@ func TestSemanticMetaGoesGreenOnMatch(t *testing.T) {
 // (config.DefaultJudgeModel) must not perturb the L3 meta wiring. The fake judge is
 // model-agnostic, so the authored scenario still goes RED on no-match and GREEN on
 // match when the judge runs under the new default model id. The live e2e (build-tagged)
-// pins real Claude behaviour; this pins model-independence. Serial (registers into the
-// global judge registry).
+// pins real Claude behaviour; this pins model-independence. The custom judge is
+// registered per-engine (WithExtraJudge) — no global registry mutation.
 func TestSemanticMetaModelAgnosticUnderNewDefault(t *testing.T) {
-	registerFakeJudges(t)
 	tests := []struct {
 		name    string
 		backend string

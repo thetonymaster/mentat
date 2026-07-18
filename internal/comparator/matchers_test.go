@@ -3,7 +3,6 @@ package comparator
 import (
 	"context"
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -17,11 +16,13 @@ import (
 	"github.com/thetonymaster/mentat/internal/trace"
 )
 
-// TestMain registers the built-in matchers once for the whole comparator test
-// package, since result.Compare now resolves matchers from the registry.
-func TestMain(m *testing.M) {
-	RegisterBuiltinMatchers()
-	os.Exit(m.Run())
+// newResultCmp returns the "result" comparator backed by a fresh per-test registry
+// with the built-in matchers registered — the composition-root wiring in miniature,
+// since result.Compare now resolves matchers from the registry it was built with.
+func newResultCmp() core.Comparator {
+	reg := registry.New()
+	RegisterBuiltinMatchers(reg)
+	return NewResult(reg)
 }
 
 // recordingMatcher proves result.Compare dispatches to a registered matcher
@@ -86,7 +87,7 @@ func TestMatcherCompileOncePerExpectation(t *testing.T) {
 			count := 0
 			tt.swap(t, &count)
 			ev := core.Evidence{Trace: bulkTrace(spanCount, tt.val)}
-			v, err := NewResult().Compare(context.Background(), ev, tt.exp)
+			v, err := newResultCmp().Compare(context.Background(), ev, tt.exp)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -140,7 +141,7 @@ func TestMatcherCompileErrorAtConstruction(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := NewResult().Compare(context.Background(), tt.ev, tt.exp)
+			_, err := newResultCmp().Compare(context.Background(), tt.ev, tt.exp)
 			if err == nil {
 				t.Fatal("want a construction-time compile error, got nil")
 			}
@@ -236,7 +237,7 @@ func TestCompiledMatcherGoldenVerdicts(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := NewResult().Compare(context.Background(), tt.ev, tt.exp)
+			got, err := newResultCmp().Compare(context.Background(), tt.ev, tt.exp)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
 			}
@@ -270,7 +271,7 @@ func TestMatcherParallelReuseSameExpectation(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				v, err := NewResult().Compare(context.Background(), ev, exps[i])
+				v, err := newResultCmp().Compare(context.Background(), ev, exps[i])
 				if err != nil {
 					t.Errorf("matcher %q: unexpected error: %v", exps[i].Matcher, err)
 					return
@@ -364,9 +365,11 @@ func TestMatcherPrototypeDirectUse(t *testing.T) {
 
 func TestResultDispatchesToRegisteredMatcher(t *testing.T) {
 	called := false
-	registry.RegisterMatcher("recording", recordingMatcher{called: &called})
+	reg := registry.New()
+	RegisterBuiltinMatchers(reg)
+	reg.RegisterMatcher("recording", recordingMatcher{called: &called})
 
-	v, err := NewResult().Compare(context.Background(), core.Evidence{}, ResultExpectation{Matcher: "recording"})
+	v, err := NewResult(reg).Compare(context.Background(), core.Evidence{}, ResultExpectation{Matcher: "recording"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

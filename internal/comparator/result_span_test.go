@@ -118,7 +118,7 @@ func TestResultSpanSourceOne(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := NewResult().Compare(context.Background(), tt.ev, tt.exp)
+			got, err := newResultCmp().Compare(context.Background(), tt.ev, tt.exp)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
 			}
@@ -191,7 +191,7 @@ func TestResultSpanSourceQuantifiers(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := NewResult().Compare(context.Background(), core.Evidence{Trace: resultTrace()}, tt.exp)
+			got, err := newResultCmp().Compare(context.Background(), core.Evidence{Trace: resultTrace()}, tt.exp)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
 			}
@@ -255,7 +255,7 @@ func TestResultSpanSourceOrdinals(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := NewResult().Compare(context.Background(), core.Evidence{Trace: resultTrace()}, tt.exp)
+			got, err := newResultCmp().Compare(context.Background(), core.Evidence{Trace: resultTrace()}, tt.exp)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
 			}
@@ -278,7 +278,7 @@ func TestResultSpanSourceOrdinals(t *testing.T) {
 // TestMatcherCompileErrorAtConstruction.)
 func TestResultSpanSourceMatcherErrorWrapped(t *testing.T) {
 	t.Parallel()
-	_, err := NewResult().Compare(context.Background(), core.Evidence{Trace: resultTrace()},
+	_, err := newResultCmp().Compare(context.Background(), core.Evidence{Trace: resultTrace()},
 		ResultExpectation{Matcher: "json-subset", Want: `{"a":1}`, Source: toolSource("summarize", QuantOne, 0)})
 	if err == nil {
 		t.Fatal("expected an error from the non-JSON span value via a span source")

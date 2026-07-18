@@ -317,14 +317,17 @@ type RunReport struct {
 
 // ScenarioResult is one scenario's outcome, derived from its Evidence + Verdict.
 type ScenarioResult struct {
-	Name      string
-	Tags      []string
-	Pass      bool
-	Reasons   []string
-	Cost      float64
-	Sequence  []string
-	Runs      []RunRecord
-	Aggregate *AggregateDetail
+	Name string
+	// FeatureFile is the source .feature file this scenario was parsed from (godog's
+	// scenario Uri), so scenarios can be told apart by origin, not just by Name.
+	FeatureFile string `json:"FeatureFile,omitempty"`
+	Tags        []string
+	Pass        bool
+	Reasons     []string
+	Cost        float64
+	Sequence    []string
+	Runs        []RunRecord
+	Aggregate   *AggregateDetail
 	// DerivationNote is a non-fatal, human-readable note recorded when report
 	// derivation (sequence/cost) could not be completed for this scenario — e.g. a
 	// span missing service.name. It is an observer artifact: it never changes Pass

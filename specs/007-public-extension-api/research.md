@@ -32,9 +32,10 @@ of this premise — if it ever breaks (e.g. a future Go change), CI says so.
    `Verdict`, `Expectation`, `RunSpec`, `Output`, `TraceQuery`, `TraceRef`,
    `RunRecord`/report data types needed by `Results`, plus the canonical
    status/kind constants (feature 002).
-3. Registration hooks: `RegisterDriver(name, factory)`, `RegisterStore`,
-   `RegisterComparator`, `RegisterJudge` — as `Run` options (see R3), not
-   package-level mutable state.
+3. Registration options: `WithDriver(name, factory)`, `WithStore`,
+   `WithComparator`, `WithJudge` — functional `Run` options (see R3), not
+   package-level `Register*` state (package-level `Register*` is deliberately
+   not provided; see R3).
 4. Entry point: `Run(ctx, Config, ...Option) (Results, error)` + `Results` /
    `ScenarioResult` types; `Config` loaded from YAML or constructed.
 

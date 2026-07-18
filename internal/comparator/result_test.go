@@ -9,7 +9,7 @@ import (
 
 // TestResultName asserts the comparator self-identifies as "result".
 func TestResultName(t *testing.T) {
-	if got := NewResult().Name(); got != "result" {
+	if got := newResultCmp().Name(); got != "result" {
 		t.Fatalf("Name() = %q, want %q", got, "result")
 	}
 }
@@ -17,7 +17,7 @@ func TestResultName(t *testing.T) {
 // TestResultWrongExpectationType asserts that passing a non-ResultExpectation
 // returns a non-nil error and Pass==false (no silent fallback).
 func TestResultWrongExpectationType(t *testing.T) {
-	v, err := NewResult().Compare(context.Background(), core.Evidence{}, "not a ResultExpectation")
+	v, err := newResultCmp().Compare(context.Background(), core.Evidence{}, "not a ResultExpectation")
 	if err == nil {
 		t.Fatal("want error for non-ResultExpectation, got nil")
 	}
@@ -32,7 +32,7 @@ func TestResultWrongExpectationType(t *testing.T) {
 func TestResultJSONSubsetObjectVsArray(t *testing.T) {
 	ev := core.Evidence{Output: core.Output{Body: []byte(`[1,2,3]`)}}
 	exp := ResultExpectation{Matcher: "json-subset", Want: `{"a":1}`}
-	v, err := NewResult().Compare(context.Background(), ev, exp)
+	v, err := newResultCmp().Compare(context.Background(), ev, exp)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -44,12 +44,12 @@ func TestResultJSONSubsetObjectVsArray(t *testing.T) {
 // TestResultContainsPassesAndFails is kept verbatim from the brief.
 func TestResultContainsPassesAndFails(t *testing.T) {
 	pass := core.Evidence{Output: core.Output{Answer: "Q3 revenue grew 12%"}}
-	v, err := NewResult().Compare(context.Background(), pass, ResultExpectation{Matcher: "contains", Want: "Q3 revenue"})
+	v, err := newResultCmp().Compare(context.Background(), pass, ResultExpectation{Matcher: "contains", Want: "Q3 revenue"})
 	if err != nil || !v.Pass {
 		t.Fatalf("want pass, got %+v err=%v", v, err)
 	}
 	fail := core.Evidence{Output: core.Output{Answer: "I could not find any information."}}
-	v, err = NewResult().Compare(context.Background(), fail, ResultExpectation{Matcher: "contains", Want: "Q3 revenue"})
+	v, err = newResultCmp().Compare(context.Background(), fail, ResultExpectation{Matcher: "contains", Want: "Q3 revenue"})
 	if err != nil {
 		t.Fatalf("unexpected error on contains-miss: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestResultContainsPassesAndFails(t *testing.T) {
 // TestResultStatusMatcher is kept verbatim from the brief.
 func TestResultStatusMatcher(t *testing.T) {
 	ev := core.Evidence{Output: core.Output{Status: 201}}
-	v, err := NewResult().Compare(context.Background(), ev, ResultExpectation{Matcher: "status", Want: "201"})
+	v, err := newResultCmp().Compare(context.Background(), ev, ResultExpectation{Matcher: "status", Want: "201"})
 	if err != nil || !v.Pass {
 		t.Fatalf("want pass, got %+v err=%v", v, err)
 	}
@@ -69,7 +69,7 @@ func TestResultStatusMatcher(t *testing.T) {
 
 // TestResultUnknownMatcherErrors is kept verbatim from the brief.
 func TestResultUnknownMatcherErrors(t *testing.T) {
-	_, err := NewResult().Compare(context.Background(), core.Evidence{}, ResultExpectation{Matcher: "telepathy", Want: "x"})
+	_, err := newResultCmp().Compare(context.Background(), core.Evidence{}, ResultExpectation{Matcher: "telepathy", Want: "x"})
 	if err == nil {
 		t.Fatal("want error for unknown matcher")
 	}
@@ -217,7 +217,7 @@ func TestResultCompare(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := NewResult().Compare(context.Background(), tt.ev, tt.exp)
+			got, err := newResultCmp().Compare(context.Background(), tt.ev, tt.exp)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
 			}

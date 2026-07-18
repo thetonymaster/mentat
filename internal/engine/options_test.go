@@ -20,8 +20,8 @@ import (
 // exported getter is added just to test, and narration that would make the
 // hand-off observable arrives in T007.
 //
-// No t.Parallel(): Build mutates the registry's package-global maps; running the
-// rows concurrently would data-race those writes.
+// No t.Parallel(): kept serial by convention (the seam registry is per-engine now,
+// so a rebuild is independent — not a data-race requirement).
 func TestBuildLoggerSeam(t *testing.T) {
 	tests := []struct {
 		name    string
