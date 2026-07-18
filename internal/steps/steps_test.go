@@ -1878,7 +1878,7 @@ func TestStepsThreadScenarioContext(t *testing.T) {
 
 	t.Run("compare receives the scenario context", func(t *testing.T) {
 		spy := &ctxSpyComparator{}
-		eng := buildEng(t, happyTrace(), engine.WithExtraComparator("ctx-spy", spy))
+		eng := buildEng(t, happyTrace(), engine.WithExtraComparator("ctx-spy", func(config.Config) (core.Comparator, error) { return spy, nil }))
 		ctx := context.WithValue(context.Background(), ctxMarkerKey{}, "scenario-marker")
 		w := &world{eng: eng, ctx: ctx}
 		if err := w.check("ctx-spy", nil); err != nil {

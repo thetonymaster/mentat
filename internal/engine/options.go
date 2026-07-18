@@ -3,6 +3,7 @@ package engine
 import (
 	"log/slog"
 
+	"github.com/thetonymaster/mentat/internal/config"
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/registry"
 )
@@ -12,11 +13,12 @@ import (
 // — there is no package-global logger and no slog.SetDefault.
 //
 // The extra* slices carry custom-adapter registrations funneled from the public
-// facade (spec 007 FR-002). Drivers and comparators are shared instances (built by
-// the facade before Build); stores and judges are factories (stateful seams built
-// from config at the composition root, mirroring the built-in tempo/file/claude
-// registration shape). They are applied in order after the built-ins so a name
-// colliding with a built-in — or an earlier extra — is caught (see Build/BuildStore).
+// facade (spec 007 FR-002). All four seams are factories (built from config at the
+// composition root, mirroring the built-in tempo/file/claude registration shape),
+// so construction is deferred until AFTER the collision check — a colliding
+// registration is rejected before ITS factory runs, so the caller sees the collision
+// (not a factory error). (In a duplicate-name pair the first, non-colliding, entry
+// is still constructed before the second is rejected.)
 type options struct {
 	logger           *slog.Logger
 	extraDrivers     []namedDriver
@@ -27,8 +29,8 @@ type options struct {
 }
 
 type namedDriver struct {
-	name   string
-	driver core.Driver
+	name    string
+	factory func(config.Config) (core.Driver, error)
 }
 
 type namedMatcher struct {
@@ -37,8 +39,8 @@ type namedMatcher struct {
 }
 
 type namedComparator struct {
-	name       string
-	comparator core.Comparator
+	name    string
+	factory func(config.Config) (core.Comparator, error)
 }
 
 type namedJudge struct {
@@ -69,18 +71,19 @@ func WithLogger(l *slog.Logger) Option {
 	}
 }
 
-// WithExtraDriver funnels a custom driver instance from the public facade into the
-// composition root under name. Build registers it after the built-ins, so a name
-// clashing with a built-in (or an earlier extra) fails loudly (FR-002).
-func WithExtraDriver(name string, d core.Driver) Option {
-	return func(o *options) { o.extraDrivers = append(o.extraDrivers, namedDriver{name: name, driver: d}) }
+// WithExtraDriver funnels a custom driver factory from the public facade into the
+// composition root under name. Build validates the name against the built-ins (and
+// earlier extras) BEFORE invoking the factory, so a clashing name fails loudly with
+// a collision error and never runs the factory (FR-002).
+func WithExtraDriver(name string, f func(config.Config) (core.Driver, error)) Option {
+	return func(o *options) { o.extraDrivers = append(o.extraDrivers, namedDriver{name: name, factory: f}) }
 }
 
-// WithExtraComparator funnels a custom comparator instance into the composition
-// root under name, with the same collision discipline as WithExtraDriver.
-func WithExtraComparator(name string, c core.Comparator) Option {
+// WithExtraComparator funnels a custom comparator factory into the composition root
+// under name, with the same defer-past-collision discipline as WithExtraDriver.
+func WithExtraComparator(name string, f func(config.Config) (core.Comparator, error)) Option {
 	return func(o *options) {
-		o.extraComparators = append(o.extraComparators, namedComparator{name: name, comparator: c})
+		o.extraComparators = append(o.extraComparators, namedComparator{name: name, factory: f})
 	}
 }
 

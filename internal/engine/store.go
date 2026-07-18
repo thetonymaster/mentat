@@ -57,7 +57,7 @@ func BuildStore(cfg config.Config, opts ...Option) (core.TraceStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("building store %q: %w", cfg.Store, err)
 	}
-	if st == nil {
+	if isNilSeam(st) {
 		return nil, fmt.Errorf("building store %q: factory returned a nil store with no error", cfg.Store)
 	}
 	reg.Seal()

@@ -215,29 +215,27 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 	}
 
 	// Build the engine composition options: the silent logger first, then the custom
-	// drivers. A driver factory is CALLED here (with cfg) to get the instance the
-	// engine registers; a factory error is a wrapped, named harness error, never a
-	// silent nil driver (Constitution IV).
+	// seams. Drivers/comparators are funneled as factories (like stores/judges), so the
+	// engine defers construction until AFTER its collision check — a name clashing with
+	// a built-in surfaces a loud collision error and never runs the factory (FR-002),
+	// and a factory error surfaces at Build (build engine), wrapped and named there
+	// (Constitution IV: never a silent nil seam).
 	buildOpts := []engine.Option{engine.WithLogger(logger)}
 	for _, d := range ro.drivers {
 		if d.factory == nil {
 			return Results{}, fmt.Errorf("mentat: WithDriver %q: nil factory; register a non-nil DriverFactory", d.name)
 		}
-		inst, ferr := d.factory(cfg)
-		if ferr != nil {
-			return Results{}, fmt.Errorf("mentat: build driver %q: %w", d.name, ferr)
-		}
-		buildOpts = append(buildOpts, engine.WithExtraDriver(d.name, inst))
+		buildOpts = append(buildOpts, engine.WithExtraDriver(d.name, func(conf config.Config) (core.Driver, error) {
+			return d.factory(conf)
+		}))
 	}
 	for _, c := range ro.comparators {
 		if c.factory == nil {
 			return Results{}, fmt.Errorf("mentat: WithComparator %q: nil factory; register a non-nil ComparatorFactory", c.name)
 		}
-		inst, ferr := c.factory(cfg)
-		if ferr != nil {
-			return Results{}, fmt.Errorf("mentat: build comparator %q: %w", c.name, ferr)
-		}
-		buildOpts = append(buildOpts, engine.WithExtraComparator(c.name, inst))
+		buildOpts = append(buildOpts, engine.WithExtraComparator(c.name, func(conf config.Config) (core.Comparator, error) {
+			return c.factory(conf)
+		}))
 	}
 	// Judges are passed through as factories (like the built-in "claude" backend):
 	// the engine resolves one only when cfg.Judge.Backend names it, so a factory
