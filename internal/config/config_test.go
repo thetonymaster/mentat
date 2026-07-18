@@ -1292,6 +1292,170 @@ targets:
 	}
 }
 
+// --- Feature 008: per-target completeness block -----------------------------
+
+// TestLoadCompletenessMode pins the per-target completeness.mode config contract
+// (feature 008, data-model config.Target additive): an omitted block or an empty
+// mode resolves to "settle" (the default), "strict" is accepted verbatim, and any
+// other value is a hard load error naming the target and the offending value
+// (contracts §4, Constitution IV — no silent fallback to a default mode).
+func TestLoadCompletenessMode(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		yaml     string
+		wantMode string
+		wantErr  bool
+		errExact string // exact error when wantErr
+	}{
+		{
+			name:     "omitted completeness block defaults to settle",
+			yaml:     "targets:\n  a: { adapter: shell, command: [\"true\"] }\n",
+			wantMode: "settle",
+		},
+		{
+			name:     "block present but mode omitted defaults to settle",
+			yaml:     "targets:\n  a:\n    adapter: shell\n    command: [\"true\"]\n    completeness: { settle: 2s }\n",
+			wantMode: "settle",
+		},
+		{
+			name:     "explicit settle mode preserved",
+			yaml:     "targets:\n  a:\n    adapter: shell\n    command: [\"true\"]\n    completeness: { mode: settle }\n",
+			wantMode: "settle",
+		},
+		{
+			name:     "explicit strict mode preserved",
+			yaml:     "targets:\n  a:\n    adapter: shell\n    command: [\"true\"]\n    completeness: { mode: strict }\n",
+			wantMode: "strict",
+		},
+		{
+			name:     "unknown mode is a hard error naming target and value",
+			yaml:     "targets:\n  a:\n    adapter: shell\n    command: [\"true\"]\n    completeness: { mode: eventual }\n",
+			wantErr:  true,
+			errExact: `target "a": completeness.mode must be "settle" or "strict", got "eventual"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := Load([]byte(tt.yaml))
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Load err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				if err.Error() != tt.errExact {
+					t.Fatalf("error = %q, want exactly %q", err.Error(), tt.errExact)
+				}
+				return
+			}
+			if got := cfg.Targets["a"].Completeness.Mode; got != tt.wantMode {
+				t.Fatalf("Completeness.Mode = %q, want %q", got, tt.wantMode)
+			}
+		})
+	}
+}
+
+// TestLoadCompletenessSettle pins the completeness.settle duration contract
+// (feature 008, contracts §4): an explicit Go-duration string resolves to that
+// window, zero is allowed, an unparsable value is a hard load error wrapping the
+// parse error, and a negative value is a hard load error naming the target and the
+// value (Constitution IV — no silent fallback to a default window).
+func TestLoadCompletenessSettle(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		settle     string // the completeness.settle YAML value
+		wantSettle time.Duration
+		wantErr    bool
+		errSubs    []string // all must appear when wantErr
+	}{
+		{name: "explicit 3s resolves", settle: "3s", wantSettle: 3 * time.Second},
+		{name: "explicit 750ms resolves", settle: "750ms", wantSettle: 750 * time.Millisecond},
+		{name: "zero is allowed (no error)", settle: "0s", wantSettle: 0},
+		{
+			name:    "unparsable value wraps the parse error naming the target",
+			settle:  "banana",
+			wantErr: true,
+			errSubs: []string{`target "a": completeness.settle:`, "banana"},
+		},
+		{
+			name:    "negative value is rejected naming target and value",
+			settle:  "-5s",
+			wantErr: true,
+			errSubs: []string{`target "a": completeness.settle: must be >= 0, got -5s`},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			yaml := "targets:\n  a:\n    adapter: shell\n    command: [\"true\"]\n    completeness:\n      mode: settle\n      settle: " + tt.settle + "\n"
+			cfg, err := Load([]byte(yaml))
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Load err=%v wantErr=%v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				for _, sub := range tt.errSubs {
+					if !strings.Contains(err.Error(), sub) {
+						t.Fatalf("error %q does not contain %q", err.Error(), sub)
+					}
+				}
+				return
+			}
+			if got := cfg.Targets["a"].Completeness.Settle; got != tt.wantSettle {
+				t.Fatalf("Completeness.Settle = %v, want %v", got, tt.wantSettle)
+			}
+		})
+	}
+}
+
+// TestLoadCompletenessKindDefaults pins the adapter kind-default settle window
+// (feature 008, contracts §1): when the completeness block omits settle, the shell
+// (spawned) adapter resolves to 2s and http (request-scoped) to 5s. An explicit
+// settle overrides the kind-default, and the default applies even in strict mode.
+// mcp/grpc are a documented forward-mapping only — no driver implements them — so
+// their defaults are intentionally NOT asserted here (no speculative surface).
+func TestLoadCompletenessKindDefaults(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		yaml       string
+		wantSettle time.Duration
+	}{
+		{
+			name:       "shell with no completeness block defaults to 2s",
+			yaml:       "targets:\n  a: { adapter: shell, command: [\"true\"] }\n",
+			wantSettle: 2 * time.Second,
+		},
+		{
+			name:       "http with no completeness block defaults to 5s",
+			yaml:       "targets:\n  a:\n    adapter: http\n    http: { url: \"http://localhost:8080\", method: GET }\n",
+			wantSettle: 5 * time.Second,
+		},
+		{
+			name:       "shell strict mode with settle omitted still gets the 2s default",
+			yaml:       "targets:\n  a:\n    adapter: shell\n    command: [\"true\"]\n    completeness: { mode: strict }\n",
+			wantSettle: 2 * time.Second,
+		},
+		{
+			name:       "explicit settle overrides the shell kind-default",
+			yaml:       "targets:\n  a:\n    adapter: shell\n    command: [\"true\"]\n    completeness: { settle: 1s }\n",
+			wantSettle: 1 * time.Second,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := Load([]byte(tt.yaml))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if got := cfg.Targets["a"].Completeness.Settle; got != tt.wantSettle {
+				t.Fatalf("Completeness.Settle = %v, want %v", got, tt.wantSettle)
+			}
+		})
+	}
+}
+
 func TestLoadRejectsBadLifecycleConfig(t *testing.T) {
 	tests := []struct {
 		name       string

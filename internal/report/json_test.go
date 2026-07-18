@@ -4,10 +4,46 @@ import (
 	"bytes"
 	"encoding/json"
 	"math"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/thetonymaster/mentat/internal/core"
 )
+
+// TestJSONReporterQualifiers pins the T018 json requirement (E1, SC-003): the
+// completeness qualifier serializes verbatim under the additive "qualifiers" key on
+// pass AND fail, and a scenario with no qualifier omits the key (omitempty).
+func TestJSONReporterQualifiers(t *testing.T) {
+	rep := core.RunReport{
+		Total: 3, Passed: 2, Failed: 1,
+		Scenarios: []core.ScenarioResult{
+			{Name: "green-bounded", Pass: true, Qualifiers: []string{qualifierText}},
+			{Name: "red-bounded", Pass: false, Reasons: []string{"boom"}, Qualifiers: []string{qualifierText}},
+			{Name: "green-plain", Pass: true},
+		},
+	}
+	var buf bytes.Buffer
+	if err := (jsonReporter{}).Report(rep, &buf); err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	var round core.RunReport
+	if err := json.Unmarshal(buf.Bytes(), &round); err != nil {
+		t.Fatalf("not valid json: %v", err)
+	}
+	// Carried verbatim on pass AND fail.
+	if !slices.Equal(round.Scenarios[0].Qualifiers, []string{qualifierText}) {
+		t.Errorf("passing scenario Qualifiers = %v, want [%q]", round.Scenarios[0].Qualifiers, qualifierText)
+	}
+	if !slices.Equal(round.Scenarios[1].Qualifiers, []string{qualifierText}) {
+		t.Errorf("failing scenario Qualifiers = %v, want [%q]", round.Scenarios[1].Qualifiers, qualifierText)
+	}
+	// omitempty: the plain scenario emits no "qualifiers" key, so the key count equals
+	// the two qualifier-bearing scenarios.
+	if n := strings.Count(buf.String(), `"qualifiers"`); n != 2 {
+		t.Errorf(`"qualifiers" key appears %d times, want 2 (omitted for the plain scenario)`, n)
+	}
+}
 
 func TestJSONReporter(t *testing.T) {
 	var buf bytes.Buffer

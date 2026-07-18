@@ -57,11 +57,98 @@ func (e *Engine) withResolveSlot(ctx context.Context, fn func(ctx context.Contex
 }
 
 // resolve runs the LIVE stability-gated cor.Resolve under the resolve bound —
-// the only resolution mode reachable from live drives (FR-004).
-func (e *Engine) resolve(ctx context.Context, runID string) (*trace.Trace, error) {
+// the only resolution mode reachable from live drives (FR-004). It carries the
+// per-run completeness contract the engine derived from the target (feature 008).
+func (e *Engine) resolve(ctx context.Context, runID string, contract core.CompletenessContract) (*trace.Trace, error) {
 	return e.withResolveSlot(ctx, func(ctx context.Context) (*trace.Trace, error) {
-		return e.cor.Resolve(ctx, e.st, runID)
+		return e.cor.Resolve(ctx, e.st, core.ResolveRequest{RunID: runID, Contract: contract})
 	})
+}
+
+// completenessContract derives the per-run completeness contract the engine hands to
+// the live resolver (feature 008, data-model). Kind is adapter-derived, never user-set:
+// shell spawns a process whose trace settles on exit ("spawned"); http is a bounded
+// request/response ("request"). mcp/grpc are a documented forward-mapping with no driver
+// yet, so they are not mapped here (YAGNI) — a target with any other adapter carries an
+// empty kind. Mode and Settle ride through from the target's config, kind-defaulted at
+// config load. Comparators never see this contract (invariant #1) — it rides the resolve
+// seam only.
+func completenessContract(t config.Target) core.CompletenessContract {
+	var kind string
+	switch t.Adapter {
+	case "shell":
+		kind = "spawned"
+	case "http":
+		kind = "request"
+	}
+	return core.CompletenessContract{
+		Kind:   kind,
+		Mode:   t.Completeness.Mode,
+		Settle: t.Completeness.Settle,
+	}
+}
+
+// qualifierBounded is the canonical trace-completeness qualifier (contracts §3, the
+// single source of truth). The %s is the target's effective settle value. It is
+// attached to a completeness-sensitive verdict when the run's contract is bounded
+// (request-scoped, non-strict), rendered by reporters verbatim on pass AND fail.
+const qualifierBounded = "trace-completeness: bounded by ingestion window (settle %s); spans exported later are not observed"
+
+// boundedQualifier returns the completeness qualifier for a contract when — and only
+// when — the contract is bounded: request-scoped (Kind=="request") AND non-strict
+// (Mode != "strict"). Spawned contracts settle to a complete forest and strict
+// contracts assert exact completeness, so neither carries the caveat (FR-009). The
+// bool is false when no qualifier applies.
+func boundedQualifier(c core.CompletenessContract) (string, bool) {
+	if c.Kind == "request" && c.Mode != "strict" {
+		return fmt.Sprintf(qualifierBounded, c.Settle), true
+	}
+	return "", false
+}
+
+// Compare invokes the named comparator over ev/exp and, when the expectation is
+// completeness-sensitive AND the target's contract is bounded, appends the canonical
+// ingestion-window qualifier to the returned Verdict — on pass AND fail alike. The
+// comparator itself never sees the contract (invariant #1): the engine attaches the
+// qualifier AFTER the comparator returns, from Evidence-free run metadata. A
+// comparator error propagates unqualified (no verdict to qualify).
+func (e *Engine) Compare(ctx context.Context, target, name string, ev core.Evidence, exp core.Expectation, sensitive bool) (core.Verdict, error) {
+	c, ok := e.Comparator(name)
+	if !ok {
+		return core.Verdict{}, fmt.Errorf("engine: no comparator %q", name)
+	}
+	v, err := c.Compare(ctx, ev, exp)
+	if err != nil {
+		return v, err
+	}
+	if sensitive {
+		if q, ok := boundedQualifier(completenessContract(e.cfg.Targets[target])); ok {
+			v.Qualifiers = append(v.Qualifiers, q)
+		}
+	}
+	return v, nil
+}
+
+// Aggregate is the multi-run sibling of Compare: it invokes the named aggregate
+// comparator over evs/exp and attaches the same bounded-contract qualifier when the
+// aggregate assertion is completeness-sensitive. The CEL-aggregate step ("the runs
+// satisfy") is completeness-sensitive, so this is where a bounded run's aggregate
+// verdict gains its caveat.
+func (e *Engine) Aggregate(ctx context.Context, target, name string, evs []core.Evidence, exp core.Expectation, sensitive bool) (core.Verdict, error) {
+	c, ok := e.AggregateComparator(name)
+	if !ok {
+		return core.Verdict{}, fmt.Errorf("engine: no aggregate comparator %q", name)
+	}
+	v, err := c.Aggregate(ctx, evs, exp)
+	if err != nil {
+		return v, err
+	}
+	if sensitive {
+		if q, ok := boundedQualifier(completenessContract(e.cfg.Targets[target])); ok {
+			v.Qualifiers = append(v.Qualifiers, q)
+		}
+	}
+	return v, nil
 }
 
 // resolveComplete runs the KNOWN-COMPLETE cor.ResolveComplete under the same
@@ -219,7 +306,7 @@ func (e *Engine) driveOnce(ctx context.Context, target string, args []string, in
 		}
 		return core.Evidence{RunID: runID, Failed: true, FailureKind: core.FailureKindDriver, FailureMsg: werr.Error()}, werr
 	}
-	tr, err := e.resolve(runCtx, runID)
+	tr, err := e.resolve(runCtx, runID, completenessContract(t))
 	if err != nil {
 		werr := budgetTimeout(ctx, runCtx, target, "resolve", budget)
 		if werr == nil {

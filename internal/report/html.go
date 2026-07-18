@@ -24,6 +24,7 @@ td,th{border:1px solid #ccc;padding:.25rem .5rem}.fail{color:#b00}.pass{color:#0
 <p>cost ${{printf "%.4f" .Cost}}{{if .Sequence}} — sequence: {{range .Sequence}}{{.}} {{end}}{{end}}</p>
 {{if .Judge}}<p class="judge">judge: {{.Judge.Calls}} call(s), {{.Judge.InputTokens}} in / {{.Judge.OutputTokens}} out tokens — cost ${{printf "%.4f" .Judge.CostUsd}} ({{.Judge.Model}})</p>{{end}}
 {{if .DerivationNote}}<p class="derivation-note">derivation note: {{.DerivationNote}}</p>{{end}}
+{{if .Qualifiers}}<ul class="qualifiers">{{range .Qualifiers}}<li>{{.}}</li>{{end}}</ul>{{end}}
 {{if not .Pass}}<ul>{{range .Reasons}}<li>{{.}}</li>{{end}}</ul>{{end}}
 {{if .Aggregate}}<p>{{.Aggregate.Macro}} = {{printf "%.2f" .Aggregate.Computed}}, want {{.Aggregate.Op}} {{printf "%.2f" .Aggregate.Expected}}</p>{{end}}
 {{if .Runs}}<table><tr><th>run</th><th>passed</th><th>kind</th><th>latency ms</th><th>cost</th></tr>

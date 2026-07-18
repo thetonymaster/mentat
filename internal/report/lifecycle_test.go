@@ -101,6 +101,33 @@ func TestJUnitReporterMarkerAndShape(t *testing.T) {
 	}
 }
 
+// TestJUnitReporterQualifierOnPassAndFail pins the T019 junit requirement (E1): the
+// completeness qualifier is emitted on a PASSING testcase too. Since the <failure>
+// body is fail-only, a passing case carries the qualifier in a <system-out> element.
+func TestJUnitReporterQualifierOnPassAndFail(t *testing.T) {
+	rep := core.RunReport{Total: 3, Passed: 2, Failed: 1, Scenarios: []core.ScenarioResult{
+		{Name: "green-bounded", Pass: true, Qualifiers: []string{qualifierText}},
+		{Name: "red-bounded", Pass: false, Reasons: []string{"boom"}, Qualifiers: []string{qualifierText}},
+		{Name: "green-plain", Pass: true},
+	}}
+	var buf bytes.Buffer
+	if err := (junitReporter{}).Report(rep, &buf); err != nil {
+		t.Fatalf("Report: %v", err)
+	}
+	out := buf.String()
+	// The passing bounded case has no <failure> body, so the qualifier must ride a
+	// <system-out>; it must appear on the passing case as well as the failing one.
+	if !strings.Contains(out, "<system-out>") {
+		t.Fatalf("expected a <system-out> carrying the qualifier on the passing case:\n%s", out)
+	}
+	if n := strings.Count(out, "trace-completeness: bounded by ingestion window"); n != 2 {
+		t.Fatalf("qualifier emitted %d times, want 2 (pass AND fail):\n%s", n, out)
+	}
+	if err := xml.Unmarshal(buf.Bytes(), new(any)); err != nil {
+		t.Fatalf("junit not well-formed xml: %v", err)
+	}
+}
+
 func TestEmitReportsAllFormats(t *testing.T) {
 	RegisterBuiltins() // idempotent; ensures json/html/junit are registered
 	dir := t.TempDir()

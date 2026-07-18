@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -116,7 +117,7 @@ func TestResolveStablePollsUntilCountStable(t *testing.T) {
 	})
 
 	c := New(func() string { return "x" }, PollConfig{Interval: time.Millisecond, StableFor: 2, Timeout: time.Second})
-	tr, err := c.Resolve(context.Background(), st, "x")
+	tr, err := c.Resolve(context.Background(), st, core.ResolveRequest{RunID: "x"})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -156,7 +157,7 @@ func TestResolveQueriesByTestRunIDTag(t *testing.T) {
 		Return(&trace.Trace{RunID: "t", Spans: []*trace.Span{{Name: "s"}}}, nil).AnyTimes()
 
 	c := New(func() string { return runID }, PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
-	if _, err := c.Resolve(context.Background(), st, runID); err != nil {
+	if _, err := c.Resolve(context.Background(), st, core.ResolveRequest{RunID: runID}); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
 
@@ -176,7 +177,7 @@ func TestResolveQueryError(t *testing.T) {
 		Return(nil, queryErr).Times(1)
 
 	c := New(func() string { return "run-1" }, PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
-	_, err := c.Resolve(context.Background(), st, "run-1")
+	_, err := c.Resolve(context.Background(), st, core.ResolveRequest{RunID: "run-1"})
 	if err == nil {
 		t.Fatal("expected error from query failure, got nil")
 	}
@@ -203,7 +204,7 @@ func TestResolveFetchPayloadError(t *testing.T) {
 		Return(nil, getErr).Times(1)
 
 	c := New(func() string { return "run-2" }, PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
-	_, err := c.Resolve(context.Background(), st, "run-2")
+	_, err := c.Resolve(context.Background(), st, core.ResolveRequest{RunID: "run-2"})
 	if err == nil {
 		t.Fatal("expected error from FetchPayload failure, got nil")
 	}
@@ -229,7 +230,7 @@ func TestResolveDecodePayloadError(t *testing.T) {
 		Return(nil, decErr).Times(1)
 
 	c := New(func() string { return "run-dec" }, PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
-	_, err := c.Resolve(context.Background(), st, "run-dec")
+	_, err := c.Resolve(context.Background(), st, core.ResolveRequest{RunID: "run-dec"})
 	if err == nil {
 		t.Fatal("expected error from DecodePayload failure, got nil")
 	}
@@ -255,7 +256,7 @@ func TestResolveDecodePayloadNilTrace(t *testing.T) {
 		Return(nil, nil).Times(1)
 
 	c := New(func() string { return "run-nil" }, PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
-	_, err := c.Resolve(context.Background(), st, "run-nil")
+	_, err := c.Resolve(context.Background(), st, core.ResolveRequest{RunID: "run-nil"})
 	if err == nil {
 		t.Fatal("expected error from nil trace, got nil")
 	}
@@ -309,7 +310,7 @@ func TestResolveDeadlineUnstableSpansIsHardError(t *testing.T) {
 		StableFor: 2,
 		Timeout:   25 * time.Millisecond,
 	}, WithEndpoint(endpoint))
-	tr, err := c.Resolve(context.Background(), st, runID)
+	tr, err := c.Resolve(context.Background(), st, core.ResolveRequest{RunID: runID})
 	if err == nil {
 		t.Fatalf("want hard error on unstable-at-deadline, got nil (tr=%v)", tr)
 	}
@@ -353,7 +354,7 @@ func TestResolveTimeoutZeroSpans(t *testing.T) {
 		Return(nil, nil).AnyTimes()
 
 	c := New(func() string { return "run-3" }, PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: 25 * time.Millisecond}, WithEndpoint(endpoint))
-	_, err := c.Resolve(context.Background(), st, "run-3")
+	_, err := c.Resolve(context.Background(), st, core.ResolveRequest{RunID: "run-3"})
 	if err == nil {
 		t.Fatal("expected timeout error with zero spans, got nil")
 	}
@@ -402,7 +403,7 @@ func TestResolveHonorsContextCancellation(t *testing.T) {
 		StableFor: 100, // would need 100 stable polls — never reached
 		Timeout:   5 * time.Second,
 	})
-	_, err := c.Resolve(ctx, st, "run-cancel")
+	_, err := c.Resolve(ctx, st, core.ResolveRequest{RunID: "run-cancel"})
 	if err == nil {
 		t.Fatal("want error on cancelled context, got nil")
 	}
@@ -467,7 +468,7 @@ func TestResolveDecodesOncePerTraceWhenPayloadStable(t *testing.T) {
 	st, counters := newCountingStore(ctrl, []storedTrace{{id: "t1", tr: nSpanTrace(3, nil)}})
 
 	c := New(func() string { return "run-once" }, PollConfig{Interval: time.Millisecond, StableFor: 3, Timeout: 2 * time.Second})
-	got, err := c.Resolve(context.Background(), st, "run-once")
+	got, err := c.Resolve(context.Background(), st, core.ResolveRequest{RunID: "run-once"})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -521,7 +522,7 @@ func TestResolveChangedPayloadRedecodesAndResetsStability(t *testing.T) {
 		})
 
 	c := New(func() string { return "run-chg" }, PollConfig{Interval: time.Millisecond, StableFor: 2, Timeout: 2 * time.Second})
-	got, err := c.Resolve(context.Background(), st, "run-chg")
+	got, err := c.Resolve(context.Background(), st, core.ResolveRequest{RunID: "run-chg"})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -572,7 +573,7 @@ func TestResolveByteChurnAtConstantSpanCountIsInstability(t *testing.T) {
 	st, _ := churningPayloadStore(ctrl)
 
 	c := New(func() string { return "run-churn" }, PollConfig{Interval: time.Millisecond, StableFor: 2, Timeout: 50 * time.Millisecond})
-	tr, err := c.Resolve(context.Background(), st, "run-churn")
+	tr, err := c.Resolve(context.Background(), st, core.ResolveRequest{RunID: "run-churn"})
 	if err == nil {
 		t.Fatalf("want hard error for byte churn at constant span count, got nil (tr=%v)", tr)
 	}
@@ -595,7 +596,7 @@ func TestResolveUnstableDeadlineErrorNamesByteChurnAtConstantSpanCount(t *testin
 	st, _ := churningPayloadStore(ctrl)
 
 	c := New(func() string { return "run-churn-msg" }, PollConfig{Interval: time.Millisecond, StableFor: 2, Timeout: 50 * time.Millisecond})
-	_, err := c.Resolve(context.Background(), st, "run-churn-msg")
+	_, err := c.Resolve(context.Background(), st, core.ResolveRequest{RunID: "run-churn-msg"})
 	if err == nil {
 		t.Fatal("want hard error for byte churn at constant span count, got nil")
 	}
@@ -717,7 +718,7 @@ func TestResolveObservationParityWithSpanCountBaseline(t *testing.T) {
 			st, counters := spansPayloadStore(ctrl, tt.payloadFn)
 
 			c := New(func() string { return "run-parity" }, PollConfig{Interval: time.Millisecond, StableFor: tt.stableFor, Timeout: tt.timeout})
-			_, err := c.Resolve(context.Background(), st, "run-parity")
+			_, err := c.Resolve(context.Background(), st, core.ResolveRequest{RunID: "run-parity"})
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("outcome diverged from span-count baseline: err=%v wantErr=%v", err, tt.wantErr)
 			}
@@ -770,7 +771,7 @@ func TestResolveReturnsForestFromFinalStableBytes(t *testing.T) {
 		})
 
 	c := New(func() string { return "run-final" }, PollConfig{Interval: time.Millisecond, StableFor: 3, Timeout: 2 * time.Second})
-	got, err := c.Resolve(context.Background(), st, "run-final")
+	got, err := c.Resolve(context.Background(), st, core.ResolveRequest{RunID: "run-final"})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -799,7 +800,7 @@ func TestResolveWaitsOutIngestionLagThenConverges(t *testing.T) {
 		[]storedTrace{{id: "t1", tr: nSpanTrace(2, nil)}})
 
 	c := New(func() string { return "run-lag" }, PollConfig{Interval: time.Millisecond, StableFor: 2, Timeout: 2 * time.Second})
-	got, err := c.Resolve(context.Background(), st, "run-lag")
+	got, err := c.Resolve(context.Background(), st, core.ResolveRequest{RunID: "run-lag"})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -860,7 +861,7 @@ func TestResolveQueryOrderFlappingStabilizesAndMergesInCanonicalIDOrder(t *testi
 		})
 
 	c := New(func() string { return "run-flap" }, PollConfig{Interval: time.Millisecond, StableFor: 3, Timeout: 2 * time.Second})
-	got, err := c.Resolve(context.Background(), st, "run-flap")
+	got, err := c.Resolve(context.Background(), st, core.ResolveRequest{RunID: "run-flap"})
 	if err != nil {
 		t.Fatalf("resolve with order-flapping (byte-identical) refs: %v", err)
 	}
@@ -949,7 +950,7 @@ func TestResolvePerRoundFetchesOverlapAndMergeInCanonicalIDOrder(t *testing.T) {
 
 	c := New(func() string { return "run-fanout" }, PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: 5 * time.Second})
 	start := time.Now()
-	got, err := c.Resolve(context.Background(), st, "run-fanout")
+	got, err := c.Resolve(context.Background(), st, core.ResolveRequest{RunID: "run-fanout"})
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
@@ -1018,7 +1019,7 @@ func TestResolveFirstFetchErrorFailsRoundAndCancelsSiblings(t *testing.T) {
 
 	c := New(func() string { return "run-err" }, PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: 5 * time.Second})
 	start := time.Now()
-	tr, err := c.Resolve(context.Background(), st, "run-err")
+	tr, err := c.Resolve(context.Background(), st, core.ResolveRequest{RunID: "run-err"})
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -1319,7 +1320,7 @@ func TestResolveMultiTraceForestMerge(t *testing.T) {
 		StableFor: 2,
 		Timeout:   time.Second,
 	})
-	merged, err := c.Resolve(context.Background(), st, runID)
+	merged, err := c.Resolve(context.Background(), st, core.ResolveRequest{RunID: runID})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -1369,7 +1370,7 @@ func TestResolveMergesTraceIDs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := New(func() string { return runID }, PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
 
-			live, err := c.Resolve(context.Background(), newStore(t, tt.refs), runID)
+			live, err := c.Resolve(context.Background(), newStore(t, tt.refs), core.ResolveRequest{RunID: runID})
 			if err != nil {
 				t.Fatalf("Resolve: %v", err)
 			}
@@ -1477,7 +1478,7 @@ func TestResolveNarratesLifecycle(t *testing.T) {
 	c := New(func() string { return runID },
 		PollConfig{Interval: time.Millisecond, StableFor: 2, Timeout: time.Second},
 		WithEndpoint(endpoint), WithLogger(slog.New(h)))
-	got, err := c.Resolve(context.Background(), st, runID)
+	got, err := c.Resolve(context.Background(), st, core.ResolveRequest{RunID: runID})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -1560,7 +1561,7 @@ func TestResolveInfoLevelSuppressesPollDebug(t *testing.T) {
 	c := New(func() string { return "run-info" },
 		PollConfig{Interval: time.Millisecond, StableFor: 2, Timeout: time.Second},
 		WithEndpoint("http://localhost:3200"), WithLogger(slog.New(h)))
-	if _, err := c.Resolve(context.Background(), st, "run-info"); err != nil {
+	if _, err := c.Resolve(context.Background(), st, core.ResolveRequest{RunID: "run-info"}); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
 	recs := records()
@@ -1587,11 +1588,517 @@ func TestResolveSilentByDefaultEmitsZeroBytes(t *testing.T) {
 	c := New(func() string { return "run-silent" },
 		PollConfig{Interval: time.Millisecond, StableFor: 2, Timeout: time.Second}) // no WithLogger
 	out := testio.CaptureStdio(t, func() {
-		if _, err := c.Resolve(context.Background(), st, "run-silent"); err != nil {
+		if _, err := c.Resolve(context.Background(), st, core.ResolveRequest{RunID: "run-silent"}); err != nil {
 			t.Errorf("resolve: %v", err)
 		}
 	})
 	if out != "" {
 		t.Fatalf("silent default must emit zero bytes, got:\n%q", out)
+	}
+}
+
+// --- Feature 008 (US1): settle-window completeness barrier ---
+//
+// The settle barrier is ADDITIVE over the feature-002 stability gate: a
+// settle-mode Resolve may CONCLUDE only once BOTH (1) the settle window measured
+// from Resolve entry (= drive-return) has elapsed AND (2) the 002 stability gate
+// holds. Settle == 0 reduces byte-for-byte to the 002-only behaviour every
+// pre-008 caller relies on (proven by every zero-contract test above).
+
+// TestResolveSettleWindowDefersConclusion pins cases (a)+(b): a run whose 002
+// stability gate is satisfied within a few ms must NOT conclude early — it keeps
+// polling until the settle window has elapsed, then concludes with the forest.
+// Proven by the wall clock: the 002 gate trips in ~3ms (small StableFor, 1ms
+// interval), so a Resolve that ignored the window would return in a few ms;
+// elapsed >= settle proves it deferred (a) and still concluded successfully (b).
+func TestResolveSettleWindowDefersConclusion(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		settle    time.Duration
+		stableFor int
+	}{
+		{name: "settle 30ms defers past the fast 002 gate", settle: 30 * time.Millisecond, stableFor: 2},
+		{name: "settle 60ms defers longer", settle: 60 * time.Millisecond, stableFor: 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctrl := gomock.NewController(t)
+			st, _ := newCountingStore(ctrl, []storedTrace{{id: "t1", tr: nSpanTrace(3, nil)}})
+
+			c := New(func() string { return "run-settle" },
+				PollConfig{Interval: time.Millisecond, StableFor: tt.stableFor, Timeout: 2 * time.Second},
+				WithEndpoint("http://localhost:3200"))
+			start := time.Now()
+			got, err := c.Resolve(context.Background(), st, core.ResolveRequest{
+				RunID:    "run-settle",
+				Contract: core.CompletenessContract{Mode: "settle", Settle: tt.settle},
+			})
+			elapsed := time.Since(start)
+			if err != nil {
+				t.Fatalf("resolve: %v", err)
+			}
+			if len(got.Spans) != 3 {
+				t.Fatalf("want 3 spans, got %d", len(got.Spans))
+			}
+			// elapsed >= settle can ONLY hold if Resolve deferred past the (much
+			// earlier) 002 gate until the settle window elapsed.
+			if elapsed < tt.settle {
+				t.Fatalf("Resolve concluded before the settle window elapsed: elapsed %v < settle %v", elapsed, tt.settle)
+			}
+		})
+	}
+}
+
+// TestResolveSettleIncludesLateSpansWithinWindow pins case (c): spans that arrive
+// late but still inside the settle window are in the returned forest. The store
+// serves 2 spans for the first 20ms, then 4 — the 002 gate would conclude at 2
+// spans within ~3ms, but the settle window (150ms) keeps Resolve polling, so it
+// observes the growth to 4, re-stabilises, and returns the complete forest.
+//
+// The settle window (150ms) dwarfs growAt (20ms) plus realistic jitter: even a
+// 50ms scheduler hiccup right at the switch leaves ~80ms of margin for the loop
+// to fetch the 4-span payload and re-stabilise before the window lets it conclude,
+// so it can never conclude on the stale 2-span forest under CI load.
+func TestResolveSettleIncludesLateSpansWithinWindow(t *testing.T) {
+	t.Parallel()
+	const (
+		settle = 150 * time.Millisecond
+		growAt = 20 * time.Millisecond
+	)
+	ctrl := gomock.NewController(t)
+	storeStart := time.Now()
+	st, _ := newCountingStoreFuncs(ctrl,
+		func(context.Context, core.TraceQuery) ([]core.TraceRef, error) {
+			return []core.TraceRef{{TraceID: "t1"}}, nil
+		},
+		func(_ context.Context, _ string) ([]byte, error) {
+			if time.Since(storeStart) < growAt {
+				return []byte("spans=2"), nil
+			}
+			return []byte("spans=4"), nil
+		},
+		func(_ string, payload []byte) (*trace.Trace, error) {
+			var n int
+			if _, err := fmt.Sscanf(string(payload), "spans=%d", &n); err != nil {
+				return nil, fmt.Errorf("undecodable payload %q: %w", payload, err)
+			}
+			return nSpanTrace(n, nil), nil
+		})
+
+	c := New(func() string { return "run-late" },
+		PollConfig{Interval: time.Millisecond, StableFor: 2, Timeout: 3 * time.Second},
+		WithEndpoint("http://localhost:3200"))
+	got, err := c.Resolve(context.Background(), st, core.ResolveRequest{
+		RunID:    "run-late",
+		Contract: core.CompletenessContract{Mode: "settle", Settle: settle},
+	})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(got.Spans) != 4 {
+		t.Fatalf("late spans within the settle window not included: want 4 spans, got %d", len(got.Spans))
+	}
+}
+
+// TestResolveSettleDeadlineNamesUnmetBarrier pins case (d): at the resolution
+// deadline with the settle barrier unmet, Resolve hard-errors per contracts §4
+// (`completeness not reached within %v: waiting on %s (spans seen: %d)`), naming
+// which barrier is unmet — the settle window still counting down, or the 002
+// span-count stability gate. Both §4 sub-shapes are pinned.
+func TestResolveSettleDeadlineNamesUnmetBarrier(t *testing.T) {
+	t.Parallel()
+	const endpoint = "http://localhost:3200"
+	tests := []struct {
+		name     string
+		settle   time.Duration
+		timeout  time.Duration
+		newStore func(ctrl *gomock.Controller) *mocks.MockTraceStore
+		wantSubs []string
+		notSubs  []string
+	}{
+		{
+			name:    "settle window not yet elapsed at deadline",
+			settle:  2 * time.Second, // >>> timeout: the window can never elapse before the 30ms deadline, even under heavy CI jitter (needs a ~2s stall to cross)
+			timeout: 30 * time.Millisecond,
+			newStore: func(ctrl *gomock.Controller) *mocks.MockTraceStore {
+				st, _ := newCountingStore(ctrl, []storedTrace{{id: "t1", tr: nSpanTrace(2, nil)}})
+				return st
+			},
+			wantSubs: []string{
+				`correlate: run "run-settle-dl": completeness not reached within 30ms: waiting on settle window (`,
+				"remaining)",
+				"spans seen: 2",
+			},
+			notSubs: []string{"unstable at deadline", "span-count stability"},
+		},
+		{
+			name:    "settle elapsed but span count never stabilises",
+			settle:  15 * time.Millisecond, // < timeout: window elapses, stability never does
+			timeout: 60 * time.Millisecond,
+			newStore: func(ctrl *gomock.Controller) *mocks.MockTraceStore {
+				st, _ := spansPayloadStore(ctrl, func(call int) string { return fmt.Sprintf("spans=%d", call) })
+				return st
+			},
+			wantSubs: []string{
+				`correlate: run "run-settle-dl": completeness not reached within 60ms: waiting on span-count stability (spans seen:`,
+			},
+			notSubs: []string{"settle window", "unstable at deadline"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctrl := gomock.NewController(t)
+			st := tt.newStore(ctrl)
+
+			c := New(func() string { return "run-settle-dl" },
+				PollConfig{Interval: time.Millisecond, StableFor: 2, Timeout: tt.timeout},
+				WithEndpoint(endpoint))
+			tr, err := c.Resolve(context.Background(), st, core.ResolveRequest{
+				RunID:    "run-settle-dl",
+				Contract: core.CompletenessContract{Mode: "settle", Settle: tt.settle},
+			})
+			if err == nil {
+				t.Fatalf("want hard error at deadline with settle barrier unmet, got nil (tr=%v)", tr)
+			}
+			if tr != nil {
+				t.Fatalf("want nil trace on hard error, got %v", tr)
+			}
+			msg := err.Error()
+			for _, want := range tt.wantSubs {
+				if !strings.Contains(msg, want) {
+					t.Fatalf("deadline error missing %q:\n%s", want, msg)
+				}
+			}
+			for _, notWant := range tt.notSubs {
+				if strings.Contains(msg, notWant) {
+					t.Fatalf("deadline error must not contain %q:\n%s", notWant, msg)
+				}
+			}
+		})
+	}
+}
+
+// TestResolveCompleteUnaffectedBySettleBarrier is a case (e) regression pin: the
+// known-complete path (ResolveComplete) takes no contract and must keep its
+// single-fetch, no-polling behaviour, untouched by the settle-mode change. The
+// hostile hour-scale PollConfig would block for an hour if a regression routed
+// this through the settle-gated live loop. Green immediately — a guard, not a
+// red-first behaviour test.
+func TestResolveCompleteUnaffectedBySettleBarrier(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	st, counters := newCountingStore(ctrl, []storedTrace{{id: "t1", tr: nSpanTrace(3, nil)}})
+
+	c := New(func() string { return "run-known" }, PollConfig{Interval: time.Hour, StableFor: 100, Timeout: time.Hour})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	got, err := c.ResolveComplete(ctx, st, "run-known")
+	if err != nil {
+		t.Fatalf("ResolveComplete: %v", err)
+	}
+	if len(got.Spans) != 3 {
+		t.Fatalf("want 3 spans, got %d", len(got.Spans))
+	}
+	if q := counters.Queries(); q != 1 {
+		t.Fatalf("want exactly 1 query (single fetch, no polling), got %d", q)
+	}
+	if f := counters.Fetches("t1"); f != 1 {
+		t.Fatalf("want exactly 1 fetch (single pass), got %d", f)
+	}
+	if d := counters.Decodes("t1"); d != 1 {
+		t.Fatalf("want exactly 1 decode (single pass), got %d", d)
+	}
+}
+
+// --- Feature 008 (US3): strict-mode span-count sentinel ---
+//
+// Strict mode (req.Contract.Mode == "strict") supersedes the settle window: the
+// SUT declares the whole merged forest's self-inclusive span count in ONE span's
+// test.span.count attribute (contracts §2), and resolution concludes ONLY when the
+// observed forest span count equals that declaration. Every other outcome is a
+// distinct hard error, never a verdict over partial evidence (data-model "State
+// machine per poll round"; contracts §4).
+
+// strictSpan builds a span with a deterministic id. count >= 0 attaches the
+// strict-mode test.span.count sentinel declaring count; count < 0 is a plain span.
+func strictSpan(id string, count int) *trace.Span {
+	sp := &trace.Span{ID: id, Name: "span-" + id}
+	if count >= 0 {
+		sp.Attrs = map[string]string{"test.span.count": strconv.Itoa(count)}
+	}
+	return sp
+}
+
+// strictForest builds a single-root forest from spans (Roots[0] = spans[0]).
+func strictForest(spans ...*trace.Span) *trace.Trace {
+	tr := &trace.Trace{Spans: spans}
+	if len(spans) > 0 {
+		tr.Roots = []*trace.Span{spans[0]}
+	}
+	return tr
+}
+
+// TestResolveStrictModeConcludesOnExactCount pins the conclude row of the strict
+// state machine: with exactly one test.span.count sentinel whose declared count
+// equals the merged-forest span count, resolution concludes on the FIRST round it
+// observes equality — the 002 stability streak and the settle window are
+// superseded. Proven by the query count: strict returns after a single poll round
+// (Queries()==1), whereas the settle/002 path needs 1 changed + StableFor stable
+// rounds (== 3 here), so this can ONLY pass via the strict equality path.
+// Includes a multi-root forest (invariant §2: a run spanning two traces, the
+// single sentinel declaring the whole-forest count).
+func TestResolveStrictModeConcludesOnExactCount(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		stored    []storedTrace
+		wantSpans int
+		wantRoots int
+	}{
+		{
+			name:      "single root, sentinel declares 3 == 3 observed",
+			stored:    []storedTrace{{id: "t1", tr: strictForest(strictSpan("a", 3), strictSpan("b", -1), strictSpan("c", -1))}},
+			wantSpans: 3,
+			wantRoots: 1,
+		},
+		{
+			// Two traces merge into one forest (invariant §2): 2 spans + 1 span = 3
+			// total; the single sentinel on t1 declares the whole-forest count.
+			name: "multi root, sentinel declares whole-forest count 3",
+			stored: []storedTrace{
+				{id: "t1", tr: strictForest(strictSpan("a", 3), strictSpan("b", -1))},
+				{id: "t2", tr: strictForest(strictSpan("c", -1))},
+			},
+			wantSpans: 3,
+			wantRoots: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctrl := gomock.NewController(t)
+			st, counters := newCountingStore(ctrl, tt.stored)
+
+			c := New(func() string { return "run-strict" },
+				PollConfig{Interval: time.Millisecond, StableFor: 2, Timeout: 2 * time.Second},
+				WithEndpoint("http://localhost:3200"))
+			got, err := c.Resolve(context.Background(), st, core.ResolveRequest{
+				RunID:    "run-strict",
+				Contract: core.CompletenessContract{Mode: "strict"},
+			})
+			if err != nil {
+				t.Fatalf("resolve: %v", err)
+			}
+			if len(got.Spans) != tt.wantSpans {
+				t.Fatalf("want %d spans, got %d", tt.wantSpans, len(got.Spans))
+			}
+			if len(got.Roots) != tt.wantRoots {
+				t.Fatalf("want %d roots, got %d", tt.wantRoots, len(got.Roots))
+			}
+			// Strict equality concludes on the first observation — no StableFor
+			// streak, no settle window. The settle/002 path would need 3 rounds.
+			if q := counters.Queries(); q != 1 {
+				t.Fatalf("strict mode must conclude on the first equality observation: want 1 query, got %d", q)
+			}
+		})
+	}
+}
+
+// TestResolveStrictModePicksUpLateArrivingSentinel pins the "sentinel arrives in a
+// late poll round" row: the sentinel may be exported in ANY batch (contracts §2),
+// so strict resolution must NOT conclude "no sentinel" from an early partial
+// forest — it keeps polling until the sentinel appears, then concludes on
+// equality. The store serves a sentinel-less 2-span forest for the first growAt,
+// then the same 2 spans with the sentinel (declaring 2) attached. StableFor is
+// unreachable within the window, so the settle/002 path can only time out (hard
+// error) — a Resolve that RETURNS the forest here did so via the strict equality
+// path. elapsed >= growAt proves it kept polling past the sentinel-less rounds
+// rather than erroring early; elapsed < timeout proves it concluded on the
+// sentinel, not the deadline.
+func TestResolveStrictModePicksUpLateArrivingSentinel(t *testing.T) {
+	t.Parallel()
+	// growAt is well past realistic scheduler jitter (tens of ms) and timeout dwarfs
+	// growAt, so neither the lower nor the upper bound sits on a knife-edge under CI
+	// load: elapsed lands comfortably in (growAt, timeout).
+	const (
+		growAt  = 120 * time.Millisecond
+		timeout = 3 * time.Second
+	)
+	ctrl := gomock.NewController(t)
+	// ONE reference clock for BOTH the store's sentinel-appearance boundary and the
+	// elapsed measurement. The store flips to the sentinel at start+growAt and elapsed
+	// is measured from the same start, so `elapsed >= growAt` is structural: Resolve
+	// cannot fetch the sentinel (and thus conclude) before start+growAt, so elapsed —
+	// taken after Resolve returns — is always >= growAt. A separate, later start for
+	// elapsed (captured after store construction) would be a wrong-sign offset that
+	// lets jitter dip elapsed just under growAt (the load-induced flake this hardens).
+	start := time.Now()
+	st, _ := newCountingStoreFuncs(ctrl,
+		func(context.Context, core.TraceQuery) ([]core.TraceRef, error) {
+			return []core.TraceRef{{TraceID: "t1"}}, nil
+		},
+		func(_ context.Context, _ string) ([]byte, error) {
+			if time.Since(start) < growAt {
+				return []byte("no-sentinel"), nil
+			}
+			return []byte("sentinel"), nil
+		},
+		func(_ string, payload []byte) (*trace.Trace, error) {
+			if string(payload) == "sentinel" {
+				return strictForest(strictSpan("a", 2), strictSpan("b", -1)), nil
+			}
+			return strictForest(strictSpan("a", -1), strictSpan("b", -1)), nil
+		})
+
+	c := New(func() string { return "run-late" },
+		PollConfig{Interval: time.Millisecond, StableFor: 1000, Timeout: timeout},
+		WithEndpoint("http://localhost:3200"))
+	got, err := c.Resolve(context.Background(), st, core.ResolveRequest{
+		RunID:    "run-late",
+		Contract: core.CompletenessContract{Mode: "strict"},
+	})
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(got.Spans) != 2 {
+		t.Fatalf("want 2 spans, got %d", len(got.Spans))
+	}
+	if got.Spans[0].Attr("test.span.count") != "2" {
+		t.Fatalf("returned forest is not the sentinel-bearing one: span a sentinel=%q", got.Spans[0].Attr("test.span.count"))
+	}
+	if elapsed < growAt {
+		t.Fatalf("strict concluded before the sentinel arrived (%v < growAt %v): must keep polling, not error on the early sentinel-less forest", elapsed, growAt)
+	}
+	if elapsed >= timeout {
+		t.Fatalf("strict did not conclude on the late sentinel (elapsed %v >= timeout %v): concluded via deadline, not equality", elapsed, timeout)
+	}
+}
+
+// TestResolveStrictModeErrors pins the four strict-specific hard errors plus the
+// preserved zero-span error (contracts §4), each a distinct message naming the
+// offending values — never a verdict over partial evidence. Every non-empty-store
+// row is red-first against the pre-strict settle/002 path: a byte-stable forest
+// there CONCLUDES (a false success), whereas strict must hard-error. The
+// zero-store row is a regression pin (green before and after): strict keeps the
+// UNCHANGED cross-mode not-found error, it does not shadow it with a sentinel one.
+func TestResolveStrictModeErrors(t *testing.T) {
+	t.Parallel()
+	const endpoint = "http://localhost:3200"
+	tests := []struct {
+		name     string
+		runID    string
+		stored   []storedTrace
+		timeout  time.Duration
+		wantSubs []string
+		notSubs  []string
+	}{
+		{
+			name:    "no sentinel at timeout (spans present, none declares)",
+			runID:   "run-missing",
+			stored:  []storedTrace{{id: "t1", tr: strictForest(strictSpan("a", -1), strictSpan("b", -1), strictSpan("c", -1))}},
+			timeout: 30 * time.Millisecond,
+			wantSubs: []string{
+				`correlate: run "run-missing": strict mode: no test.span.count sentinel found within 30ms (3 spans seen)`,
+			},
+			notSubs: []string{"unstable at deadline", "completeness not reached", "settle window"},
+		},
+		{
+			name:    "duplicate sentinels (immediate, names span ids)",
+			runID:   "run-dup",
+			stored:  []storedTrace{{id: "t1", tr: strictForest(strictSpan("sp-a", 2), strictSpan("sp-b", 2))}},
+			timeout: 2 * time.Second, // generous: the error is immediate, not at deadline
+			wantSubs: []string{
+				`correlate: run "run-dup": strict mode: 2 sentinel spans found (want exactly 1): [sp-a, sp-b]`,
+			},
+			notSubs: []string{"unstable at deadline", "completeness not reached"},
+		},
+		{
+			name:    "observed < declared at timeout (short)",
+			runID:   "run-short",
+			stored:  []storedTrace{{id: "t1", tr: strictForest(strictSpan("a", 5), strictSpan("b", -1))}},
+			timeout: 30 * time.Millisecond,
+			wantSubs: []string{
+				`correlate: run "run-short": strict mode: 2 of 5 declared spans within 30ms`,
+			},
+			notSubs: []string{"unstable at deadline", "settle window"},
+		},
+		{
+			name:    "observed > declared (immediate, exceeded)",
+			runID:   "run-over",
+			stored:  []storedTrace{{id: "t1", tr: strictForest(strictSpan("a", 3), strictSpan("b", -1), strictSpan("c", -1), strictSpan("d", -1))}},
+			timeout: 2 * time.Second, // generous: exceeded is immediate
+			wantSubs: []string{
+				`correlate: run "run-over": strict mode: 4 spans exceed declared test.span.count=3`,
+			},
+			notSubs: []string{"unstable at deadline", "completeness not reached"},
+		},
+		{
+			// Pin: a sentinel whose test.span.count is present but non-integer is a
+			// distinct descriptive hard error (FR-013, Constitution IV) — NOT a silent
+			// declared=0 that misreports "N spans exceed declared test.span.count=0".
+			// It names the run id, the sentinel span id, and the raw value.
+			name:  "sentinel present but non-integer (immediate, hard error)",
+			runID: "run-bad",
+			stored: []storedTrace{{id: "t1", tr: strictForest(
+				&trace.Span{ID: "sp-x", Name: "span-sp-x", Attrs: map[string]string{"test.span.count": "abc"}},
+				strictSpan("b", -1),
+			)}},
+			timeout: 2 * time.Second, // generous: the malformed sentinel errors immediately, not at deadline
+			wantSubs: []string{
+				`correlate: run "run-bad": strict mode: sentinel span sp-x has non-integer test.span.count="abc"`,
+			},
+			notSubs: []string{"test.span.count=0", "of 0 declared", "unstable at deadline", "completeness not reached"},
+		},
+		{
+			// Pin: zero spans at timeout keeps the UNCHANGED cross-mode not-found
+			// error (data-model "all modes → zero spans → hard error (unchanged)"),
+			// including the triage checklist — strict does not shadow it with a
+			// missing-sentinel message.
+			name:    "zero spans at timeout keeps the unchanged not-found error",
+			runID:   "run-empty",
+			stored:  nil,
+			timeout: 30 * time.Millisecond,
+			wantSubs: []string{
+				`correlate: no trace for run "run-empty" within 30ms (0 spans seen)`,
+				"checklist:",
+			},
+			notSubs: []string{"strict mode", "sentinel"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctrl := gomock.NewController(t)
+			st, _ := newCountingStore(ctrl, tt.stored)
+
+			c := New(func() string { return tt.runID },
+				PollConfig{Interval: time.Millisecond, StableFor: 2, Timeout: tt.timeout},
+				WithEndpoint(endpoint))
+			tr, err := c.Resolve(context.Background(), st, core.ResolveRequest{
+				RunID:    tt.runID,
+				Contract: core.CompletenessContract{Mode: "strict"},
+			})
+			if err == nil {
+				t.Fatalf("want strict-mode hard error, got nil (tr=%v)", tr)
+			}
+			if tr != nil {
+				t.Fatalf("want nil trace on hard error, got %v", tr)
+			}
+			msg := err.Error()
+			for _, want := range tt.wantSubs {
+				if !strings.Contains(msg, want) {
+					t.Fatalf("strict error missing %q:\n%s", want, msg)
+				}
+			}
+			for _, notWant := range tt.notSubs {
+				if strings.Contains(msg, notWant) {
+					t.Fatalf("strict error must not contain %q:\n%s", notWant, msg)
+				}
+			}
+		})
 	}
 }

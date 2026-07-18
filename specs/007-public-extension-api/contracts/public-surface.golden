@@ -23,6 +23,18 @@ func WithReports(targets map[string]string) Option
 func WithStore(name string, f StoreFactory) Option
 func WithTags(expr string) Option
 func WithVerbosity(w io.Writer, verbose, debug bool) Option
+method (Comparator) Compare(ctx context.Context, ev Evidence, e Expectation) (Verdict, error)
+method (Comparator) Name() string
+method (Correlator) Inject(ctx context.Context, spec *RunSpec) (runID string)
+method (Correlator) Resolve(ctx context.Context, store TraceStore, req ResolveRequest) (*trace.Trace, error)
+method (Correlator) ResolveComplete(ctx context.Context, store TraceStore, runID string) (*trace.Trace, error)
+method (Driver) Run(ctx context.Context, spec RunSpec) (RunResult, error)
+method (Judge) Judge(ctx context.Context, req JudgeRequest) (JudgeVerdict, error)
+method (Reporter) Report(rep RunReport, w io.Writer) error
+method (TraceStore) Caps() StoreCaps
+method (TraceStore) DecodePayload(id string, payload []byte) (*trace.Trace, error)
+method (TraceStore) FetchPayload(ctx context.Context, id string) ([]byte, error)
+method (TraceStore) Query(ctx context.Context, q TraceQuery) ([]TraceRef, error)
 type Comparator = core.Comparator
 type ComparatorFactory = func(Config) (Comparator, error)
 type Config = config.Config

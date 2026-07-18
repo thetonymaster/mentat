@@ -22,6 +22,13 @@ import (
 // not contain the reserved delimiters ',' or '='.
 var runIDRe = regexp.MustCompile(`^[A-Za-z0-9._:-]+$`)
 
+// completenessSentinelKey is the strict-mode in-trace declaration (contracts §2):
+// the SUT sets it on exactly one span to the total span count of the whole merged
+// run forest (all roots), INCLUDING the sentinel-bearing span itself. Strict
+// resolution scans the merged forest for it each poll round and concludes only at
+// exact equality (data-model "State machine per poll round").
+const completenessSentinelKey = "test.span.count"
+
 // PollConfig controls the stable-poll behaviour of Resolve.
 type PollConfig struct {
 	Interval  time.Duration
@@ -144,7 +151,14 @@ func refsKey(refs []core.TraceRef) string {
 // TraceID) after every query, so a store returning the same set in a different
 // order is a stable observation. Zero traces within Timeout is a hard error
 // (invariant §4).
-func (c *correlator) Resolve(ctx context.Context, store core.TraceStore, runID string) (*trace.Trace, error) {
+func (c *correlator) Resolve(ctx context.Context, store core.TraceStore, req core.ResolveRequest) (*trace.Trace, error) {
+	// req.Contract carries the per-run completeness barriers. The settle-window
+	// barrier (settle mode) is enforced in the poll loop below (008 T010): it gates
+	// the conclusion behind req.Contract.Settle elapsing, additive over the 002
+	// stability gate. A zero-value contract (Settle == 0, the pre-008 default) leaves
+	// resolution byte-identical to the prior string-argument behaviour. Strict-mode
+	// sentinel handling lands later (008 T022).
+	runID := req.RunID
 	start := time.Now()
 	deadline := start.Add(c.poll.Timeout)
 	c.logger.InfoContext(ctx, "resolve.start", "run_id", runID, "store_endpoint", c.endpoint, "query", traceQLByRunID(runID))
@@ -185,6 +199,78 @@ func (c *correlator) Resolve(ctx context.Context, store core.TraceStore, runID s
 		m := mergeRefs(runID, refs, cache)
 		count := len(m.Spans)
 
+		// Feature-008 strict mode (008 T022): a per-round scan of the merged forest
+		// for the test.span.count sentinel supersedes the settle window entirely
+		// (data-model "State machine per poll round"). The SUT declares the whole
+		// forest's self-inclusive span count in one span; resolution concludes ONLY
+		// at exact equality, and every mismatch is a distinct hard error — never a
+		// verdict over partial evidence (invariant §4). This is a wholly separate
+		// termination path from the settle/002 gate below, keyed on Mode; settle-mode
+		// callers never enter it, so their behaviour (and the 002 gate) is untouched.
+		if req.Contract.Mode == "strict" {
+			sentinels := sentinelSpans(m)
+			// declared is parsed ONCE, in case 1 (the confirmed single sentinel), and
+			// reused by the deadline path below — the deadline's count-short branch is
+			// reachable only with exactly one sentinel that parsed here.
+			var declared int
+			switch len(sentinels) {
+			case 0:
+				// No declaration observed yet. The sentinel may arrive in any later
+				// batch (contracts §2), so keep polling; concluding "no sentinel" from
+				// this partial forest would false-fail a still-exporting run. Only the
+				// deadline turns this into the missing-sentinel hard error.
+			case 1:
+				d, ok := sentinels[0].AttrInt(completenessSentinelKey)
+				if !ok {
+					// The sentinel key is present (sentinelSpans matched it) but its
+					// value is non-integer. Discarding the ok bool here would yield a
+					// silent declared=0 and a misleading "exceed …=0" / "of 0 declared"
+					// error — a silent fallback (Constitution IV / FR-013). Name the run,
+					// the sentinel span, and the raw value instead.
+					return nil, fmt.Errorf("correlate: run %q: strict mode: sentinel span %s has non-integer test.span.count=%q", runID, sentinels[0].ID, sentinels[0].Attr(completenessSentinelKey))
+				}
+				declared = d
+				switch {
+				case count > declared:
+					// The run emitted more spans than it declared: the declaration is
+					// violated, so hard-error immediately.
+					return nil, fmt.Errorf("correlate: run %q: strict mode: %d spans exceed declared test.span.count=%d", runID, count, declared)
+				case count == declared:
+					c.logger.InfoContext(ctx, "resolve.done", "run_id", runID, "spans", len(m.Spans), "roots", len(m.Roots), "rounds", round, "elapsed", time.Since(start), "mode", "strict")
+					return m, nil
+				}
+				// count < declared: the run is still flushing toward its declared total;
+				// keep polling until it reaches equality or the deadline fires.
+			default:
+				// ≥2 sentinels: which count is authoritative? Ambiguous declaration —
+				// hard-error immediately, naming the offending span ids.
+				return nil, fmt.Errorf("correlate: run %q: strict mode: %d sentinel spans found (want exactly 1): [%s]", runID, len(sentinels), strings.Join(sentinelIDs(sentinels), ", "))
+			}
+			c.logger.DebugContext(ctx, "resolve.poll", "round", round, "spans_seen", count, "sentinels", len(sentinels))
+
+			if time.Now().After(deadline) {
+				if count == 0 {
+					// Zero spans at timeout keeps the UNCHANGED cross-mode not-found error
+					// (data-model "all modes → zero spans → hard error (unchanged)"): the
+					// trace never arrived, so the "where is it" triage checklist applies —
+					// strict does not shadow it with a missing-sentinel message.
+					return nil, fmt.Errorf("correlate: no trace for run %q within %v (0 spans seen)%s%s", runID, c.poll.Timeout, c.storeQueryLines(runID), zeroSpanChecklist)
+				}
+				if len(sentinels) == 0 {
+					return nil, fmt.Errorf("correlate: run %q: strict mode: no test.span.count sentinel found within %v (%d spans seen)", runID, c.poll.Timeout, count)
+				}
+				// declared was parsed (and validated non-zero-ok) in case 1 above; this
+				// branch is reached only with exactly one sentinel, so reuse it.
+				return nil, fmt.Errorf("correlate: run %q: strict mode: %d of %d declared spans within %v", runID, count, declared, c.poll.Timeout)
+			}
+			select {
+			case <-ctx.Done():
+				return nil, fmt.Errorf("correlate: context cancelled resolving run %q: %w", runID, ctx.Err())
+			case <-time.After(c.poll.Interval):
+			}
+			continue
+		}
+
 		if !changed && count > 0 {
 			stable++
 		} else {
@@ -195,7 +281,19 @@ func (c *correlator) Resolve(ctx context.Context, store core.TraceStore, runID s
 			stable = 0
 		}
 		c.logger.DebugContext(ctx, "resolve.poll", "round", round, "spans_seen", count, "stable_streak", stable)
-		if !changed && count > 0 && stable >= c.poll.StableFor {
+		// Feature-002 stability gate: the observation is stable for StableFor rounds.
+		stabilityMet := !changed && count > 0 && stable >= c.poll.StableFor
+		// Feature-008 settle barrier (settle mode, 008 T010): a live resolution may
+		// CONCLUDE only once the settle window measured from Resolve entry (=
+		// drive-return, the engine calls this synchronously) has elapsed AND the 002
+		// stability gate holds. The settle window is an ADDITIVE condition over the
+		// unchanged 002 gate, never a replacement. Settle == 0 makes the window check
+		// vacuously true, so this reduces byte-for-byte to the pre-008, 002-only
+		// behaviour existing callers rely on. Late spans arriving inside the window
+		// change the payload bytes, reset the 002 gate, and are therefore included in
+		// the returned forest. (Strict mode — the test.span.count sentinel — is a
+		// later task, 008 T022; it is not handled here.)
+		if stabilityMet && time.Since(start) >= req.Contract.Settle {
 			// The returned forests were decoded from exactly the bytes the
 			// stable observations hashed — no re-fetch, no re-decode.
 			c.logger.InfoContext(ctx, "resolve.done", "run_id", runID, "spans", len(m.Spans), "roots", len(m.Roots), "rounds", round, "elapsed", time.Since(start))
@@ -206,6 +304,20 @@ func (c *correlator) Resolve(ctx context.Context, store core.TraceStore, runID s
 		if time.Now().After(deadline) {
 			if count == 0 {
 				return nil, fmt.Errorf("correlate: no trace for run %q within %v (0 spans seen)%s%s", runID, c.poll.Timeout, c.storeQueryLines(runID), zeroSpanChecklist)
+			}
+			// Settle mode with a non-zero window (008 FR-013): the completeness
+			// barrier — not the bare 002 gate — is what remained unmet, so name the
+			// unsatisfied barrier per contracts §4. Which one depends on whether the
+			// window itself has yet to elapse (spans may still be flushing) or the
+			// window elapsed but the span count never stabilised. Settle == 0 falls
+			// through to the byte-identical feature-002 unstable-at-deadline error
+			// below, so no pre-008 caller sees a message change.
+			if req.Contract.Settle > 0 {
+				waitingOn := "span-count stability"
+				if remaining := req.Contract.Settle - time.Since(start); remaining > 0 {
+					waitingOn = fmt.Sprintf("settle window (%v remaining)", remaining)
+				}
+				return nil, fmt.Errorf("correlate: run %q: completeness not reached within %v: waiting on %s (spans seen: %d)%s", runID, c.poll.Timeout, waitingOn, count, c.storeQueryLines(runID))
 			}
 			// Spans present but never observed stable: the trace was still growing at
 			// the deadline. Returning it best-effort (audit A3) risks running
@@ -254,6 +366,30 @@ func (c *correlator) ResolveComplete(ctx context.Context, store core.TraceStore,
 		return nil, fmt.Errorf("correlate: no trace for run %q (0 spans seen)", runID)
 	}
 	return m, nil
+}
+
+// sentinelSpans returns every span in the merged forest bearing the strict-mode
+// test.span.count sentinel attribute, in forest (canonical merge) order. It scans
+// the WHOLE merged forest — every root — because the run's declared count spans
+// all traces (invariant §2; contracts §2).
+func sentinelSpans(m *trace.Trace) []*trace.Span {
+	var out []*trace.Span
+	for _, s := range m.Spans {
+		if _, ok := s.Attrs[completenessSentinelKey]; ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// sentinelIDs projects sentinel-bearing spans onto their span ids, for the
+// ambiguous-declaration (≥2 sentinels) error.
+func sentinelIDs(spans []*trace.Span) []string {
+	ids := make([]string, len(spans))
+	for i, s := range spans {
+		ids[i] = s.ID
+	}
+	return ids
 }
 
 // mergeRefs merges the cached forests of every ref, in canonical sorted-TraceID

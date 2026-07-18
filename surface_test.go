@@ -17,11 +17,27 @@
 //     BODY STRIPPED (FuncDecl.Body = nil), never the implementation;
 //   - const specs → "const <name> = <RHS-as-written>".
 //
+// Re-exported INTERFACE aliases (feature 008 F1). A bare alias line like
+// "type Correlator = core.Correlator" is BLIND to the aliased interface's method
+// set: a signature change to core.Correlator.Resolve produces zero diff. So for
+// every EXPORTED alias whose RHS is a selector `pkg.Name`, we also go/parser-parse
+// the aliased package's source straight from disk (import path → module-relative
+// dir, via go.mod), and if `type Name interface { … }` is found there we render
+// each method as a normalized one-line signature receiver-named by the FACADE
+// alias, e.g.
+//
+//	method (Correlator) Resolve(ctx context.Context, store TraceStore, req ResolveRequest) (*trace.Trace, error)
+//
+// Non-interface aliases (structs, maps, `= any`) are unaffected — they stay the
+// alias line only. This still honors R4: NO go/types / importer / x/tools — the
+// interface method set is read from the aliased package's AST, not resolved by a
+// type checker. Non-module aliases (stdlib) have no local source to parse and so
+// stay alias-line-only (none such today).
+//
 // Every rendered symbol is collapsed to a single whitespace-normalized line, and
 // the whole set is sort.Strings'd, so source declaration order never churns the
 // golden (determinism). Unexported identifiers (runOptions, driverReg, toResults,
-// …) are skipped. AST was sufficient — no go/types / importer needed, because the
-// RHS-as-written rendering never has to resolve an alias target.
+// …) are skipped.
 //
 // MUTATION REHEARSAL (T014, performed once, reverted):
 // With the golden present and green, a scratch file `zz_surface_mutation.go`
@@ -34,6 +50,24 @@
 // naming exactly the injected symbol, then the scratch file was deleted and the
 // test returned GREEN. This proves the gate catches real surface drift (not only
 // a missing golden file); the scratch symbol is NOT left behind.
+//
+// MUTATION REHEARSAL (feature 008 T028, method-set drift, performed once, reverted):
+// With the method-set-aware golden present and green, the receiver-independent
+// parameter name in core.Correlator.Resolve was renamed `ctx`→`c` in
+// internal/core/core.go (an interface param-name change satisfies no implementer,
+// so the whole module still compiles — the gate parses source, it does not need a
+// green build of the mutated interface's implementers). Running this test went RED
+// with:
+//
+//	symbols present now but NOT in golden (added/changed):
+//	    - method (Correlator) Resolve(c context.Context, store TraceStore, req ResolveRequest) (*trace.Trace, error)
+//	symbols in golden but NOT present now (removed/changed):
+//	    - method (Correlator) Resolve(ctx context.Context, store TraceStore, req ResolveRequest) (*trace.Trace, error)
+//
+// naming exactly the changed method on both sides, then core.go was reverted and
+// the test returned GREEN. This proves the gate now bites method-set changes on
+// re-exported interfaces — the 008 Correlator.Resolve signature change would no
+// longer slip through with zero golden diff.
 package mentat_test
 
 import (
@@ -43,6 +77,7 @@ import (
 	"go/printer"
 	"go/token"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -109,37 +144,239 @@ func TestPublicSurfaceGolden(t *testing.T) {
 		surfaceGoldenPath, surfaceIndent(added), surfaceIndent(removed), goldenUpdateEnv)
 }
 
+// surfaceCtx carries the cross-file state the renderer needs to resolve a
+// re-exported interface alias (e.g. `type Correlator = core.Correlator`) into its
+// METHOD SET. R4 stays honored — STDLIB ONLY, no go/types / importer / x/tools:
+// the aliased package (internal/core, …) is go/parser-parsed straight from disk
+// and its `type X interface { … }` declarations are indexed by name.
+type surfaceCtx struct {
+	fset    *token.FileSet
+	modPath string
+	// imports maps a facade-file import's local package name (e.g. "core") to the
+	// module-relative source dir (e.g. "internal/core"). Non-module imports (stdlib)
+	// are absent — they have no local source to parse, so their aliases stay
+	// alias-line-only (there is no such interface alias today).
+	imports map[string]string
+	// ifaces caches, per parsed aliased dir, its exported interface type literals by
+	// name. A dir is parsed lazily on first lookup.
+	ifaces map[string]map[string]*ast.InterfaceType
+}
+
 // surfaceRender parses every non-test source file in the package dir and returns
-// the sorted, canonical single-line rendering of every exported symbol.
+// the sorted, canonical single-line rendering of every exported symbol (facade
+// symbols plus the method set of every re-exported interface alias).
 func surfaceRender(t *testing.T) []string {
 	t.Helper()
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatalf("read package dir: %v", err)
 	}
-	fset := token.NewFileSet()
-	var lines []string
+	c := &surfaceCtx{
+		fset:    token.NewFileSet(),
+		modPath: surfaceModulePath(t),
+		imports: map[string]string{},
+		ifaces:  map[string]map[string]*ast.InterfaceType{},
+	}
+	var files []*ast.File
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
 		// Mode 0: no ParseComments — doc/inline comments are NOT part of the surface.
-		f, err := parser.ParseFile(fset, name, nil, 0)
+		f, err := parser.ParseFile(c.fset, name, nil, 0)
 		if err != nil {
 			t.Fatalf("parse %s: %v", name, err)
 		}
+		c.addImports(f)
+		files = append(files, f)
+	}
+	// Render only after every facade import is recorded, so an alias in run.go
+	// resolves against imports declared in any facade file.
+	var lines []string
+	for _, f := range files {
 		for _, decl := range f.Decls {
 			switch d := decl.(type) {
 			case *ast.FuncDecl:
-				lines = append(lines, surfaceRenderFunc(t, fset, d)...)
+				lines = append(lines, surfaceRenderFunc(t, c.fset, d)...)
 			case *ast.GenDecl:
-				lines = append(lines, surfaceRenderGenDecl(t, fset, d)...)
+				lines = append(lines, c.renderGenDecl(t, d)...)
 			}
 		}
 	}
 	sort.Strings(lines)
 	return lines
+}
+
+// surfaceModulePath reads the module path from go.mod (cwd == package dir == module
+// root under `go test`), so an import path can be mapped to its on-disk source dir
+// without go/build or x/tools (R4).
+func surfaceModulePath(t *testing.T) string {
+	t.Helper()
+	data, err := os.ReadFile("go.mod")
+	if err != nil {
+		t.Fatalf("read go.mod: %v", err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "module "); ok {
+			return strings.TrimSpace(rest)
+		}
+	}
+	t.Fatalf("no module line in go.mod")
+	return ""
+}
+
+// addImports records every module-local import of a facade file as local-name→dir
+// (the local name is the import alias when present, else the path's last element).
+func (c *surfaceCtx) addImports(f *ast.File) {
+	for _, imp := range f.Imports {
+		path := strings.Trim(imp.Path.Value, `"`)
+		var dir string
+		switch {
+		case path == c.modPath:
+			dir = "."
+		case strings.HasPrefix(path, c.modPath+"/"):
+			dir = strings.TrimPrefix(path, c.modPath+"/")
+		default:
+			continue // stdlib / third-party: no local source to render
+		}
+		name := path[strings.LastIndex(path, "/")+1:]
+		if imp.Name != nil {
+			name = imp.Name.Name
+		}
+		c.imports[name] = dir
+	}
+}
+
+// renderGenDecl renders the exported type/const specs of a GenDecl, handling
+// grouped decls (a `type ( … )` block) spec-by-spec so unexported members are
+// dropped individually. A re-exported interface alias additionally renders its
+// method set (feature 008 F1).
+func (c *surfaceCtx) renderGenDecl(t *testing.T, d *ast.GenDecl) []string {
+	t.Helper()
+	var out []string
+	for _, spec := range d.Specs {
+		switch s := spec.(type) {
+		case *ast.TypeSpec:
+			if !s.Name.IsExported() {
+				continue
+			}
+			out = append(out, "type "+surfacePrint(t, c.fset, s))
+			// A re-exported interface alias (`type X = pkg.Iface`) additionally renders
+			// its METHOD SET, so a signature change to a re-exported interface method is
+			// caught as drift — the alias line alone is blind to it (feature 008 F1).
+			if s.Assign.IsValid() {
+				if sel, ok := s.Type.(*ast.SelectorExpr); ok {
+					if pkg, ok := sel.X.(*ast.Ident); ok {
+						if iface := c.lookupInterface(t, pkg.Name, sel.Sel.Name); iface != nil {
+							out = append(out, c.renderInterfaceMethods(t, s.Name.Name, iface)...)
+						}
+					}
+				}
+			}
+		case *ast.ValueSpec:
+			for i, n := range s.Names {
+				if !n.IsExported() {
+					continue
+				}
+				line := d.Tok.String() + " " + n.Name
+				if s.Type != nil {
+					line += " " + surfacePrint(t, c.fset, s.Type)
+				}
+				if i < len(s.Values) {
+					line += " = " + surfacePrint(t, c.fset, s.Values[i])
+				}
+				out = append(out, line)
+			}
+		}
+	}
+	return out
+}
+
+// lookupInterface resolves a re-exported alias target `pkg.name` to its interface
+// type literal in the aliased package's source, or nil when pkg is non-local or
+// name is not an interface (a struct/map/`= any` alias stays alias-line-only).
+func (c *surfaceCtx) lookupInterface(t *testing.T, pkg, name string) *ast.InterfaceType {
+	t.Helper()
+	dir, ok := c.imports[pkg]
+	if !ok {
+		return nil
+	}
+	if c.ifaces[dir] == nil {
+		c.ifaces[dir] = c.indexInterfaces(t, dir)
+	}
+	return c.ifaces[dir][name]
+}
+
+// indexInterfaces parses every non-test .go file in dir and indexes its exported
+// `type X interface { … }` declarations by name.
+func (c *surfaceCtx) indexInterfaces(t *testing.T, dir string) map[string]*ast.InterfaceType {
+	t.Helper()
+	out := map[string]*ast.InterfaceType{}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read aliased package dir %q: %v", dir, err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(c.fset, filepath.Join(dir, name), nil, 0)
+		if err != nil {
+			t.Fatalf("parse aliased source %s: %v", filepath.Join(dir, name), err)
+		}
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				ts, ok := spec.(*ast.TypeSpec)
+				if !ok || !ts.Name.IsExported() {
+					continue
+				}
+				if iface, ok := ts.Type.(*ast.InterfaceType); ok {
+					out[ts.Name.Name] = iface
+				}
+			}
+		}
+	}
+	return out
+}
+
+// renderInterfaceMethods renders each method of a re-exported interface as a
+// normalized, alias-named one-line signature:
+//
+//	method (Correlator) Resolve(ctx context.Context, store TraceStore, req ResolveRequest) (*trace.Trace, error)
+//
+// so a signature change to ANY re-exported interface method is caught as drift.
+// The receiver is the FACADE alias name (Correlator), not core.Correlator; the
+// parameter/result types are rendered exactly as written in the aliased source.
+func (c *surfaceCtx) renderInterfaceMethods(t *testing.T, alias string, iface *ast.InterfaceType) []string {
+	t.Helper()
+	if iface.Methods == nil {
+		return nil
+	}
+	var out []string
+	for _, field := range iface.Methods.List {
+		ft, ok := field.Type.(*ast.FuncType)
+		if !ok {
+			// Embedded interface (Ident / SelectorExpr): render the embedded name so an
+			// embedding change is not silently dropped. None of the six re-exported
+			// interfaces embed today, but a future embed must still churn the golden.
+			out = append(out, "method ("+alias+") "+surfacePrint(t, c.fset, field.Type))
+			continue
+		}
+		// go/printer renders a bare FuncType as "func(params) results"; strip the
+		// leading "func" and splice in "method (Alias) Name" so the line reads as the
+		// method signature receiver-named by the facade alias.
+		sig := strings.TrimPrefix(surfacePrint(t, c.fset, ft), "func")
+		for _, mname := range field.Names {
+			out = append(out, "method ("+alias+") "+mname.Name+sig)
+		}
+	}
+	return out
 }
 
 // surfaceRenderFunc renders an exported func decl or an exported method on an
@@ -157,38 +394,6 @@ func surfaceRenderFunc(t *testing.T, fset *token.FileSet, d *ast.FuncDecl) []str
 	stripped.Body = nil // the surface is the signature, never the implementation
 	stripped.Doc = nil
 	return []string{surfacePrint(t, fset, &stripped)}
-}
-
-// surfaceRenderGenDecl renders the exported type/const specs of a GenDecl,
-// handling grouped decls (a `type ( … )` block) spec-by-spec so unexported
-// members are dropped individually.
-func surfaceRenderGenDecl(t *testing.T, fset *token.FileSet, d *ast.GenDecl) []string {
-	t.Helper()
-	var out []string
-	for _, spec := range d.Specs {
-		switch s := spec.(type) {
-		case *ast.TypeSpec:
-			if !s.Name.IsExported() {
-				continue
-			}
-			out = append(out, "type "+surfacePrint(t, fset, s))
-		case *ast.ValueSpec:
-			for i, n := range s.Names {
-				if !n.IsExported() {
-					continue
-				}
-				line := d.Tok.String() + " " + n.Name
-				if s.Type != nil {
-					line += " " + surfacePrint(t, fset, s.Type)
-				}
-				if i < len(s.Values) {
-					line += " = " + surfacePrint(t, fset, s.Values[i])
-				}
-				out = append(out, line)
-			}
-		}
-	}
-	return out
 }
 
 // surfaceExportedReceiver reports whether a method receiver's base type is exported
