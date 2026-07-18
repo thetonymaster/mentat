@@ -146,7 +146,7 @@ func TestFixtureResult(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			ev := core.Evidence{Output: core.Output{Answer: tt.answer}}
-			v, err := NewResult().Compare(context.Background(), ev, tt.exp)
+			v, err := newResultCmp().Compare(context.Background(), ev, tt.exp)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}

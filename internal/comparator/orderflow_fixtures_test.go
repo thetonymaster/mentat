@@ -149,7 +149,7 @@ func TestOrderflowResult(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			ev := core.Evidence{Output: core.Output{Status: tt.status, Body: []byte(tt.body)}}
-			v, err := NewResult().Compare(context.Background(), ev, tt.exp)
+			v, err := newResultCmp().Compare(context.Background(), ev, tt.exp)
 			if err != nil {
 				t.Fatalf("Compare: %v", err)
 			}

@@ -8,12 +8,12 @@ import (
 )
 
 // TestRegisterBuiltins asserts the composition-root helper registers the built-in
-// judge backends into the global registry, and that each registered factory builds
+// judge backends into the per-engine registry, and that each registered factory builds
 // a non-nil core.Judge from a default config without needing an API key — NewClaude
-// defers the credential check to the first Judge call (judge-seam.md). Registration
-// mutates the package-global registry, so this test stays serial (no t.Parallel).
+// defers the credential check to the first Judge call (judge-seam.md).
 func TestRegisterBuiltins(t *testing.T) {
-	RegisterBuiltins()
+	reg := registry.New()
+	RegisterBuiltins(reg)
 
 	tests := []struct {
 		name    string
@@ -25,9 +25,9 @@ func TestRegisterBuiltins(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f, ok := registry.Judge(tt.backend)
+			f, ok := reg.Judge(tt.backend)
 			if ok != tt.wantOK {
-				t.Fatalf("registry.Judge(%q) ok=%v, want %v", tt.backend, ok, tt.wantOK)
+				t.Fatalf("reg.Judge(%q) ok=%v, want %v", tt.backend, ok, tt.wantOK)
 			}
 			if !ok {
 				return
@@ -45,12 +45,13 @@ func TestRegisterBuiltins(t *testing.T) {
 
 // TestRegisterBuiltinsIdempotent asserts calling RegisterBuiltins more than once is
 // safe — the composition root and test setup may both call it. Like the sibling
-// report.RegisterBuiltins / comparator.RegisterBuiltinMatchers, re-registration just
-// overwrites the map entry, leaving the backend resolvable.
+// comparator.RegisterBuiltinMatchers, re-registration just overwrites the map entry,
+// leaving the backend resolvable.
 func TestRegisterBuiltinsIdempotent(t *testing.T) {
-	RegisterBuiltins()
-	RegisterBuiltins()
-	if _, ok := registry.Judge("claude"); !ok {
-		t.Fatalf(`registry.Judge("claude") not registered after repeated RegisterBuiltins`)
+	reg := registry.New()
+	RegisterBuiltins(reg)
+	RegisterBuiltins(reg)
+	if _, ok := reg.Judge("claude"); !ok {
+		t.Fatalf(`reg.Judge("claude") not registered after repeated RegisterBuiltins`)
 	}
 }

@@ -17,7 +17,7 @@ import (
 // colliding with a built-in (tempo/file) or an earlier extra fails loudly naming the
 // seam and the conflicting name — never a silent last-wins overwrite (Constitution IV).
 //
-// No t.Parallel(): BuildStore mutates the registry's package-global maps.
+// No t.Parallel(): kept serial by convention (the store registry is per-BuildStore now).
 func TestBuildStoreAppliesExtraStore(t *testing.T) {
 	sf := func(config.Config) (core.TraceStore, error) {
 		return store.NewInMemStore(map[string]*trace.Trace{}), nil

@@ -23,11 +23,17 @@ type options struct {
 	extraComparators []namedComparator
 	extraJudges      []namedJudge
 	extraStores      []namedStore
+	extraMatchers    []namedMatcher
 }
 
 type namedDriver struct {
 	name   string
 	driver core.Driver
+}
+
+type namedMatcher struct {
+	name    string
+	matcher core.Matcher
 }
 
 type namedComparator struct {
@@ -89,6 +95,17 @@ func WithExtraJudge(name string, f registry.JudgeFactory) Option {
 // (BuildStore) under name, with the same collision discipline as the other seams.
 func WithExtraStore(name string, f registry.StoreFactory) Option {
 	return func(o *options) { o.extraStores = append(o.extraStores, namedStore{name: name, factory: f}) }
+}
+
+// WithExtraMatcher registers a result Matcher under name into the engine's registry.
+// Unlike the driver/comparator/judge/store seams, matchers have no public facade hook
+// (they are an internal detail of the result comparator), so this is an internal
+// composition/test hook — NOT part of the public extension surface. It is applied
+// AFTER the built-in and "semantic" matchers, so it is OVERRIDE-capable
+// (last-writer-wins, no collision check): a test can substitute a mock "semantic"
+// matcher, and the semantic seam is (re)wired by name at Build.
+func WithExtraMatcher(name string, m core.Matcher) Option {
+	return func(o *options) { o.extraMatchers = append(o.extraMatchers, namedMatcher{name: name, matcher: m}) }
 }
 
 // resolveOptions applies opts over a silent (discard-handler) default so the

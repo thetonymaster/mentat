@@ -14,7 +14,6 @@ import (
 	"github.com/thetonymaster/mentat/internal/core/mocks"
 	"github.com/thetonymaster/mentat/internal/correlate"
 	"github.com/thetonymaster/mentat/internal/engine"
-	"github.com/thetonymaster/mentat/internal/registry"
 	"github.com/thetonymaster/mentat/internal/report"
 )
 
@@ -26,18 +25,14 @@ import (
 // hand fake) because the call count matters: Times(1) proves the semantic check
 // issues exactly one judge call — and, for the budget test, that the aborted second
 // scenario starts none. Hermetic: mock store serving happyTrace, shell target echoing
-// an answer the judge ignores. Registers into the global judge registry, so callers
-// must be serial.
+// an answer the judge ignores. The custom judge is registered per-engine
+// (WithExtraJudge) — no global registry mutation.
 func usageJudgeEng(t *testing.T, u core.JudgeUsage) *engine.Engine {
 	t.Helper()
-	registry.ResetForTest(t)
 	ctrl := gomock.NewController(t)
 	j := mocks.NewMockJudge(ctrl)
 	j.EXPECT().Judge(gomock.Any(), gomock.Any()).
 		Return(core.JudgeVerdict{Match: true, Reason: "usage judge match", Usage: u}, nil).Times(1)
-	registry.RegisterJudge("fake-usage", func(config.Config) (core.Judge, error) {
-		return j, nil
-	})
 	cfg := config.Config{
 		OTLPEndpoint: "x",
 		Judge:        config.JudgeConfig{Backend: "fake-usage", Votes: 1},
@@ -49,7 +44,9 @@ func usageJudgeEng(t *testing.T, u core.JudgeUsage) *engine.Engine {
 	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "r"}}, nil).AnyTimes()
 	stubStoredTrace(st, happyTrace())
 	cor := correlate.New(func() string { return "r" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
-	eng, err := engine.Build(cfg, st, cor)
+	eng, err := engine.Build(cfg, st, cor, engine.WithExtraJudge("fake-usage", func(config.Config) (core.Judge, error) {
+		return j, nil
+	}))
 	if err != nil {
 		t.Fatalf("engine.Build: %v", err)
 	}

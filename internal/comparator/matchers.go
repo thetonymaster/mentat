@@ -17,14 +17,14 @@ import (
 	"github.com/thetonymaster/mentat/internal/registry"
 )
 
-// RegisterBuiltinMatchers registers the deterministic result matchers. Called
-// at the composition root (engine.Build) and in test setup.
-func RegisterBuiltinMatchers() {
+// RegisterBuiltinMatchers registers the deterministic result matchers into reg.
+// Called at the composition root (engine.Build) and in test setup.
+func RegisterBuiltinMatchers(reg *registry.Registry) {
 	for _, m := range []core.Matcher{
 		exactMatcher{}, containsMatcher{}, regexMatcher{},
 		jsonSubsetMatcher{}, statusMatcher{}, schemaMatcher{},
 	} {
-		registry.RegisterMatcher(m.Name(), m)
+		reg.RegisterMatcher(m.Name(), m)
 	}
 }
 

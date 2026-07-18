@@ -15,15 +15,17 @@ import (
 	"github.com/thetonymaster/mentat/internal/report"
 )
 
-// Build is the single composition root: it registers built-in drivers and
-// comparators into the registry, then wires and returns a ready *Engine.
+// Build is the single composition root: it constructs a fresh per-engine registry,
+// registers built-in drivers and comparators into it, then wires and returns a ready
+// *Engine that OWNS that registry.
 //
-// Concurrency note: the Register* calls below write into the registry's
-// package-global maps under the registry's own RWMutex (FR-009). Build reopens
-// the registry, registers every seam, then seals it — after which any stray
-// Register* outside a Build panics loudly. Concurrent readers (Engine.Drive,
-// Engine.Comparator) take the read lock, so the maps are safe to read while the
-// godog suite executes scenarios concurrently.
+// Concurrency note: each Build owns its own registry (spec 007 US2, T010/T011), so two
+// Builds — sequential or concurrent — never share seam state: a custom registration in
+// one Run cannot leak into or race another. The Register* calls below write into that
+// registry's maps under its RWMutex (FR-009); Build registers every seam, then seals
+// it, after which any stray Register* panics loudly. Concurrent readers (Engine.Drive,
+// Engine.Comparator) take the read lock, so the maps are safe to read while the godog
+// suite executes scenarios concurrently.
 func Build(cfg config.Config, st core.TraceStore, cor core.Correlator, opts ...Option) (*Engine, error) {
 	// Resolve the injected logger (silent discard-handler default) and hand it to
 	// the drivers Build constructs. The correlator is a parameter Build never
@@ -31,22 +33,25 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator, opts ...O
 	// correlate.WithLogger, not here.
 	o := resolveOptions(opts)
 
-	// Build is the composition root and is re-entrant: reopen the registry so a
-	// rebuild (tests build many engines) is not blocked by a previous seal, then
-	// seal again once wiring completes (FR-009). A stray Register* after this seal —
-	// outside a Build — panics loudly.
-	registry.Reopen()
-	registry.RegisterDriver("shell", driver.NewShell(driver.WithLogger(o.logger)))
-	registry.RegisterDriver("http", driver.NewHTTP(driver.WithLogger(o.logger)))
+	// Build is the composition root: it owns a fresh registry per call, so a rebuild
+	// (tests build many engines) and concurrent builds are independent. Register every
+	// seam, then seal once wiring completes (FR-009) — a stray Register* after the seal
+	// panics loudly.
+	reg := registry.New()
+	reg.RegisterDriver("shell", driver.NewShell(driver.WithLogger(o.logger)))
+	reg.RegisterDriver("http", driver.NewHTTP(driver.WithLogger(o.logger)))
 	pricing := toPricing(cfg.Pricing)
-	registry.RegisterComparator("sequence", comparator.NewSequence())
-	registry.RegisterComparator("budgets", comparator.NewBudgets(pricing))
-	registry.RegisterComparator("result", comparator.NewResult())
-	registry.RegisterComparator("cel", comparator.NewCEL(pricing))
-	registry.RegisterComparator("shape", comparator.NewShape())
-	registry.RegisterComparator("retries", comparator.NewRetries())
-	registry.RegisterAggregateComparator("aggregate-cel", comparator.NewAggregateCEL(pricing))
-	comparator.RegisterBuiltinMatchers()
+	reg.RegisterComparator("sequence", comparator.NewSequence())
+	reg.RegisterComparator("budgets", comparator.NewBudgets(pricing))
+	reg.RegisterComparator("result", comparator.NewResult(reg))
+	reg.RegisterComparator("cel", comparator.NewCEL(pricing))
+	reg.RegisterComparator("shape", comparator.NewShape())
+	reg.RegisterComparator("retries", comparator.NewRetries())
+	reg.RegisterAggregateComparator("aggregate-cel", comparator.NewAggregateCEL(pricing))
+	comparator.RegisterBuiltinMatchers(reg)
+	// Reporters are a POST-run rendering concern (cmd/mentat emits them after Run
+	// returns Results, not the Engine), so they stay package-global — not part of the
+	// per-engine registry.
 	report.RegisterBuiltins()
 
 	// Wire the LLM-judge seam and the "semantic" result matcher. The judge
@@ -57,7 +62,7 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator, opts ...O
 	// config.Load's validateJudge), so votes are validated the same way here:
 	// unset (0) defaults to 1, but a negative or even value is a loud error
 	// rather than a silently-coerced guess (Constitution IV, no silent fallbacks).
-	judge.RegisterBuiltins()
+	judge.RegisterBuiltins(reg)
 
 	// Funnel custom driver/comparator/judge registrations from the public facade
 	// (spec 007 FR-002). They land AFTER the built-ins and BEFORE judge resolution,
@@ -70,7 +75,7 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator, opts ...O
 	// a duplicate pair sees the 1st already present — covering both custom-vs-built-in
 	// and custom-vs-custom. A collision is a loud, seam-and-name error, never a silent
 	// last-wins overwrite (Constitution IV).
-	if err := applyExtras(o); err != nil {
+	if err := applyExtras(o, reg); err != nil {
 		return nil, err
 	}
 
@@ -78,7 +83,7 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator, opts ...O
 	if backend == "" {
 		backend = "claude"
 	}
-	jf, ok := registry.Judge(backend)
+	jf, ok := reg.Judge(backend)
 	if !ok {
 		return nil, fmt.Errorf("unknown judge backend %q", backend)
 	}
@@ -93,7 +98,15 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator, opts ...O
 	if votes < 1 || votes%2 == 0 {
 		return nil, fmt.Errorf("judge.votes must be a positive odd integer, got %d", votes)
 	}
-	registry.RegisterMatcher("semantic", comparator.NewSemantic(j, votes))
+	reg.RegisterMatcher("semantic", comparator.NewSemantic(j, votes))
+
+	// Apply internal/test matcher overrides AFTER the built-in and semantic matchers.
+	// Matchers have no facade collision check (WithExtraMatcher is an internal hook),
+	// so this is deliberately last-writer-wins: a test can substitute the "semantic"
+	// matcher with a mock.
+	for _, em := range o.extraMatchers {
+		reg.RegisterMatcher(em.name, em.matcher)
+	}
 
 	pats, err := expectations.Load(cfg.Expectations)
 	if err != nil {
@@ -114,8 +127,8 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator, opts ...O
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		if _, ok := registry.Driver(cfg.Targets[name].Adapter); !ok {
-			return nil, fmt.Errorf("engine: target %q: adapter %q has no registered driver (registered: %s)", name, cfg.Targets[name].Adapter, strings.Join(registry.Drivers(), ", "))
+		if _, ok := reg.Driver(cfg.Targets[name].Adapter); !ok {
+			return nil, fmt.Errorf("engine: target %q: adapter %q has no registered driver (registered: %s)", name, cfg.Targets[name].Adapter, strings.Join(reg.Drivers(), ", "))
 		}
 	}
 
@@ -127,32 +140,32 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator, opts ...O
 		}
 		sems[name] = make(chan struct{}, n)
 	}
-	registry.Seal() // wiring complete: post-build registration now fails loudly (FR-009)
-	return &Engine{cfg: cfg, cor: cor, st: st, sems: sems, pricing: pricing, patterns: pats, logger: o.logger}, nil
+	reg.Seal() // wiring complete: post-build registration now fails loudly (FR-009)
+	return &Engine{cfg: cfg, cor: cor, st: st, sems: sems, pricing: pricing, patterns: pats, logger: o.logger, reg: reg}, nil
 }
 
 // applyExtras registers the facade-funneled driver/comparator/judge seams into the
-// (open) registry, each guarded by a collision check that fails loudly naming the
-// seam and the conflicting name (FR-002). It runs inside Build, between built-in
-// registration and Seal, so post-seal registration stays unrepresentable.
-func applyExtras(o options) error {
+// (open) per-engine registry reg, each guarded by a collision check that fails loudly
+// naming the seam and the conflicting name (FR-002). It runs inside Build, between
+// built-in registration and Seal, so post-seal registration stays unrepresentable.
+func applyExtras(o options, reg *registry.Registry) error {
 	for _, ed := range o.extraDrivers {
-		if _, exists := registry.Driver(ed.name); exists {
+		if _, exists := reg.Driver(ed.name); exists {
 			return fmt.Errorf("engine: WithDriver: adapter %q is already registered (a built-in or an earlier registration); adapter names must be unique", ed.name)
 		}
-		registry.RegisterDriver(ed.name, ed.driver)
+		reg.RegisterDriver(ed.name, ed.driver)
 	}
 	for _, ec := range o.extraComparators {
-		if _, exists := registry.Comparator(ec.name); exists {
+		if _, exists := reg.Comparator(ec.name); exists {
 			return fmt.Errorf("engine: WithComparator: comparator %q is already registered (a built-in or an earlier registration); comparator names must be unique", ec.name)
 		}
-		registry.RegisterComparator(ec.name, ec.comparator)
+		reg.RegisterComparator(ec.name, ec.comparator)
 	}
 	for _, ej := range o.extraJudges {
-		if _, exists := registry.Judge(ej.name); exists {
+		if _, exists := reg.Judge(ej.name); exists {
 			return fmt.Errorf("engine: WithJudge: judge %q is already registered (a built-in or an earlier registration); judge names must be unique", ej.name)
 		}
-		registry.RegisterJudge(ej.name, ej.factory)
+		reg.RegisterJudge(ej.name, ej.factory)
 	}
 	return nil
 }

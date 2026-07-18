@@ -37,12 +37,12 @@ type SpanSource struct {
 // It selects spans, extracts the attribute, synthesizes a derived Evidence whose
 // Output carries the value, and dispatches to the unchanged matcher; quantifiers
 // combine per-span verdicts. Every author/trace defect is a hard error (invariant #4).
-func resolveSpanSource(ctx context.Context, ev core.Evidence, exp ResultExpectation) (core.Verdict, error) {
+func resolveSpanSource(ctx context.Context, reg *registry.Registry, ev core.Evidence, exp ResultExpectation) (core.Verdict, error) {
 	src := exp.Source
 	if exp.Matcher == "status" {
 		return core.Verdict{}, fmt.Errorf("result: status matcher is boundary-only; not valid with a span source")
 	}
-	m, ok := registry.Matcher(exp.Matcher)
+	m, ok := reg.Matcher(exp.Matcher)
 	if !ok {
 		return core.Verdict{}, fmt.Errorf("result: unknown matcher %q", exp.Matcher)
 	}

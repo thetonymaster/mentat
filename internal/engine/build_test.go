@@ -9,7 +9,6 @@ import (
 
 	"github.com/thetonymaster/mentat/internal/config"
 	"github.com/thetonymaster/mentat/internal/core"
-	"github.com/thetonymaster/mentat/internal/registry"
 )
 
 // extraStubDriver/Comparator/Judge are minimal seam stubs used to exercise the
@@ -40,7 +39,7 @@ func (extraStubJudge) Judge(context.Context, core.JudgeRequest) (core.JudgeVerdi
 // a name colliding with a built-in OR with an earlier extra fails loudly naming the
 // seam and the conflicting name — never a silent last-wins overwrite (Constitution IV).
 //
-// No t.Parallel(): Build mutates the registry's package-global maps.
+// No t.Parallel(): kept serial by convention (the seam registry is per-engine now).
 func TestBuildAppliesExtraSeams(t *testing.T) {
 	drv := extraStubDriver{}
 	cmp := extraStubComparator{}
@@ -67,13 +66,13 @@ func TestBuildAppliesExtraSeams(t *testing.T) {
 			// No targets ⇒ the adapter-validation loop is skipped, isolating the
 			// extra-registration/collision behaviour under test.
 			cfg := config.Config{OTLPEndpoint: "x"}
-			_, err := Build(cfg, nil, nil, tt.opts...)
+			eng, err := Build(cfg, nil, nil, tt.opts...)
 			if len(tt.wantErrSub) == 0 {
 				if err != nil {
 					t.Fatalf("Build with extra seam: %v", err)
 				}
 				if tt.wantDriver != "" {
-					if _, ok := registry.Driver(tt.wantDriver); !ok {
+					if _, ok := eng.reg.Driver(tt.wantDriver); !ok {
 						t.Fatalf("extra driver %q not registered after Build", tt.wantDriver)
 					}
 				}
@@ -176,8 +175,8 @@ func TestBuildRejectsMalformedPattern(t *testing.T) {
 // TestBuildWiresSemanticJudge asserts the composition root resolves the judge
 // backend and registers the "semantic" result matcher (US3-AC1/AC2/AC3, FR-005).
 //
-// No t.Parallel(): Build mutates the registry's package-global maps; running the
-// rows concurrently would data-race those writes.
+// No t.Parallel(): kept serial by convention (the seam registry is per-engine now,
+// so a rebuild is independent — not a data-race requirement).
 func TestBuildWiresSemanticJudge(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -225,7 +224,7 @@ func TestBuildWiresSemanticJudge(t *testing.T) {
 			cfg := config.Config{OTLPEndpoint: "x"}
 			cfg.Judge.Backend = tt.backend
 			cfg.Judge.Votes = tt.votes
-			_, err := Build(cfg, nil, nil) // Build does not call st/cor; nil is safe
+			eng, err := Build(cfg, nil, nil) // Build does not call st/cor; nil is safe
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("Build() err = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -237,8 +236,8 @@ func TestBuildWiresSemanticJudge(t *testing.T) {
 				}
 				return
 			}
-			if _, ok := registry.Matcher("semantic"); !ok {
-				t.Errorf("registry.Matcher(%q) = false after Build, want it wired", "semantic")
+			if _, ok := eng.reg.Matcher("semantic"); !ok {
+				t.Errorf("eng.reg.Matcher(%q) = false after Build, want it wired", "semantic")
 			}
 		})
 	}
@@ -251,11 +250,10 @@ func TestBuildWiresSemanticJudge(t *testing.T) {
 // any scenario) with an error naming the target, the adapter, and the registered
 // set. The built-in shell/http drivers Build registers must still Build cleanly.
 //
-// Substring (not exact) assertions: the registry's driver map is package-global
-// and accumulates across Builds within the test binary, so the "registered:" set
-// may contain more than shell/http — we assert containment, not equality.
+// Substring (not exact) assertions: assert the "registered:" set CONTAINS the
+// built-in drivers, tolerant of any future built-ins, without pinning the exact set.
 //
-// No t.Parallel(): Build mutates the registry's package-global maps.
+// No t.Parallel(): kept serial by convention (the seam registry is per-engine now).
 func TestBuildRejectsUnregisteredAdapter(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -303,7 +301,7 @@ func TestBuildRejectsUnregisteredAdapter(t *testing.T) {
 // not whichever target Go's randomized map iteration visits first. Without the
 // sort this test is flaky; with it, the alphabetically-first target always wins.
 //
-// No t.Parallel(): Build mutates the registry's package-global maps.
+// No t.Parallel(): kept serial by convention (the seam registry is per-engine now).
 func TestBuildRejectsUnregisteredAdapterDeterministicOrder(t *testing.T) {
 	cfg := config.Config{OTLPEndpoint: "x", Targets: map[string]config.Target{
 		"aaa": {Adapter: "aphantom"},

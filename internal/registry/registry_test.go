@@ -27,33 +27,7 @@ func (fakeDriver) Run(_ context.Context, _ core.RunSpec) (core.RunResult, error)
 	return core.RunResult{}, nil
 }
 
-// resetRegistries wipes all global maps before a test and restores them after,
-// so every test function starts from a clean, isolated registry regardless of
-// execution order.
-func resetRegistries(t *testing.T) {
-	t.Helper()
-	sealed = false
-	comparators = map[string]core.Comparator{}
-	aggregateComparators = map[string]core.AggregateComparator{}
-	drivers = map[string]core.Driver{}
-	matchers = map[string]core.Matcher{}
-	reporters = map[string]core.Reporter{}
-	stores = map[string]StoreFactory{}
-	judges = map[string]JudgeFactory{}
-	t.Cleanup(func() {
-		sealed = false
-		comparators = map[string]core.Comparator{}
-		aggregateComparators = map[string]core.AggregateComparator{}
-		drivers = map[string]core.Driver{}
-		matchers = map[string]core.Matcher{}
-		reporters = map[string]core.Reporter{}
-		stores = map[string]StoreFactory{}
-		judges = map[string]JudgeFactory{}
-	})
-}
-
 func TestRegisterAndResolveComparator(t *testing.T) {
-	resetRegistries(t)
 	tests := []struct {
 		name    string
 		regName string
@@ -64,10 +38,10 @@ func TestRegisterAndResolveComparator(t *testing.T) {
 		{name: "missing", regName: "fake", lookup: "missing", wantOK: false},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			RegisterComparator(tt.regName, fakeCmp{})
-			c, ok := Comparator(tt.lookup)
+			reg := New()
+			reg.RegisterComparator(tt.regName, fakeCmp{})
+			c, ok := reg.Comparator(tt.lookup)
 			if ok != tt.wantOK {
 				t.Fatalf("Comparator(%q) ok=%v, want %v", tt.lookup, ok, tt.wantOK)
 			}
@@ -79,9 +53,9 @@ func TestRegisterAndResolveComparator(t *testing.T) {
 }
 
 func TestComparators(t *testing.T) {
-	resetRegistries(t)
-	RegisterComparator("listed", fakeCmp{})
-	names := Comparators()
+	reg := New()
+	reg.RegisterComparator("listed", fakeCmp{})
+	names := reg.Comparators()
 	found := false
 	for _, n := range names {
 		if n == "listed" {
@@ -99,11 +73,11 @@ func TestComparators(t *testing.T) {
 // when it rejects a target whose adapter has no driver. Registration order is
 // deliberately unsorted to prove the accessor sorts rather than echoing map order.
 func TestDrivers(t *testing.T) {
-	resetRegistries(t)
-	RegisterDriver("shell", fakeDriver{})
-	RegisterDriver("http", fakeDriver{})
-	RegisterDriver("aaa", fakeDriver{})
-	got := Drivers()
+	reg := New()
+	reg.RegisterDriver("shell", fakeDriver{})
+	reg.RegisterDriver("http", fakeDriver{})
+	reg.RegisterDriver("aaa", fakeDriver{})
+	got := reg.Drivers()
 	if !sort.StringsAreSorted(got) {
 		t.Fatalf("Drivers() = %v, want sorted", got)
 	}
@@ -119,7 +93,6 @@ func TestDrivers(t *testing.T) {
 }
 
 func TestRegisterAndResolveDriver(t *testing.T) {
-	resetRegistries(t)
 	registered := fakeDriver{}
 	tests := []struct {
 		name   string
@@ -131,11 +104,10 @@ func TestRegisterAndResolveDriver(t *testing.T) {
 		{name: "absent", scheme: "shell", lookup: "http", wantOK: false},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			resetRegistries(t)
-			RegisterDriver(tt.scheme, registered)
-			d, ok := Driver(tt.lookup)
+			reg := New()
+			reg.RegisterDriver(tt.scheme, registered)
+			d, ok := reg.Driver(tt.lookup)
 			if ok != tt.wantOK {
 				t.Fatalf("Driver(%q) ok=%v, want %v", tt.lookup, ok, tt.wantOK)
 			}
@@ -160,7 +132,6 @@ func (f fakeMatcher) Match(_ context.Context, _ core.Evidence, _, _ string) (cor
 }
 
 func TestMatcherRegistry(t *testing.T) {
-	resetRegistries(t)
 	tests := []struct {
 		name    string
 		regName string
@@ -171,10 +142,10 @@ func TestMatcherRegistry(t *testing.T) {
 		{name: "miss", regName: "fake", lookup: "nope-not-registered", wantOK: false},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			RegisterMatcher(tt.regName, fakeMatcher{name: tt.regName})
-			got, ok := Matcher(tt.lookup)
+			reg := New()
+			reg.RegisterMatcher(tt.regName, fakeMatcher{name: tt.regName})
+			got, ok := reg.Matcher(tt.lookup)
 			if ok != tt.wantOK {
 				t.Fatalf("Matcher(%q) ok=%v, want %v", tt.lookup, ok, tt.wantOK)
 			}
@@ -193,8 +164,8 @@ func (fakeAggCmp) Aggregate(_ context.Context, _ []core.Evidence, _ core.Expecta
 }
 
 func TestAggregateComparatorRegistry(t *testing.T) {
-	resetRegistries(t)
-	RegisterAggregateComparator("fake-agg", fakeAggCmp{})
+	reg := New()
+	reg.RegisterAggregateComparator("fake-agg", fakeAggCmp{})
 	tests := []struct {
 		name   string
 		lookup string
@@ -204,9 +175,8 @@ func TestAggregateComparatorRegistry(t *testing.T) {
 		{name: "unknown name misses", lookup: "missing-agg", wantOK: false},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			if _, ok := AggregateComparator(tt.lookup); ok != tt.wantOK {
+			if _, ok := reg.AggregateComparator(tt.lookup); ok != tt.wantOK {
 				t.Fatalf("AggregateComparator(%q) ok=%v, want %v", tt.lookup, ok, tt.wantOK)
 			}
 		})
@@ -214,7 +184,6 @@ func TestAggregateComparatorRegistry(t *testing.T) {
 }
 
 func TestStoreRegistry(t *testing.T) {
-	resetRegistries(t)
 	want := store.NewInMemStore(nil)
 	tests := []struct {
 		name    string
@@ -226,10 +195,10 @@ func TestStoreRegistry(t *testing.T) {
 		{name: "miss", regName: "inmem-test", lookup: "nope-not-registered", wantOK: false},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			RegisterStore(tt.regName, func(config.Config) (core.TraceStore, error) { return want, nil })
-			f, ok := Store(tt.lookup)
+			reg := New()
+			reg.RegisterStore(tt.regName, func(config.Config) (core.TraceStore, error) { return want, nil })
+			f, ok := reg.Store(tt.lookup)
 			if ok != tt.wantOK {
 				t.Fatalf("Store(%q) ok=%v, want %v", tt.lookup, ok, tt.wantOK)
 			}
@@ -248,7 +217,6 @@ func TestStoreRegistry(t *testing.T) {
 }
 
 func TestJudgeRegistry(t *testing.T) {
-	resetRegistries(t)
 	want := mocks.NewMockJudge(gomock.NewController(t))
 	tests := []struct {
 		name    string
@@ -261,9 +229,10 @@ func TestJudgeRegistry(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			reg := New()
 			var registered JudgeFactory = func(config.Config) (core.Judge, error) { return want, nil }
-			RegisterJudge(tt.regName, registered)
-			f, ok := Judge(tt.lookup)
+			reg.RegisterJudge(tt.regName, registered)
+			f, ok := reg.Judge(tt.lookup)
 			if ok != tt.wantOK {
 				t.Fatalf("Judge(%q) ok=%v, want %v", tt.lookup, ok, tt.wantOK)
 			}
@@ -281,8 +250,9 @@ func TestJudgeRegistry(t *testing.T) {
 	}
 }
 
+// TestReporterRegistry exercises the package-global reporter seam (reporters are a
+// post-run rendering concern, not part of the per-engine registry).
 func TestReporterRegistry(t *testing.T) {
-	resetRegistries(t)
 	tests := []struct {
 		name    string
 		regName string
@@ -294,7 +264,6 @@ func TestReporterRegistry(t *testing.T) {
 	}
 	RegisterReporter("fake", mocks.NewMockReporter(gomock.NewController(t)))
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			_, ok := Reporter(tt.lookup)
 			if ok != tt.wantOK {
@@ -307,10 +276,9 @@ func TestReporterRegistry(t *testing.T) {
 // --- Feature 003 (US4): registry sealing -------------------------------------
 
 func TestSealRejectsPostBuildRegistration(t *testing.T) {
-	resetRegistries(t)
-	RegisterComparator("pre-seal", fakeCmp{}) // allowed before the seal
-	Seal()
-	defer Reopen() // keep the registry usable for other tests in this binary
+	reg := New()
+	reg.RegisterComparator("pre-seal", fakeCmp{}) // allowed before the seal
+	reg.Seal()
 	defer func() {
 		r := recover()
 		if r == nil {
@@ -321,39 +289,21 @@ func TestSealRejectsPostBuildRegistration(t *testing.T) {
 			t.Fatalf("panic %q lacks the sealed-registry explanation", msg)
 		}
 	}()
-	RegisterComparator("post-seal", fakeCmp{}) // must panic
+	reg.RegisterComparator("post-seal", fakeCmp{}) // must panic
 	t.Fatal("RegisterComparator after Seal did not panic")
 }
 
-func TestResetForTestReopensRegistry(t *testing.T) {
-	resetRegistries(t)
-	Seal()
-	ResetForTest(t) // reopens for legitimate test-time registration
-	RegisterComparator("after-reset", fakeCmp{})
-	if _, ok := Comparator("after-reset"); !ok {
-		t.Fatal("comparator registered after ResetForTest was not found")
-	}
-}
-
-func TestResetForTestRequiresTestingT(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatal("ResetForTest(nil) must panic — it is a test-only helper")
-		}
-	}()
-	ResetForTest(nil)
-}
-
+// TestRegistryConcurrentAccessRaceClean proves concurrent readers and a writer
+// (pre-seal) are race-free under -race — the RWMutex removes the audit-B5 data-race
+// class outright.
 func TestRegistryConcurrentAccessRaceClean(t *testing.T) {
-	resetRegistries(t)
-	// Concurrent readers and a writer (pre-seal) must be race-free under -race —
-	// the mutex removes the audit-B5 data-race class outright.
+	reg := New()
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
-		go func() { defer wg.Done(); _, _ = Comparator("x") }()
+		go func() { defer wg.Done(); _, _ = reg.Comparator("x") }()
 	}
 	wg.Add(1)
-	go func() { defer wg.Done(); RegisterComparator("y", fakeCmp{}) }()
+	go func() { defer wg.Done(); reg.RegisterComparator("y", fakeCmp{}) }()
 	wg.Wait()
 }

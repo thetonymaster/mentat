@@ -76,7 +76,7 @@ func TestSchemaMatcher(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			ev := core.Evidence{Output: core.Output{Body: []byte(tt.body)}}
-			v, err := NewResult().Compare(context.Background(), ev,
+			v, err := newResultCmp().Compare(context.Background(), ev,
 				ResultExpectation{Matcher: "schema", Want: tt.want})
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err=%v wantErr=%v", err, tt.wantErr)
