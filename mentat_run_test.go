@@ -466,8 +466,8 @@ func TestRunScenarioResultCarriesFeatureFile(t *testing.T) {
 //
 // The custom comparator is registered and composes, but is NOT invoked from a
 // feature step: the built-in Gherkin grammar maps steps onto the built-in comparator
-// names only, and first-class custom-comparator steps are deferred to a future spec
-// (008) — out of 007's registration-surface scope. This test therefore asserts
+// names only, and first-class custom-comparator steps are planned as spec 010 (not
+// started yet) — out of 007's registration-surface scope. This test therefore asserts
 // registration/composition success for the comparator, and behavioural resolution
 // for the judge.
 //

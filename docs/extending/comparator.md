@@ -77,12 +77,14 @@ res, err := mentat.Run(ctx, cfg,
 )
 ```
 
-> **Out of scope for feature 007 (deferred to spec 008).** `WithComparator`
-> publishes the *registration* surface: a custom comparator is registered and
-> composes at build today. Actually *invoking* it from a `.feature` step, however,
-> needs new Gherkin grammar plus generic expectation parsing, which is deliberately
-> deferred to a dedicated future spec. So a registered comparator is composable now
-> but is not yet driven by an authored step — see the "Out of scope" note in
+> **Out of scope for feature 007 (planned as spec 010, not yet started).**
+> `WithComparator` publishes the *registration* surface: a custom comparator is
+> registered and composes at build today. Actually *invoking* it from a `.feature`
+> step, however, needs new Gherkin grammar plus generic expectation parsing. That
+> work is planned as spec 010, custom comparator steps; it has not been started, so
+> there is no spec document to read yet. A registered comparator is therefore
+> composable now but is not yet driven by an authored step — see the "Out of scope"
+> note in
 > [`specs/007-public-extension-api/tasks.md`](../../specs/007-public-extension-api/tasks.md).
 > (Custom **drivers** and **stores** do work end to end today — see
 > [`examples/kafkaecho`](../../examples/kafkaecho).)

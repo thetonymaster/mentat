@@ -111,7 +111,8 @@ type StoreFactory = func(Config) (TraceStore, error)
 // names, so a custom comparator is registered and composable today but is not yet
 // invokable from a .feature step without new grammar. First-class custom-comparator
 // Gherkin steps are deliberately OUT of scope for feature 007 (which publishes the
-// registration surface); they are deferred to a dedicated future spec (008).
+// registration surface); they are planned as spec 010, custom comparator steps,
+// which has not been started yet.
 type ComparatorFactory = func(Config) (Comparator, error)
 
 // JudgeFactory builds a custom Judge from the resolved Config. Registered under a
