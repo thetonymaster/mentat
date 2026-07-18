@@ -19,8 +19,8 @@
 
 **Purpose**: Branch, commit the planning artifacts, verify a green baseline.
 
-- [ ] T001 Create branch `009-extension-surface-integrity` from `main`; commit the planning artifacts individually: all files under `specs/009-extension-surface-integrity/` plus the SPECKIT block update in `CLAUDE.md` (`docs(009): spec + plan artifacts`)
-- [ ] T002 Record the green baseline on the branch: `make ci` passes and `go test ./ -run TestPublicSurface -v` PASSES at the branch point; if either is red, STOP and surface to Q before any 009 work (output recorded in the task checkpoint, not assumed)
+- [X] T001 Create branch `009-extension-surface-integrity` from `main`; commit the planning artifacts individually: all files under `specs/009-extension-surface-integrity/` plus the SPECKIT block update in `CLAUDE.md` (`docs(009): spec + plan artifacts`)
+- [X] T002 Record the green baseline on the branch: `make ci` passes and `go test ./ -run TestPublicSurface -v` PASSES at the branch point; if either is red, STOP and surface to Q before any 009 work (output recorded in the task checkpoint, not assumed)
 
 ---
 
@@ -40,14 +40,14 @@
 
 ### Tests for User Story 1 (REQUIRED — Test-First) ⚠️
 
-- [ ] T003 [P] [US1] RED: add a table-driven renderer unit test in `surface_test.go` asserting struct-alias expansion: `Verdict` row includes a `Qualifiers []string` field line, `Target` row includes `Completeness Completeness`, `ExtractConfig` row EXCLUDES the unexported `compiled`, and a map alias (`Pricing`) stays single-line. Run `go test ./ -run <new test name> -v` — VERIFY: FAIL (renderer doesn't expand structs yet); record the failure output
+- [X] T003 [P] [US1] RED: add a table-driven renderer unit test in `surface_test.go` asserting struct-alias expansion: `Verdict` row includes a `Qualifiers []string` field line, `Target` row includes `Completeness Completeness`, `ExtractConfig` row EXCLUDES the unexported `compiled`, and a map alias (`Pricing`) stays single-line. Run `go test ./ -run <new test name> -v` — VERIFY: FAIL (renderer doesn't expand structs yet); record the failure output
 
 ### Implementation for User Story 1
 
-- [ ] T004 [US1] GREEN: implement struct expansion in `surface_test.go` beside the T028 interface machinery — `indexStructs` (parallel to `indexInterfaces` :313-346), `lookupStruct` (parallel to `lookupInterface` :296-309), `renderStructFields` (parallel to `renderInterfaceMethods` :356-380); exported fields only, types printed as written (`go/printer` mode 0), embedded fields as written; reuse `surfaceCtx` dir resolution untouched. VERIFY: T003's test PASSES; `TestPublicSurface` now FAILS against the stale golden (expected — proves the gate sees fields)
-- [ ] T005 [US1] Regenerate the golden once: `MENTAT_UPDATE_GOLDEN=1 go test ./ -run TestPublicSurface`; VERIFY in `specs/007-public-extension-api/contracts/public-surface.golden`: (a) `Qualifiers` appears under `Verdict`, `Completeness` under `Target`; (b) every pre-existing interface method-set line is byte-identical (no-regression: `git diff` shows only added field lines); capture the itemized diff summary for the PR body; commit test + renderer + golden together
-- [ ] T006 [US1] Mutation rehearsal, documented: temporarily add `XProbe bool` to `Verdict` in `internal/core/core.go` → VERIFY `go test ./ -run TestPublicSurface` FAILS naming `Verdict`; revert → VERIFY PASS; commit a dated rehearsal narrative comment block in `surface_test.go` beside the T014/T028 blocks (:42-52/:54-70), quoting the observed failure text
-- [ ] T007 [US1] Restore the strong claim in `docs/extending/stability.md`: delete the interim-gap section (:53-84), state that exported fields of aliased structs are frozen by the golden, and state the documented scope boundary (map/func/`any` aliases stay single-line per contract); VERIFY the doc no longer references spec 009 as "planned"
+- [X] T004 [US1] GREEN: implement struct expansion in `surface_test.go` beside the T028 interface machinery — `indexStructs` (parallel to `indexInterfaces` :313-346), `lookupStruct` (parallel to `lookupInterface` :296-309), `renderStructFields` (parallel to `renderInterfaceMethods` :356-380); exported fields only, types printed as written (`go/printer` mode 0), embedded fields as written; reuse `surfaceCtx` dir resolution untouched. VERIFY: T003's test PASSES; `TestPublicSurface` now FAILS against the stale golden (expected — proves the gate sees fields)
+- [X] T005 [US1] Regenerate the golden once: `MENTAT_UPDATE_GOLDEN=1 go test ./ -run TestPublicSurface`; VERIFY in `specs/007-public-extension-api/contracts/public-surface.golden`: (a) `Qualifiers` appears under `Verdict`, `Completeness` under `Target`; (b) every pre-existing interface method-set line is byte-identical (no-regression: `git diff` shows only added field lines); capture the itemized diff summary for the PR body; commit test + renderer + golden together
+- [X] T006 [US1] Mutation rehearsal, documented: temporarily add `XProbe bool` to `Verdict` in `internal/core/core.go` → VERIFY `go test ./ -run TestPublicSurface` FAILS naming `Verdict`; revert → VERIFY PASS; commit a dated rehearsal narrative comment block in `surface_test.go` beside the T014/T028 blocks (:42-52/:54-70), quoting the observed failure text
+- [X] T007 [US1] Restore the strong claim in `docs/extending/stability.md`: delete the interim-gap section (:53-84), state that exported fields of aliased structs are frozen by the golden, and state the documented scope boundary (map/func/`any` aliases stay single-line per contract); VERIFY the doc no longer references spec 009 as "planned"
 
 **Checkpoint**: quickstart V1 fully green; US1 is shippable alone (MVP).
 
@@ -61,17 +61,17 @@
 
 ### Tests for User Story 2 (REQUIRED — Test-First) ⚠️
 
-- [ ] T008 [P] [US2] RED: add a test in `internal/config/config_test.go` calling `config.Resolve(&cfg)` on a struct-literal Config with a shell target and empty completeness, asserting kind-default settle 2s and mode default are applied. VERIFY: does not compile / FAILS (`Resolve` undefined); record output
+- [X] T008 [P] [US2] RED: add a test in `internal/config/config_test.go` calling `config.Resolve(&cfg)` on a struct-literal Config with a shell target and empty completeness, asserting kind-default settle 2s and mode default are applied. VERIFY: does not compile / FAILS (`Resolve` undefined); record output
 
 ### Implementation for User Story 2
 
-- [ ] T009 [US2] GREEN: extract the post-decode half of `config.Load` (`internal/config/config.go:198-298` resolution/validation body) into `func Resolve(c *Config) error`; `Load` becomes read + strict decode + `Resolve`. VERIFY: T008 PASSES and the entire existing `internal/config` test suite stays green (`go test ./internal/config/ -v`) — this step is behaviour-preserving for the YAML path
-- [ ] T010 [US2] RED→GREEN one law at a time, table-driven in `internal/config/config_test.go`: (a) idempotency — `Resolve` twice leaves the config deep-equal to once; (b) explicit-value-wins — non-zero `Completeness.Settle` set in code with empty `SettleRaw` is NOT overwritten by the kind default; (c) twin conflict — non-empty `SettleRaw` that parses to a value conflicting with a simultaneously-set non-zero `Settle` is a hard error naming both fields; apply the same three laws to `Target.Budget` vs its raw/timeout source (`config.go:265-269`). VERIFY each row red before its guard is implemented in `resolveCompleteness`/budget resolution
-- [ ] T011 [US2] Complete the parity table in `internal/config/config_test.go` per the contract's proof obligation: one row per inventory behaviour — defaults #1,3,4,5,6,8,10,12 and hard errors #2,7,11,13 — each row expressed as YAML fixture through `Load` AND struct literal through `Resolve`, asserting deep-equal effective contracts (including `ExtractConfig.Policy()` non-nil for #9) or identical error text. VERIFY: all rows green; any row revealing an unfixed divergence gets its fix inside this task (one failing row at a time)
-- [ ] T012 [US2] Settle the two divergence suspects by test, not assumption ([research.md R0](./research.md)): (a) zero `Target.Budget` semantics on the code path (what `Drive` does with Timeout 0/KillGrace 0 vs the Load-resolved budget); (b) `validateJudge`'s Load-only temperature-pairing and `MaxCostUSD` rules (`config.go:312-324`) now applying via `Resolve`. Add parity rows for both; VERIFY outcome recorded in test comments (confirmed-divergence-fixed or refuted-with-evidence)
-- [ ] T013 [US2] RED: add a facade-level test in root `run_test.go` (or extend the existing Run tests): `mentat.Run` with a code-built `Config{Store:"file"}` and no storePath must return the descriptive storePath error (Load behaviour #2) before driving anything. VERIFY: FAILS (Run never resolves today); record output
-- [ ] T014 [US2] GREEN: call `config.Resolve` at the top of `mentat.Run` in `run.go`, before `BuildCorrelator` (:293), `BuildStore` (:310), and `Build` (:349), wrapping errors as `fmt.Errorf("resolving config: %w", err)`. VERIFY: T013 PASSES; full root-package suite green; `cmd/mentat` + `cmd/mentatctl` tests green (CLI double-resolution exercises idempotency)
-- [ ] T015 [US2] Truth sweep: correct the now-false comment at `internal/engine/engine.go:73-74` ("kind-defaulted at config load" → resolved on both paths via config.Resolve); VERIFY `examples/kafkaecho` still compiles (`cd examples/kafkaecho && go build ./... && go vet ./...`); VERIFY `internal/config` coverage ≥80% via the `/coverage` skill
+- [X] T009 [US2] GREEN: extract the post-decode half of `config.Load` (`internal/config/config.go:198-298` resolution/validation body) into `func Resolve(c *Config) error`; `Load` becomes read + strict decode + `Resolve`. VERIFY: T008 PASSES and the entire existing `internal/config` test suite stays green (`go test ./internal/config/ -v`) — this step is behaviour-preserving for the YAML path
+- [X] T010 [US2] RED→GREEN one law at a time, table-driven in `internal/config/config_test.go`: (a) idempotency — `Resolve` twice leaves the config deep-equal to once; (b) explicit-value-wins — non-zero `Completeness.Settle` set in code with empty `SettleRaw` is NOT overwritten by the kind default; (c) twin conflict — non-empty `SettleRaw` that parses to a value conflicting with a simultaneously-set non-zero `Settle` is a hard error naming both fields; apply the same three laws to `Target.Budget` vs its raw/timeout source (`config.go:265-269`). VERIFY each row red before its guard is implemented in `resolveCompleteness`/budget resolution
+- [X] T011 [US2] Complete the parity table in `internal/config/config_test.go` per the contract's proof obligation: one row per inventory behaviour — defaults #1,3,4,5,6,8,10,12 and hard errors #2,7,11,13 — each row expressed as YAML fixture through `Load` AND struct literal through `Resolve`, asserting deep-equal effective contracts (including `ExtractConfig.Policy()` non-nil for #9) or identical error text. VERIFY: all rows green; any row revealing an unfixed divergence gets its fix inside this task (one failing row at a time)
+- [X] T012 [US2] Settle the two divergence suspects by test, not assumption ([research.md R0](./research.md)): (a) zero `Target.Budget` semantics on the code path (what `Drive` does with Timeout 0/KillGrace 0 vs the Load-resolved budget); (b) `validateJudge`'s Load-only temperature-pairing and `MaxCostUSD` rules (`config.go:312-324`) now applying via `Resolve`. Add parity rows for both; VERIFY outcome recorded in test comments (confirmed-divergence-fixed or refuted-with-evidence)
+- [X] T013 [US2] RED: add a facade-level test in root `run_test.go` (or extend the existing Run tests): `mentat.Run` with a code-built `Config{Store:"file"}` and no storePath must return the descriptive storePath error (Load behaviour #2) before driving anything. VERIFY: FAILS (Run never resolves today); record output
+- [X] T014 [US2] GREEN: call `config.Resolve` at the top of `mentat.Run` in `run.go`, before `BuildCorrelator` (:293), `BuildStore` (:310), and `Build` (:349), wrapping errors as `fmt.Errorf("resolving config: %w", err)`. VERIFY: T013 PASSES; full root-package suite green; `cmd/mentat` + `cmd/mentatctl` tests green (CLI double-resolution exercises idempotency)
+- [X] T015 [US2] Truth sweep: correct the now-false comment at `internal/engine/engine.go:73-74` ("kind-defaulted at config load" → resolved on both paths via config.Resolve); VERIFY `examples/kafkaecho` still compiles (`cd examples/kafkaecho && go build ./... && go vet ./...`); VERIFY `internal/config` coverage ≥80% via the `/coverage` skill
 
 **Checkpoint**: quickstart V2 fully green; US1 + US2 independently shippable.
 
@@ -85,12 +85,12 @@
 
 ### Tests for User Story 3 (REQUIRED — Test-First) ⚠️
 
-- [ ] T016 [US3] RED: extend `mentat_external_test.go` (facade-only imports, precedent :63-68) with a composite literal for the completeness type on `mentat.Target` — `Target{Completeness: mentat.Completeness{Mode: "strict"}}`. VERIFY: compile FAILS (`mentat.Completeness` undefined); record output
+- [X] T016 [US3] RED: extend `mentat_external_test.go` (facade-only imports, precedent :63-68) with a composite literal for the completeness type on `mentat.Target` — `Target{Completeness: mentat.Completeness{Mode: "strict"}}`. VERIFY: compile FAILS (`mentat.Completeness` undefined); record output
 
 ### Implementation for User Story 3
 
-- [ ] T017 [US3] GREEN: add `type Completeness = config.Completeness` to `mentat.go` (doc comment in facade style); VERIFY T016 compiles and passes; regenerate the golden (`MENTAT_UPDATE_GOLDEN=1`) — VERIFY the diff is exactly the new alias + its expanded field lines (US1 renderer at work); itemize for the PR body
-- [ ] T018 [US3] Sweep the reachable set: walk exported struct field types transitively from `mentat.Config` and `mentat.Results` (slice/map/pointer elements and embedded types included); for EVERY reachable exported struct add a composite literal (each setting ≥1 field) to the compile test in `mentat_external_test.go`; alias any further reachable-unnameable type found (each new alias = golden regen line, itemized). VERIFY: test compiles facade-only; record the swept type list in a test comment as the sweep's evidence
+- [X] T017 [US3] GREEN: add `type Completeness = config.Completeness` to `mentat.go` (doc comment in facade style); VERIFY T016 compiles and passes; regenerate the golden (`MENTAT_UPDATE_GOLDEN=1`) — VERIFY the diff is exactly the new alias + its expanded field lines (US1 renderer at work); itemize for the PR body
+- [X] T018 [US3] Sweep the reachable set: walk exported struct field types transitively from `mentat.Config` and `mentat.Results` (slice/map/pointer elements and embedded types included); for EVERY reachable exported struct add a composite literal (each setting ≥1 field) to the compile test in `mentat_external_test.go`; alias any further reachable-unnameable type found (each new alias = golden regen line, itemized). VERIFY: test compiles facade-only; record the swept type list in a test comment as the sweep's evidence
 - [ ] T019 [US3] External-module witness: VERIFY `cd examples/kafkaecho && go build ./... && go vet ./...` and `make example` (internal-import policing, `Makefile:32`) both pass untouched
 
 **Checkpoint**: quickstart V3 fully green; SC-002 met.
@@ -105,9 +105,9 @@
 
 ### Implementation for User Story 4
 
-- [ ] T020 [P] [US4] Create `docs/extending/new-seam.md` from the contract: the reconciled 8-row taxonomy table (registration style, sealing, public hook per seam), the mandatory AggregateComparator internal-only exclusion sentence (verbatim requirement in the contract), one "how to choose" paragraph per tribal decision (instance-vs-factory, per-engine-vs-package-global with the reporters exception, collision-check-before-construction), and the ~10-touchpoint checklist
-- [ ] T021 [US4] Point both old sites at the canonical doc: rewrite the `internal/registry/registry.go:21-22` doc comment (registry-ownership axis + "see docs/extending/new-seam.md") and the `specs/007-public-extension-api/contracts/public-surface.md:19` seam sentence (public-hook axis + same reference); VERIFY `go build ./...` (comment-only change) and that neither site still states its own divergent list
-- [ ] T022 [US4] VERIFY quickstart V4 exactly as written: `ls docs/extending/new-seam.md`; `grep -n "new-seam" internal/registry/registry.go specs/007-public-extension-api/contracts/public-surface.md` (both hit); `grep -rn "AggregateComparator" docs/extending/` (exclusion sentence hits); record outputs
+- [X] T020 [P] [US4] Create `docs/extending/new-seam.md` from the contract: the reconciled 8-row taxonomy table (registration style, sealing, public hook per seam), the mandatory AggregateComparator internal-only exclusion sentence (verbatim requirement in the contract), one "how to choose" paragraph per tribal decision (instance-vs-factory, per-engine-vs-package-global with the reporters exception, collision-check-before-construction), and the ~10-touchpoint checklist
+- [X] T021 [US4] Point both old sites at the canonical doc: rewrite the `internal/registry/registry.go:21-22` doc comment (registry-ownership axis + "see docs/extending/new-seam.md") and the `specs/007-public-extension-api/contracts/public-surface.md:19` seam sentence (public-hook axis + same reference); VERIFY `go build ./...` (comment-only change) and that neither site still states its own divergent list
+- [X] T022 [US4] VERIFY quickstart V4 exactly as written: `ls docs/extending/new-seam.md`; `grep -n "new-seam" internal/registry/registry.go specs/007-public-extension-api/contracts/public-surface.md` (both hit); `grep -rn "AggregateComparator" docs/extending/` (exclusion sentence hits); record outputs
 
 **Checkpoint**: SC-004 met; US4 independent of all other stories.
 
@@ -121,11 +121,26 @@
 
 ### Implementation for User Story 5
 
-- [ ] T023 [P] [US5] Create `.github/workflows/nightly-l3.yml`: `schedule: cron '0 3 * * *'` + `workflow_dispatch`; job env `MENTAT_L3_RUNS: "20"`; steps mirroring `ci.yml`'s e2e job verbatim (checkout, setup-go, `make labs`, `docker compose -f deploy/docker-compose.yml up -d` + the same readiness wait, `go test -tags e2e ./e2e/ -v -parallel 16`, the same teardown/log-dump on failure); no new make target (contract: don't create a second divergent invocation path)
-- [ ] T024 [US5] Sync the comment at `e2e/l3runs.go:8-10` to name the actual lane (`nightly-l3.yml`); VERIFY `go vet ./e2e/` (comment-only) and `grep -n "nightly" e2e/l3runs.go .github/workflows/nightly-l3.yml` agree on the name
+- [X] T023 [P] [US5] Create `.github/workflows/nightly-l3.yml`: `schedule: cron '0 3 * * *'` + `workflow_dispatch`; job env `MENTAT_L3_RUNS: "20"`; steps mirroring `ci.yml`'s e2e job verbatim (checkout, setup-go, `make labs`, `docker compose -f deploy/docker-compose.yml up -d` + the same readiness wait, `go test -tags e2e ./e2e/ -v -parallel 16`, the same teardown/log-dump on failure); no new make target (contract: don't create a second divergent invocation path)
+- [X] T024 [US5] Sync the comment at `e2e/l3runs.go:8-10` to name the actual lane (`nightly-l3.yml`); VERIFY `go vet ./e2e/` (comment-only) and `grep -n "nightly" e2e/l3runs.go .github/workflows/nightly-l3.yml` agree on the name
 - [ ] T025 [US5] Dispatch once on the feature branch (`gh workflow run nightly-l3.yml --ref 009-extension-surface-integrity && gh run watch`); VERIFY: run completes green at 20 runs; record the run URL for the PR body. If the dispatched run is red, STOP — diagnose per RULE 0 before rerunning (a red 20-run lane is exactly the signal this story exists to surface)
 
 **Checkpoint**: SC-005 met (workflow + one green dispatched run).
+
+---
+
+## Phase 7b: Regression introduced by US2 (unplanned — found by T014's own verification)
+
+**Why this exists**: `config.Resolve` writes into `c.Targets` (`internal/config/config.go:325`).
+`mentat.Run` takes `Config` by value, but `Targets` is a map and is therefore shared
+with the caller. Wiring `Resolve` into `Run` (T014) made `Run` mutate the caller's
+Config, and made two concurrent `Run`s sharing one Config data-race — confirmed
+under `-race`, not theorized. This regresses the **spec-007 T010/T011 guarantee that
+`mentat.Run` is reentrant and concurrency-safe**. Defensive copying restores the
+documented prior behaviour; declaring that `Run` takes ownership of the caller's
+Config would be the actual API change, and nothing asked for that.
+
+- [ ] T030 RED→GREEN: add a test that shares ONE `Config` across two concurrent `mentat.Run` calls and asserts (a) no data race under `-race` and (b) the caller's `cfg.Targets` is unmutated after `Run` returns. VERIFY RED first (the race must actually reproduce). Then fix by shallow-copying `cfg.Targets` into a fresh map at the top of `Run` before `Resolve`. VERIFY: new test green under `-race`; `TestRunConcurrentIndependent` still green; `make ci` exit 0
 
 ---
 

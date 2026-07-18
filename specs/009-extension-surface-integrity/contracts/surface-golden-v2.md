@@ -22,11 +22,43 @@ renders:
      a public promise);
    - embedded fields rendered as written (the embedded type, if public, is frozen
      by its own entry);
-   - field order as declared (reordering is a golden diff by design — declaration
-     order is visible surface).
+   - fields are emitted in declaration order, but see the scope note below —
+     declaration order is deliberately NOT frozen.
+
+**Scope note (amended 2026-07-18 during T004, corrected against the source).**
+This rule originally claimed "reordering is a golden diff by design — declaration
+order is visible surface". That is false, and it contradicts a deliberate
+pre-existing decision: `surfaceRender` `sort.Strings`'s the whole line set
+(`surface_test.go:294`), which the T014-era comment at `surface_test.go:48`
+documents as intentional — "the whole set is sort.Strings'd, so source
+declaration order never churns the golden". Reordering fields therefore produces
+**zero** diff, exactly as it already did for T028 interface methods. Nothing in
+[spec.md](../spec.md) requires reorder detection, so the sort stands and the
+claim is withdrawn rather than the code changed.
+
+**Second scope boundary: struct tags are not rendered.** The gate freezes field
+name + type only, so renaming a `yaml:"..."` tag — a real config-surface break —
+remains invisible. Both boundaries are stated in `docs/extending/stability.md`
+rather than left as tribal knowledge.
 3. **Explicitly out**: aliases of map, func, and `any` types keep single-line
-   rendering — their declaration text already is their complete shape. This scope
-   boundary is restated in `stability.md`.
+   rendering. This scope boundary is restated in `stability.md`.
+
+   **Rationale corrected 2026-07-18 (T007).** This rule originally justified itself
+   with "their declaration text already is their complete shape". That holds only
+   when the right-hand side is written inline (`type ComparatorFactory =
+   func(Config) (Comparator, error)`). It is **false** for an alias to a *named*
+   type in an internal package: `type Pricing = config.Pricing` renders as exactly
+   that line and records `map[string]ModelRate` nowhere, so re-typing
+   `config.Pricing` produces zero golden diff. The single-line rendering stands;
+   the justification does not cover the named-type case, which `stability.md`
+   states explicitly instead.
+
+4. **Depth**: expansion is one level deep and only through facade aliases. A struct
+   reachable solely as the *type of a field* is not expanded in turn — verified
+   instances at `2f4073d` + US1: `AggregateDetail`, `ExtractPolicy`, `HTTPSpec`.
+   The mechanical closure is a facade alias, which pulls the field set into the
+   golden with no renderer change; US3's reachable-set sweep (FR-006/FR-007) is
+   what determines whether these get aliased.
 
 ## Gate behaviour
 

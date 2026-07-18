@@ -36,6 +36,29 @@ proof; it needs no runtime assertions beyond keeping the values referenced.
 `examples/kafkaecho` (separate module, `replace`-directive, facade-only imports)
 remains the external-module witness; it MUST keep compiling untouched.
 
+## Verified gap, deferred to spec 010 (recorded 2026-07-18, T018)
+
+The T018 sweep walked the reachable set as defined above (14 members) and found
+`Completeness` to be the only gap inside that definition — it is now aliased, and
+T018 added no others. The sweep also mechanically extracted the type positions
+appearing in golden *field and method* lines and compile-probed them, which
+surfaced four types that are frozen on the public surface but **not nameable**:
+
+| Type | Reached via | Consequence for an external author |
+|---|---|---|
+| `RunReport` | `method (Reporter) Report(rep RunReport, w io.Writer) error` | **`Reporter` cannot be implemented at all** — the method parameter type is unnameable |
+| `AggregateDetail` | `field (Verdict) Detail *AggregateDetail` | cannot construct a `Verdict` with `Detail` set |
+| `ExtractPolicy` | `field (RunSpec) Extract ExtractPolicy` | cannot build a `RunSpec` with `Extract` set |
+| `HTTPSpec` | `field (RunSpec) HTTP HTTPSpec` | cannot build a `RunSpec` with `HTTP` set |
+
+All four hang off **seam** types (`Reporter`, `Verdict`, `RunSpec`), not off
+`Config`/`Results`, so they fall outside this contract's reachable-set definition
+and outside US3's scope. Aliasing them is a public-surface widening — a one-way
+door — so it is **deferred to spec 010** rather than taken here, and the boundary
+is stated in `docs/extending/stability.md` (boundary 5) so it is not tribal
+knowledge. Spec 010 should consider extending the reachable-set definition to
+cover seam-interface parameter and result types.
+
 ## Regression guarantee
 
 Any future exported struct field that makes a new internal type reachable forces

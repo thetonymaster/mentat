@@ -21,10 +21,20 @@ table names both)
 | Store | yes (`RegisterStore` :165) | **factory** (stateful) | sealed | `WithStore` |
 | Comparator | yes (`RegisterComparator` :102) | instance | sealed | `WithComparator` |
 | Judge | yes (`RegisterJudge` :152) | **factory** (stateful) | sealed | `WithJudge` |
-| Matcher | yes (`RegisterMatcher` :139) | instance | sealed | none — types-only |
+| Matcher | yes (`RegisterMatcher` :139) | instance | sealed | none — **internal-only**: no facade alias and no `With*` option; sole registration path is `engine.WithExtraMatcher` (`internal/engine/options.go:110`), an internal hook |
 | Aggregate comparator | yes (`RegisterAggregateComparator` :126) | instance | sealed | **none — internal-only (see exclusion)** |
 | Correlator | no (engine seam only) | — | — | none — types-only until three real demands (007 rule) |
-| Reporter | yes (`RegisterReporter` :189) | instance | **never sealed** (package-global, own mutex, `registry.go:177-201`) | types-only |
+| Reporter | package-global `registry.RegisterReporter` (:189) — a package-level func, NOT a `*Registry` method; reporters live in no per-engine registry | instance | **never sealed** (package-global, own mutex, `registry.go:177-201`) | types-only |
+
+> **Amended 2026-07-18 during T020/T021.** Two cells above were corrected against
+> the source after this contract was written: the Matcher public-hook cell said
+> "types-only", which is false — "types-only" means *aliased with no registration
+> hook* (correlator, reporter), and Matcher has neither a facade alias nor a
+> `With*` option (verified: no `Matcher` in `mentat.go`, zero hits in
+> `public-surface.golden`, only `engine.WithExtraMatcher`). The Reporter
+> registry-ownership cell was made explicit so the row cannot be misread as
+> "reporters live in the engine's registry". Shipping a fourth divergent taxonomy
+> is precisely what this feature exists to prevent.
 
 **Mandatory exclusion sentence** (verbatim requirement, currently documented
 nowhere): *`AggregateComparator` (`internal/core/core.go:110`; built-in
