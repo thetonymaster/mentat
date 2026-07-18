@@ -154,6 +154,12 @@ func TestRunJUnitWriteFailureFailsRun(t *testing.T) {
 			t.Fatalf("stderr missing write-error marker %q:\n%s", want, errOut)
 		}
 	}
+	// mentat.Run already prefixes its errors with "mentat: "; runMain must NOT add a
+	// second literal prefix (a pre-recompose CLI emitted exactly one). A doubled
+	// "mentat: mentat:" is the FLAG-1 regression.
+	if strings.Contains(errOut, "mentat: mentat:") {
+		t.Fatalf("stderr has a doubled %q prefix; runMain must not re-prefix already-prefixed library errors:\n%s", "mentat:", errOut)
+	}
 	// The file was not (partially) created, and the console still ran — the failure is
 	// isolated to the report write.
 	if _, statErr := os.Stat(badJunit); statErr == nil {

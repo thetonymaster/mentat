@@ -1,0 +1,10 @@
+[1;37mFeature:[0m hermetic golden
+
+  [1;37mScenario:[0m a custom driver and store drive a scenario green [1;30m# testdata/golden-hermetic.feature:2[0m
+    [32mGiven[0m [32mthe agent target "bot"[0m                             [1;30m# metadata.go:75 -> *world[0m
+    [32mWhen[0m [32mI run scenario "echo"[0m                               [1;30m# metadata.go:75 -> *world[0m
+    [32mThen[0m [32mthe result contains "golden ok"[0m                     [1;30m# metadata.go:75 -> *world[0m
+
+1 scenarios ([32m1 passed[0m)
+3 steps ([32m3 passed[0m)
+<DURATION>

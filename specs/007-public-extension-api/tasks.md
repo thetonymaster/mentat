@@ -12,7 +12,7 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 **DEFERRED to T012 (US2 batch).** Original intent — capture a hermetic green `mentat run` golden vs the file store under plain `go test` — is infeasible on the *current* binary: the live CLI injects a random UUID run id (`engine.BuildCorrelator`→`uuid.NewString()`) that the file store (keyed on fixed `runScenario`, `internal/store/filestore.go:180-184`) cannot resolve, and `mentat run` has no run-id pin flag. The pre-recompose reference already exists as `e2e/golden-green.txt`. The hermetic SC-004 golden will instead be captured through `mentat.Run` (deterministic run id + file store) alongside T012's recomposition. Decision by Q, 2026-07-17. (go-coder)
+- [X] T001 **DEFERRED to T012 (US2 batch) — RESOLVED there:** the hermetic SC-004 golden landed via T012 (captured through `mentat.Run` + a deterministic in-mem driver/store in mentat_golden_test.go, under plain `go test`, so `make ci` enforces stdout parity). The original file-store approach stayed infeasible (random run id) and was superseded. Original intent — capture a hermetic green `mentat run` golden vs the file store under plain `go test` — is infeasible on the *current* binary: the live CLI injects a random UUID run id (`engine.BuildCorrelator`→`uuid.NewString()`) that the file store (keyed on fixed `runScenario`, `internal/store/filestore.go:180-184`) cannot resolve, and `mentat run` has no run-id pin flag. The pre-recompose reference already exists as `e2e/golden-green.txt`. The hermetic SC-004 golden will instead be captured through `mentat.Run` (deterministic run id + file store) alongside T012's recomposition. Decision by Q, 2026-07-17. (go-coder)
 
 ---
 
@@ -52,8 +52,8 @@
 - [X] T009 [US2] **(pulled into MVP)** Implement Run (godog execution behind the facade, results adapter from collector) + Results/ScenarioResult types in mentat.go, run.go (go-test-writer, green). ⚠️ Reentrancy across `Run` calls is NOT yet safe: the package-global registry persists custom registrations, so a 2nd `Run` reusing a custom name hits a false collision (tension with US2 acceptance #2 / R3). Clean fix = per-Build registry scoping (wide blast radius across `ResetForTest` tests) → T010/T011 (deferred).
 - [X] T010 [US2] Failing tests: two sequential + two concurrent Run calls independent and `-race` clean (no shared registration state); ctx cancellation mid-suite → feature-003 semantics, `Results.Interrupted` set in mentat_run_reentrancy_test.go (go-test-writer, red). Sequential + concurrent were RED on the package-global registry (false store-collision / shared-map race); cancellation was already correct (run.go), so its test went green immediately and now pins the behaviour.
 - [X] T011 [US2] Harden Run reentrancy/cancellation as needed. Root fix: the seam registry is now per-engine (`registry.Registry` constructed per `engine.Build`/`BuildStore`, owned by the Engine, sealed at the composition root) instead of package-global — so each Run owns its registrations (no sequential leak, no concurrent race). Reporters stay package-global (post-run rendering, own mutex). Cancellation needed no change. Files: internal/registry/registry.go (struct + methods; reporters split), internal/engine/{build,store,engine,options}.go, internal/comparator/{result,result_span,matchers}.go, internal/judge/judge.go, + test migrations (ResetForTest+global Register → engine.WithExtra* / local registry.New). go-reviewer gate: PASS.
-- [ ] T012 [US2] Recompose cmd/mentat over the public path (flags → Config+options → Run → exit-code mapping); golden test: stdout byte-identical to T001 baseline (SC-004; the golden test runs under plain `go test`, file-store hermetic, NOT `//go:build e2e`, so `make ci` enforces parity) in cmd/mentat/main.go, cmd/mentat/main_test.go (go-test-writer, red→green)
-- [ ] T013 [US2] L3 meta-test (constitution Principle V, NON-NEGOTIABLE — prove the public run surface goes RED on bad behaviour, not only on cancellation): a scenario that violates its comparators, run through `mentat.Run`, returns `Results` with `Failed > 0`, that scenario's `Pass == false` with non-empty `Reasons`, and an overall status equal to the CLI's FAIL exit in mentat_run_test.go (go-test-writer, red→green). Depends on T009 (Run + Results); independent of T012.
+- [X] T012 [US2] Recompose cmd/mentat over the public path (flags → Config+options → Run → exit-code mapping via `Results.ExitCode`) — `runMain` is now a thin `mentat.Run` caller (one composition path, R7); the dead inline composition + 6 unused imports removed. Full consumer-zero: `WithOutput`/`WithConcurrency`/`WithTags`/`WithFailFast`/`WithVerbosity`/`WithReports` + judge-budget moved into `Run` (Q's decision 2026-07-17). SC-004 hermetic golden captured through `mentat.Run` + a deterministic in-mem driver/store (the built-in file store can't serve the random run id) under plain `go test` (NOT `//go:build e2e`, so `make ci` enforces parity) in mentat_golden_test.go + testdata/golden-hermetic.{feature,txt}; all four cmd/mentat exec-tests (junit/signal) stay byte-identical green (go-test-writer, red→green)
+- [X] T013 [US2] L3 meta-test (constitution Principle V, NON-NEGOTIABLE — prove the public run surface goes RED on bad behaviour, not only on cancellation): a scenario that violates its comparators, run through `mentat.Run`, returns `Results` with `Failed > 0`, that scenario's `Pass == false` with non-empty `Reasons`, and an overall status equal to the CLI's FAIL exit in mentat_run_test.go (go-test-writer, red→green). Depends on T009 (Run + Results); independent of T012.
 
 **Checkpoint**: CLI is consumer zero; embedding works; the public surface is proven to fail loudly on bad scenarios.
 
@@ -65,10 +65,10 @@
 
 **Independent Test**: unacknowledged signature change fails the golden surface test naming the symbol.
 
-- [ ] T014 [US3] Failing test: golden surface renderer (go/packages + go/types → canonical exported names/signatures/fields) diffs against contracts/public-surface.golden, failure names the symbol; scratch mutation rehearsal documented in surface_test.go (go-test-writer, red)
-- [ ] T015 [US3] Implement renderer + generate initial public-surface.golden (review against data-model.md inventory: every symbol justified, SC-006) in surface_test.go, specs/007-public-extension-api/contracts/public-surface.golden (go-test-writer, green)
-- [~] T016 [P] [US3] Seam implementation guides: docs/extending/{driver,store,comparator,judge,evidence}.md — **driver.md DONE** (drafted early for SC-005, alongside T006); store/comparator/judge/evidence remain (deferred to post-MVP-review US3 batch). — contract, constitution obligations (error wrapping, forest, tag-first, evidence-only, judge classification), example walkthrough. docs/extending/driver.md is drafted early (before/alongside T006) so the example follows it (SC-005); the remaining guides may land any time after T003 (go-coder)
-- [ ] T017 [P] [US3] Stability policy: pre-1.0 semver process (deliberate/golden-acknowledged/changelogged) in docs/extending/stability.md + README link; changelog entry for the new public surface (go-coder)
+- [X] T014 [US3] Failing test: golden surface renderer (stdlib AST-based — go/parser + go/printer, no x/tools per R4 — canonical exported names/signatures/fields) diffs against contracts/public-surface.golden, failure names the symbol; scratch mutation rehearsal (WithNothing → RED naming it → reverted) documented in surface_test.go (go-test-writer, red)
+- [X] T015 [US3] Implement renderer + generate initial public-surface.golden (62 symbols; SC-006 cross-check vs data-model.md inventory = exact match in both directions, every symbol justified) in surface_test.go, specs/007-public-extension-api/contracts/public-surface.golden (go-test-writer, green)
+- [X] T016 [P] [US3] Seam implementation guides: docs/extending/{driver,store,comparator,judge,evidence}.md — **all five DONE** (driver.md drafted early for SC-005 alongside T006; store/comparator/judge/evidence + evidence primer added in the US3 batch, each quoting the real interface contract and its constitution obligations). — contract, constitution obligations (error wrapping, forest, tag-first, evidence-only, judge classification), example walkthrough. docs/extending/driver.md is drafted early (before/alongside T006) so the example follows it (SC-005); the remaining guides may land any time after T003 (go-coder)
+- [X] T017 [P] [US3] Stability policy: pre-1.0 semver process (deliberate/golden-acknowledged/changelogged) in docs/extending/stability.md + README link (## Extending Mentat section); changelog entry for the new public surface (go-coder)
 
 **Checkpoint**: surface locked and documented.
 
@@ -76,9 +76,9 @@
 
 ## Phase 6: Polish & Cross-Cutting
 
-- [ ] T018 [P] Coverage gate `/coverage` ≥80% for the facade package and touched packages (go-coder)
-- [ ] T019 [P] Full quickstart.md validation: external tests, example module, golden gate rehearsal, CLI golden diff, `-race` (go-coder)
-- [ ] T020 Review pass: confirm no internal type leaks through any public signature (surface golden covers mechanically; human pass for intent, SC-005/SC-006 checklists) (go-coder)
+- [X] T018 [P] Coverage gate `/coverage` ≥80% for the facade package and touched packages — VERIFIED via `make ci` coverage gate: PASS (root `mentat` 99.1%, all non-exempt packages ≥80%, total 84.8%; `cmd/mentat` is floor-exempt by coverage.sh) (go-coder)
+- [X] T019 [P] Full quickstart.md validation: external tests, example module, golden gate rehearsal, CLI golden diff, `-race` — VERIFIED: `make ci` green (external `package mentat_test` tests, kafkaecho example + import-lint, `-race` suite), surface mutation rehearsal RED-names-symbol (SC-003), and the e2e CLI golden diff PASS byte-identical (T021) (go-coder)
+- [X] T020 Review pass: confirm no internal type leaks through any public signature (surface golden covers mechanically; human pass for intent, SC-005/SC-006 checklists) — VERIFIED: surface golden SC-006 exact match (62 symbols, nothing from the "Not exported" set leaked) + go-reviewer `gate` PASS (no BLOCKs) over the full 007 diff (go-coder)
 
 ---
 
@@ -114,3 +114,19 @@ explicitly defers that decision.
   only; first-class custom-comparator steps are deferred to a dedicated future spec (008).
   Documented in `run.go` `ComparatorFactory` and `TestRunCustomComparatorAndJudgeCompose`.
   (Custom drivers and stores DO work end-to-end today — see examples/kafkaecho.)
+
+---
+
+## Phase 7: Convergence
+
+*Appended by `/speckit-converge` (2026-07-17). Assessment: the codebase satisfies all 8
+functional requirements (FR-001–008), all 6 success criteria (SC-001–006), all 9 acceptance
+scenarios (US1–US3), all 7 edge cases, every plan decision (R1/R3/R4/R5/R6/R7), and all 5
+constitution MUST principles — `make ci` green (golangci-lint + `-race` suite + 80% coverage
+gate, root facade 99.1% + example import-lint), go-reviewer `gate` PASS, surface golden 62
+symbols with an SC-006 exact match against data-model.md. SC-005 is satisfied per
+quickstart.md's completeness list (driver/store/comparator/judge guides + evidence primer;
+correlator/reporter are type-only with no registration hook — out of scope per Assumptions).
+Exactly one partial verification gap remains — not a code defect, an unrun proof.*
+
+- [X] T021 Verify SC-004 byte-identical CLI parity through the e2e stdout golden against the recomposed `cmd/mentat` per SC-004 / FR-008 — **VERIFIED 2026-07-17: PASS** (`make harness-up` + `go test -tags e2e ./e2e/ -run TestGoldenStdoutSilentByDefault` → PASS in 21.9s; live `mentat run` stdout byte-identical to `cmd/mentat/testdata/golden-green.txt`, no regen needed — the recompose preserved the golden exactly). Original runbook — run `make harness-up && go test -tags e2e ./e2e/...` (`TestGoldenStdoutSilentByDefault` diffs a live `mentat run` against `cmd/mentat/testdata/golden-green.txt`). That gate is `//go:build e2e` and is NOT part of `make ci`, so the recompose's *direct* byte-identical proof is currently unverified; the four hermetic `cmd/mentat` exec-tests (junit/signal) + the plain-`go test` hermetic golden (`mentat_golden_test.go`) give strong *indirect* parity only. Regenerate `cmd/mentat/testdata/golden-green.txt` in the same PR only if a stdout change is confirmed intended (with a changelog note). (verification; go-test-writer if a regen is needed)

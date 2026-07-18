@@ -188,6 +188,25 @@ An *unstable* trace (spans present but still growing at the deadline) reports th
 `store:`/`query:` lines but omits the checklist — the trace exists, so it is a
 stability problem, not a "where is it" one.
 
+## Extending Mentat
+
+Mentat's seams — driver, store, comparator, judge — are public interfaces on the
+`github.com/thetonymaster/mentat` facade, so you can drive or grade anything
+*without forking*: register a custom adapter at the `mentat.Run` call and it works in
+`mentat.yaml` and feature files like a built-in. The guides under
+[`docs/extending`](docs/extending) walk each seam:
+
+- [Writing a custom Driver](docs/extending/driver.md)
+- [Writing a custom TraceStore](docs/extending/store.md)
+- [Writing a custom Comparator](docs/extending/comparator.md)
+- [Writing a custom Judge](docs/extending/judge.md)
+- [The Evidence a comparator inspects](docs/extending/evidence.md) — the shared vocabulary
+- [Stability policy (pre-1.0)](docs/extending/stability.md) — how the public surface changes
+
+[`examples/kafkaecho`](examples/kafkaecho) is a standalone module (its own `go.mod`)
+that imports only the facade and drives a feature green — the CI-enforced proof the
+surface suffices.
+
 ## Layout
 
 - `cmd/mentat` — the behaviour-test runner (embeds godog)
