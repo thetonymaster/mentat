@@ -109,6 +109,30 @@ type Target struct {
 	// and an absent one means whole (today's TrimSpace behaviour). Validated in Load,
 	// which precompiles the pattern once so the compiled regexp rides the policy.
 	Extract ExtractConfig `yaml:"extract"`
+	// Completeness is the target's optional trace-completeness policy (feature 008);
+	// an absent block means settle mode with the adapter kind-default window. Load
+	// validates the block and resolves the effective Settle window once at load time.
+	Completeness Completeness `yaml:"completeness"`
+}
+
+// Completeness is a target's optional trace-completeness policy (feature 008,
+// data-model config.Target additive). The whole block is optional: an omitted block
+// means settle mode with the adapter's kind-default window. Load validates Mode and
+// Settle and resolves the effective window (SettleRaw → Settle) once at load time
+// (Constitution IV: no silent fallback — an unknown mode or a bad/negative duration
+// is a hard, named load error).
+type Completeness struct {
+	// Mode is "settle" (the default when empty) or "strict"; any other value is a
+	// hard load error. Load normalises an empty Mode to "settle".
+	Mode string `yaml:"mode"`
+	// SettleRaw is the raw `settle` YAML value, a Go duration string (e.g. "2s"). An
+	// empty value applies the adapter kind-default (shell 2s / http 5s). Load parses
+	// and validates it into Settle.
+	SettleRaw string `yaml:"settle"`
+	// Settle is the resolved minimum observation window measured from drive-return,
+	// populated by Load (SettleRaw parsed, or the kind-default when omitted). Zero is
+	// permitted.
+	Settle time.Duration `yaml:"-"`
 }
 
 // ExtractConfig is the YAML form of a target's answer-extraction policy (US8,
@@ -157,6 +181,19 @@ type Pricing map[string]ModelRate
 // (the pre-005 map listed mcp/grpc that no driver implements). An adapter absent
 // here is not rejected at load; it defaults to a conservative concurrency of 1.
 var defaultConcurrency = map[string]int{"shell": 1, "http": 8}
+
+// defaultSettle holds the per-adapter completeness settle-window defaults (feature
+// 008, contracts §1), keyed ONLY to the adapters a driver actually implements and
+// the contract commits a guarantee for: shell (spawned, 2s) and http (request-
+// scoped, 5s). mcp/grpc are a documented forward-mapping only — no driver
+// implements them — so they carry NO speculative default here (Constitution IV, no
+// silent fallback). An adapter absent from this map keeps a zero window when settle
+// is omitted (zero is an allowed, explicit value); real adapter existence is
+// validated at engine.Build against the driver registry, as with defaultConcurrency.
+var defaultSettle = map[string]time.Duration{
+	"shell": 2 * time.Second,
+	"http":  5 * time.Second,
+}
 
 func Load(data []byte) (Config, error) {
 	var c Config
@@ -235,6 +272,11 @@ func Load(data []byte) (Config, error) {
 			return Config{}, eerr
 		}
 		t.Extract.compiled = re
+		comp, cerr := resolveCompleteness(name, t.Adapter, t.Completeness)
+		if cerr != nil {
+			return Config{}, cerr
+		}
+		t.Completeness = comp
 		c.Targets[name] = t
 	}
 	if err := validatePricing(c.Pricing); err != nil {
@@ -327,6 +369,39 @@ func validateExtract(target, adapter string, e ExtractConfig) (*regexp.Regexp, e
 	default:
 		return nil, fmt.Errorf("target %q: unknown extract mode %q (want %q, %q, or %q)", target, e.Mode, core.ExtractWhole, core.ExtractMarker, core.ExtractPattern)
 	}
+}
+
+// resolveCompleteness validates a target's completeness block and resolves the
+// effective settle window (feature 008, contracts §4). Mode must be "settle" (empty
+// → "settle") or "strict"; any other value is a hard load error naming the target
+// and the offending value. SettleRaw must be a Go duration string: unparsable wraps
+// the parse error and negative is rejected, both naming the target; zero is allowed.
+// An omitted SettleRaw applies the adapter kind-default window.
+func resolveCompleteness(target, adapter string, c Completeness) (Completeness, error) {
+	switch c.Mode {
+	case "":
+		c.Mode = "settle"
+	case "settle", "strict":
+		// keep as written
+	default:
+		return Completeness{}, fmt.Errorf(`target %q: completeness.mode must be "settle" or "strict", got %q`, target, c.Mode)
+	}
+	raw := strings.TrimSpace(c.SettleRaw)
+	if raw == "" {
+		// Omitted: apply the adapter kind-default (shell 2s / http 5s). Adapters with
+		// no registered default keep a zero window — not a speculative guarantee.
+		c.Settle = defaultSettle[adapter]
+		return c, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return Completeness{}, fmt.Errorf("target %q: completeness.settle: %w", target, err)
+	}
+	if d < 0 {
+		return Completeness{}, fmt.Errorf("target %q: completeness.settle: must be >= 0, got %s", target, d)
+	}
+	c.Settle = d
+	return c, nil
 }
 
 // validatePricing rejects pricing entries that would silently skew the cost a

@@ -36,6 +36,10 @@ type junitProperty struct {
 type junitCase struct {
 	Name    string        `xml:"name,attr"`
 	Failure *junitFailure `xml:"failure,omitempty"`
+	// SystemOut carries the completeness qualifier(s) (feature 008, US2). It is emitted
+	// on passing cases too — the <failure> body is fail-only, so a bounded run's
+	// pass-side caveat rides here instead. Empty when the scenario has no qualifier.
+	SystemOut string `xml:"system-out,omitempty"`
 }
 
 type junitFailure struct {
@@ -54,6 +58,11 @@ func (junitReporter) Report(rep core.RunReport, w io.Writer) error {
 		c := junitCase{Name: s.Name}
 		if !s.Pass {
 			c.Failure = &junitFailure{Message: "scenario failed", Body: strings.Join(s.Reasons, "; ")}
+		}
+		// The completeness qualifier renders on pass AND fail (contracts §3); the
+		// <failure> body is fail-only, so it rides <system-out> for every case.
+		if len(s.Qualifiers) > 0 {
+			c.SystemOut = strings.Join(s.Qualifiers, "\n")
 		}
 		suite.Cases = append(suite.Cases, c)
 	}

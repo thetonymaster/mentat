@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -55,6 +56,14 @@ type world struct {
 	// check() records each Verdict.Judge here so the usage still reaches report.Derive.
 	// Nil until a semantic check actually issues a judge call (no fabricated zeros).
 	lastJudge *core.JudgeUsage
+	// lastQualifiers accumulates the completeness qualifiers the engine attached to
+	// this scenario's completeness-sensitive verdicts (feature 008, US2). Like
+	// lastDetail/lastJudge it is recorded here because the After hook rebuilds the
+	// Verdict from stepErr — so the qualifiers still reach report.Derive on pass AND
+	// fail. Deduplicated: repeated sensitive steps against the same bounded target
+	// carry one identical caveat, not N copies. Nil when no bounded-sensitive verdict
+	// occurred.
+	lastQualifiers []string
 	// budget is the optional post-scenario judge-spend ceiling (US6); nil disables the
 	// check (today's behaviour). abort cancels the suite context when the budget trips,
 	// so no new scenario starts a judge call. Both are wired at the composition root.
@@ -115,7 +124,7 @@ func InitializerWithBudget(eng *engine.Engine, col *report.Collector, budget *re
 		})
 
 		sc.After(func(ctx context.Context, scenario *godog.Scenario, stepErr error) (context.Context, error) {
-			v := core.Verdict{Pass: stepErr == nil, Detail: w.lastDetail, Judge: w.lastJudge}
+			v := core.Verdict{Pass: stepErr == nil, Detail: w.lastDetail, Judge: w.lastJudge, Qualifiers: w.lastQualifiers}
 			if stepErr != nil {
 				v.Reasons = []string{stepErr.Error()}
 			}
@@ -222,21 +231,38 @@ func (w *world) drive(args []string, input string) error {
 	return nil
 }
 
+// check runs a completeness-INsensitive single-run comparator (presence, ordering,
+// value/semantic matches, lower-bound counts) — its verdict never gains the
+// ingestion-window qualifier.
 func (w *world) check(name string, exp core.Expectation) error {
+	return w.checkExp(name, exp, false)
+}
+
+// checkSensitive runs a completeness-SENSITIVE single-run comparator (absence,
+// exact-count, budget/error-count) — whose green verdict could be falsified by a
+// span exported after the ingestion window. Against a bounded (request-scoped,
+// non-strict) target the engine attaches the qualifier; the join is the engine's,
+// not the comparator's (invariant #1).
+func (w *world) checkSensitive(name string, exp core.Expectation) error {
+	return w.checkExp(name, exp, true)
+}
+
+// checkExp resolves and runs a single-run comparator through the engine, which
+// attaches the completeness qualifier when sensitive AND the target's contract is
+// bounded. Judge usage and any attached qualifiers are recorded on the world BEFORE
+// the pass/fail branch so a failing verdict still accounts for both.
+func (w *world) checkExp(name string, exp core.Expectation, sensitive bool) error {
 	if w.n > 1 {
 		return fmt.Errorf("single-run step in a @runs(%d) scenario evaluates only the first run; use \"the runs satisfy\" for assertions across all runs", w.n)
 	}
-	c, ok := w.eng.Comparator(name)
-	if !ok {
-		return fmt.Errorf("no comparator %q", name)
-	}
-	v, err := c.Compare(w.ctx, w.ev, exp)
+	v, err := w.eng.Compare(w.ctx, w.target, name, w.ev, exp, sensitive)
 	// Record any judge usage BEFORE the pass/fail branch: a failing semantic verdict
 	// still consumed judge tokens, and the ledger must account for it (US6). A
 	// non-semantic comparator leaves v.Judge nil, so this is a no-op for them.
 	if v.Judge != nil {
 		w.lastJudge = addJudge(w.lastJudge, v.Judge)
 	}
+	w.recordQualifiers(v.Qualifiers)
 	if err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}
@@ -244,6 +270,17 @@ func (w *world) check(name string, exp core.Expectation) error {
 		return fmt.Errorf("%s failed: %s", name, strings.Join(v.Reasons, "; "))
 	}
 	return nil
+}
+
+// recordQualifiers folds the engine-attached qualifiers into w.lastQualifiers,
+// deduplicating so repeated sensitive steps against the same bounded target contribute
+// one identical caveat rather than N copies.
+func (w *world) recordQualifiers(qs []string) {
+	for _, q := range qs {
+		if !slices.Contains(w.lastQualifiers, q) {
+			w.lastQualifiers = append(w.lastQualifiers, q)
+		}
+	}
 }
 
 // addJudge folds add into acc field-wise, allocating acc on first use. It sums the
@@ -284,29 +321,34 @@ func (w *world) toolsInOrder(tbl *godog.Table) error {
 }
 
 func (w *world) toolNeverCalled(name string) error {
-	return w.check("sequence", comparator.SequenceExpectation{Forbidden: []string{name}})
+	return w.checkSensitive("sequence", comparator.SequenceExpectation{Forbidden: []string{name}})
 }
 
 func (w *world) toolCalledAtMost(name string, n int) error {
-	return w.check("retries", comparator.RetriesExpectation{Tool: name, Max: n})
+	// "at most N" is an upper-bound COUNT assertion: on a partial forest it
+	// undercounts, so a green verdict can be falsified by a late span — the same
+	// property that makes its sibling toolNeverCalled sensitive (data-model:
+	// absence/count/aggregate → sensitive). Route through checkSensitive so a
+	// bounded target attaches the ingestion-window qualifier.
+	return w.checkSensitive("retries", comparator.RetriesExpectation{Tool: name, Max: n})
 }
 
 func (w *world) tokensUnder(n int) error {
-	return w.check("budgets", comparator.BudgetExpectation{MaxTokens: &n})
+	return w.checkSensitive("budgets", comparator.BudgetExpectation{MaxTokens: &n})
 }
 
 func (w *world) costUnder(c float64) error {
-	return w.check("budgets", comparator.BudgetExpectation{MaxCostUSD: &c})
+	return w.checkSensitive("budgets", comparator.BudgetExpectation{MaxCostUSD: &c})
 }
 
 func (w *world) latencyUnder(ms int) error {
 	d := time.Duration(ms) * time.Millisecond
-	return w.check("budgets", comparator.BudgetExpectation{MaxLatency: &d})
+	return w.checkSensitive("budgets", comparator.BudgetExpectation{MaxLatency: &d})
 }
 
 func (w *world) noErrorSpans() error {
 	zero := 0
-	return w.check("budgets", comparator.BudgetExpectation{MaxErrors: &zero})
+	return w.checkSensitive("budgets", comparator.BudgetExpectation{MaxErrors: &zero})
 }
 
 // parseSpanSpec maps the captured span-spec slot to a Quant (+1-based index for
@@ -495,7 +537,7 @@ func (w *world) servicesInOrder(tbl *godog.Table) error {
 }
 
 func (w *world) serviceNeverCalled(name string) error {
-	return w.check("sequence", comparator.SequenceExpectation{Kind: "service", Forbidden: []string{name}})
+	return w.checkSensitive("sequence", comparator.SequenceExpectation{Kind: "service", Forbidden: []string{name}})
 }
 
 func (w *world) responseBodyJSONContains(doc *godog.DocString) error {
@@ -535,15 +577,14 @@ func (w *world) checkRuns(expr string) error {
 	if len(w.evs) == 0 {
 		return fmt.Errorf("the runs satisfy: no runs driven; use a When ... step first")
 	}
-	c, ok := w.eng.AggregateComparator("aggregate-cel")
-	if !ok {
-		return fmt.Errorf("no aggregate comparator %q", "aggregate-cel")
-	}
-	v, err := c.Aggregate(w.ctx, w.evs, comparator.AggregateCELExpectation{Expr: expr})
+	// The CEL-aggregate assertion is completeness-sensitive (it counts/rates across the
+	// forest), so the engine attaches the bounded-contract qualifier here too.
+	v, err := w.eng.Aggregate(w.ctx, w.target, "aggregate-cel", w.evs, comparator.AggregateCELExpectation{Expr: expr}, true)
+	w.lastDetail = v.Detail
+	w.recordQualifiers(v.Qualifiers)
 	if err != nil {
 		return fmt.Errorf("aggregate-cel: %w", err)
 	}
-	w.lastDetail = v.Detail
 	if !v.Pass {
 		return fmt.Errorf("aggregate-cel failed: %s", strings.Join(v.Reasons, "; "))
 	}
@@ -574,7 +615,7 @@ func (w *world) shapeAbsent(s string) error {
 	if err != nil {
 		return err
 	}
-	return w.check("shape", comparator.ShapeExpectation{Kind: "absent", Subject: sel})
+	return w.checkSensitive("shape", comparator.ShapeExpectation{Kind: "absent", Subject: sel})
 }
 
 func (w *world) shapeAtLeast(n int, s string) error {
@@ -590,7 +631,7 @@ func (w *world) shapeExactly(n int, s string) error {
 	if err != nil {
 		return err
 	}
-	return w.check("shape", comparator.ShapeExpectation{Kind: "exists", Subject: sel, Count: &comparator.Count{Op: "==", N: n}})
+	return w.checkSensitive("shape", comparator.ShapeExpectation{Kind: "exists", Subject: sel, Count: &comparator.Count{Op: "==", N: n}})
 }
 
 func (w *world) shapeChildOf(child, parent string) error {
@@ -638,7 +679,7 @@ func (w *world) shapeFanoutExactly(parent string, n int, child string) error {
 	if err != nil {
 		return err
 	}
-	return w.check("shape", comparator.ShapeExpectation{Kind: "fanout", Subject: cs, Parent: ps, Relation: "child", Count: &comparator.Count{Op: "==", N: n}})
+	return w.checkSensitive("shape", comparator.ShapeExpectation{Kind: "fanout", Subject: cs, Parent: ps, Relation: "child", Count: &comparator.Count{Op: "==", N: n}})
 }
 
 func (w *world) matchesShape(name string) error {

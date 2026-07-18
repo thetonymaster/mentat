@@ -8,6 +8,35 @@ import (
 	"github.com/thetonymaster/mentat/internal/core"
 )
 
+// qualifierText is the canonical completeness qualifier (contracts §3), shared by the
+// reporter render tests. The reporters render Verdict.Qualifiers verbatim.
+const qualifierText = "trace-completeness: bounded by ingestion window (settle 5s); spans exported later are not observed"
+
+// TestHTMLReporterQualifierRendersOnPassAndFail pins the T019 html requirement (E1):
+// the completeness qualifier renders on a PASSING scenario too — the block must sit
+// OUTSIDE the fail-only {{if not .Pass}} reasons guard. A scenario with no qualifier
+// renders no qualifier block.
+func TestHTMLReporterQualifierRendersOnPassAndFail(t *testing.T) {
+	rep := core.RunReport{Total: 3, Passed: 2, Failed: 1, Scenarios: []core.ScenarioResult{
+		{Name: "green-bounded", Pass: true, Qualifiers: []string{qualifierText}},
+		{Name: "red-bounded", Pass: false, Reasons: []string{"boom"}, Qualifiers: []string{qualifierText}},
+		{Name: "green-plain", Pass: true},
+	}}
+	var buf bytes.Buffer
+	if err := (htmlReporter{}).Report(rep, &buf); err != nil {
+		t.Fatalf("Report: %v", err)
+	}
+	out := buf.String()
+	// Rendered once per qualifier-bearing scenario — including the passing one.
+	if n := strings.Count(out, "trace-completeness: bounded by ingestion window"); n != 2 {
+		t.Fatalf("qualifier rendered %d times, want 2 (pass AND fail):\n%s", n, out)
+	}
+	// The plain passing scenario carries no qualifier block.
+	if strings.Contains(out, `class="qualifiers"`) != true {
+		t.Fatalf("expected a qualifiers block class in output:\n%s", out)
+	}
+}
+
 // errWriter always returns an error on Write, used to exercise the
 // htmlTmpl.Execute error branch.
 type errWriter struct{}

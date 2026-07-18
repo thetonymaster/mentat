@@ -188,6 +188,78 @@ An *unstable* trace (spans present but still growing at the deadline) reports th
 `store:`/`query:` lines but omits the checklist — the trace exists, so it is a
 stability problem, not a "where is it" one.
 
+## SUT completeness contract
+
+Mentat's absence and aggregate assertions — `the tool X is never called`, exact
+counts, budget sums, error-span counts — are only as sound as the claim that the
+resolved Evidence forest is **complete**. The completeness contract, declared per
+driver adapter, is what keeps that claim honest. The normative source is
+[`specs/008-trace-completeness/contracts/completeness-contract.md`](specs/008-trace-completeness/contracts/completeness-contract.md).
+
+**Flush-on-exit obligation (spawned SUTs).** A spawned SUT MUST flush and shut down
+its tracer provider before the process exits — the standard OTel SDK `Shutdown`. A
+SUT that exits without flushing may lose spans exported after the settle window
+closes, and those late spans are silently absent from the forest, so an absence
+assertion can pass green against a partial trace. When exactness matters, use strict
+mode (below) rather than trusting the settle window.
+
+### Per-adapter guarantee
+
+| Adapter | Barrier before a verdict is judged | Guarantee |
+| --- | --- | --- |
+| spawned (`shell`) | process exit (drive-return) + settle window (default `2s`) + feature-002 stability gate | complete forest, *provided* the SUT flushes on exit and spawns no surviving children |
+| request-scoped (`http`) | response received (drive-return) + settle window (default `5s`) + stability gate | **bounded, not exact** — spans exported after the window are missed; completeness-sensitive verdicts carry the ingestion-window qualifier |
+| any target, `completeness: { mode: strict }` | exactly one in-trace sentinel; resolved forest count == declared count | exact completeness or a hard error — never a verdict over partial evidence |
+
+Configure the window (and mode) per target in `mentat.yaml`; an omitted block means
+settle mode with the adapter's kind-default window:
+
+```yaml
+targets:
+  orderflow:
+    adapter: http
+    completeness:
+      mode: settle     # "settle" (default) or "strict"
+      settle: 8s       # Go duration; overrides the adapter default; 0 is the weakest config
+```
+
+### Strict mode: the span-count sentinel
+
+In strict mode the SUT declares its own total span count in-trace and resolution
+hard-fails on any mismatch:
+
+- Attribute key: `test.span.count` (the namespace shared with `test.run.id`).
+- Value: the total number of spans of the whole run — **all roots** of the merged
+  forest, **including the sentinel-bearing span itself** (self-inclusive).
+- **Exactly one** sentinel-bearing span per run; it may arrive in any batch.
+
+A short, exceeded, missing, or duplicated count is a distinct, descriptive
+resolution error naming the declared and observed values — never a comparator
+verdict over partial evidence.
+
+### The ingestion-window qualifier
+
+Request-scoped, non-strict runs cannot prove exactness, so their
+completeness-sensitive verdicts (absence, exact-count, budget, aggregate) carry a
+qualifier in every report format that shows verdict reasons — **on pass and on fail
+alike**:
+
+```text
+trace-completeness: bounded by ingestion window (settle 5s); spans exported later are not observed
+```
+
+The duration reflects the target's effective settle value. Strict-mode verdicts
+never carry the qualifier, even on request-scoped targets.
+
+### Grandchild-process limitation (until feature 003)
+
+The process-exit barrier covers the **direct child** process today. A spawned SUT
+that itself spawns children — wrapper scripts, sub-agents — which keep exporting
+after the parent exits is not fully covered: full process-group semantics arrive
+with feature 003 (run lifecycle). Until then the settle window is the only
+mitigation for grandchild spans — widen it per target, or use strict mode when
+exactness is required.
+
 ## Extending Mentat
 
 Mentat's seams — driver, store, comparator, judge — are public interfaces on the

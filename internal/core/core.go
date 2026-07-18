@@ -50,6 +50,11 @@ type Evidence struct {
 type Verdict struct {
 	Pass    bool
 	Reasons []string
+	// Qualifiers are completeness qualifiers the engine attaches to a verdict (never a
+	// comparator, invariant #1) — e.g. the ingestion-window caveat a bounded request-
+	// scoped run carries on a completeness-sensitive assertion. Reporters render them
+	// verbatim on pass AND fail; empty when none apply.
+	Qualifiers []string
 	// Detail is the structured computed-vs-expected result of a canonical aggregate
 	// (@runs) comparison. Non-nil only for that case; every other comparator leaves it nil.
 	Detail *AggregateDetail
@@ -193,9 +198,40 @@ type TraceStore interface {
 	Caps() StoreCaps
 }
 
+// CompletenessContract states, per run, what "the trace is complete" means for a
+// live resolution. The engine builds it from the target's adapter kind and its
+// completeness config at drive time (data-model.md); comparators never see it. The
+// known-complete replay path (ResolveComplete) carries no contract — a saved run is
+// complete by definition — which is why this is not a field on that seam.
+type CompletenessContract struct {
+	// Kind is the target's completeness family, adapter-derived (never user-set):
+	// "spawned" (shell/mcp — the SUT process exits, so its trace settles) or
+	// "request" (http/grpc — a bounded request/response, no process boundary).
+	Kind string
+	// Mode is the completeness discipline: "settle" (default — conclude once the
+	// settle window has elapsed and the feature-002 stability gate is satisfied) or
+	// "strict" (conclude on an in-trace test.span.count sentinel).
+	Mode string
+	// Settle is the minimum observation period, measured from drive-return, before a
+	// settle-mode resolution may conclude. Kind-defaulted at config load (2s spawned /
+	// 5s request); 0 is permitted (no minimum window).
+	Settle time.Duration
+}
+
+// ResolveRequest is the live-resolution argument: the correlation tag value plus the
+// per-run completeness contract the engine derived for it. The known-complete path
+// (ResolveComplete) takes only a run id — no contract — so accidental live use of the
+// complete mode is a compile-time impossibility (research R4).
+type ResolveRequest struct {
+	// RunID is the test.run.id correlation tag value (unchanged semantics).
+	RunID string
+	// Contract is the completeness barrier applied to this run's live resolution.
+	Contract CompletenessContract
+}
+
 type Correlator interface {
 	Inject(ctx context.Context, spec *RunSpec) (runID string)
-	Resolve(ctx context.Context, store TraceStore, runID string) (*trace.Trace, error)
+	Resolve(ctx context.Context, store TraceStore, req ResolveRequest) (*trace.Trace, error)
 	// ResolveComplete is the known-complete resolution mode for saved/historical
 	// runs (feature 004, FR-004, audit C4): one tag query + one concurrent fetch
 	// pass, no stability loop, no sleep. An absent trace is the same descriptive
@@ -324,10 +360,16 @@ type ScenarioResult struct {
 	Tags        []string
 	Pass        bool
 	Reasons     []string
-	Cost        float64
-	Sequence    []string
-	Runs        []RunRecord
-	Aggregate   *AggregateDetail
+	// Qualifiers are the completeness qualifiers the engine attached to this scenario's
+	// verdict (feature 008, US2) — e.g. the ingestion-window caveat a bounded
+	// request-scoped run carries on a completeness-sensitive assertion. Carried verbatim
+	// from Verdict.Qualifiers by report.Derive and rendered by every reporter on pass AND
+	// fail; empty (omitted from JSON) when none apply. Reporters never derive them.
+	Qualifiers []string `json:"qualifiers,omitempty"`
+	Cost       float64
+	Sequence   []string
+	Runs       []RunRecord
+	Aggregate  *AggregateDetail
 	// DerivationNote is a non-fatal, human-readable note recorded when report
 	// derivation (sequence/cost) could not be completed for this scenario — e.g. a
 	// span missing service.name. It is an observer artifact: it never changes Pass

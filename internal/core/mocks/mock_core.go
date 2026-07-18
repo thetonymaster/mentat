@@ -286,18 +286,18 @@ func (mr *MockCorrelatorMockRecorder) Inject(ctx, spec any) *gomock.Call {
 }
 
 // Resolve mocks base method.
-func (m *MockCorrelator) Resolve(ctx context.Context, store core.TraceStore, runID string) (*trace.Trace, error) {
+func (m *MockCorrelator) Resolve(ctx context.Context, store core.TraceStore, req core.ResolveRequest) (*trace.Trace, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Resolve", ctx, store, runID)
+	ret := m.ctrl.Call(m, "Resolve", ctx, store, req)
 	ret0, _ := ret[0].(*trace.Trace)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Resolve indicates an expected call of Resolve.
-func (mr *MockCorrelatorMockRecorder) Resolve(ctx, store, runID any) *gomock.Call {
+func (mr *MockCorrelatorMockRecorder) Resolve(ctx, store, req any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Resolve", reflect.TypeOf((*MockCorrelator)(nil).Resolve), ctx, store, runID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Resolve", reflect.TypeOf((*MockCorrelator)(nil).Resolve), ctx, store, req)
 }
 
 // ResolveComplete mocks base method.

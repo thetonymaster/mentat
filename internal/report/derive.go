@@ -29,7 +29,11 @@ func Derive(name, featureFile string, tags []string, v core.Verdict, evs []core.
 		Tags:        tags,
 		Pass:        v.Pass,
 		Reasons:     v.Reasons,
-		Aggregate:   v.Detail,
+		// Completeness qualifiers ride verbatim from the engine-built Verdict; Derive is
+		// an observer and never invents or drops them (feature 008, US2). Rendered by
+		// every reporter on pass AND fail.
+		Qualifiers: v.Qualifiers,
+		Aggregate:  v.Detail,
 	}
 	// Carry the judge-token ledger through unchanged (US6). Derive is an observer, so
 	// it does NOT price it here (an unknown-model pricing error would fail a scenario,

@@ -1,6 +1,7 @@
 package report
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -8,6 +9,32 @@ import (
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/trace"
 )
+
+// TestDeriveCarriesQualifiers pins T018/T019: report.Derive carries the engine-attached
+// Verdict.Qualifiers into the additive ScenarioResult.Qualifiers verbatim, on pass AND
+// fail; a verdict with no qualifiers leaves the field nil (so json omitempty drops it).
+func TestDeriveCarriesQualifiers(t *testing.T) {
+	t.Parallel()
+	const q = "trace-completeness: bounded by ingestion window (settle 5s); spans exported later are not observed"
+	tests := []struct {
+		name string
+		v    core.Verdict
+		want []string
+	}{
+		{"pass carries the qualifier", core.Verdict{Pass: true, Qualifiers: []string{q}}, []string{q}},
+		{"fail carries the qualifier", core.Verdict{Pass: false, Reasons: []string{"nope"}, Qualifiers: []string{q}}, []string{q}},
+		{"no qualifier stays nil", core.Verdict{Pass: true}, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			sr := Derive("s", "s.feature", nil, tt.v, nil, core.Pricing{})
+			if !slices.Equal(sr.Qualifiers, tt.want) {
+				t.Fatalf("Qualifiers = %v, want %v", sr.Qualifiers, tt.want)
+			}
+		})
+	}
+}
 
 func TestDerive(t *testing.T) {
 	tests := []struct {

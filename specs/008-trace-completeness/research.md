@@ -27,15 +27,20 @@ additive sleep — exactly the fixed-cost pattern feature 004 exists to remove.
 - *Contract via `PollConfig` at construction time*: rejected — the contract is
   per-target/per-run (a suite mixes shell and http targets), while the correlator
   is built once at the composition root.
-- *A second `StrictResolve` method*: rejected — two methods with 90% shared loop
-  logic; the request struct keeps one code path and is open for extension
-  (feature 004 can add known-complete replay hints to the same struct).
+- *A second `StrictResolve` method*: rejected for STRICT mode — two methods with
+  90% shared loop logic; the request struct keeps one strict/settle code path.
+  (Note: feature 004 nonetheless shipped known-complete as a separate
+  `ResolveComplete` method — deliberately, so live use is a compile-time error —
+  so that concern left the struct; `ResolveRequest` now carries only settle/strict.)
 
-**Sequencing constraint**: this signature change must land before feature 007
-freezes the public API manifest (or amend 007's `contracts/public-surface.md` in
-the same PR). `cmd/mentatctl` replay/diff paths (audit C4) get a
-`KnownComplete: true` contract that skips barriers and stability for historical
-traces — a free step toward C4 without owning it.
+**Sequencing constraint (updated — 007 merged, 004 shipped)**: feature 007 is
+already merged, and its surface gate is blind to re-exported interface method sets
+(it renders only `type Correlator = core.Correlator`). So this signature change
+lands by expanding that gate to method sets and regenerating
+`public-surface.golden` in the same PR (plan Complexity Tracking; tasks T028).
+The `cmd/mentatctl` replay/diff known-complete path (audit C4) already shipped in
+feature 004 as the SEPARATE `ResolveComplete` method — not the anticipated
+`KnownComplete: true` field — so `ResolveRequest` carries only the live contract.
 
 ## R2 — What signals process exit for spawned targets
 
@@ -70,7 +75,7 @@ Defaults (config-overridable per target, validated at load):
 - **spawned (shell, future mcp): 2s** — covers collector batch timeout (~200ms in
   `deploy/otel-collector.yaml` class of config) plus Tempo ingest-to-queryable
   latency, given the SDK already flushed at process exit.
-- **request-scoped (http, grpc): 5s** — covers the OTel SDK BatchSpanProcessor
+- **request-scoped (http, future grpc): 5s** — covers the OTel SDK BatchSpanProcessor
   default schedule delay (5s), the worst-case gap between response-return and the
   SUT's exporter even sending the spans.
 - **Zero is permitted** but documented as the weakest configuration (barrier

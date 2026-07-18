@@ -32,8 +32,15 @@ go test -tags e2e ./e2e/ -run TestMeta -v
 Expected: the `late-flush` meta-scenario asserts that a scenario declaring
 `the tool "delete_record" is never called` against the late-flushing researchbot
 goes **RED with a comparator failure on the complete forest** — the forbidden
-tool is found because resolution waited out the barrier. Repeat check
-(SC-001): the meta-test loops the scenario and requires 0 green outcomes.
+tool is found because resolution waited out the barrier.
+
+SC-001 repeat proof (the same gate, tuned): the meta-test loops the scenario
+`MENTAT_L3_RUNS` times (unset → 3) and requires 0 green outcomes. Machine-enforce
+the 20-run threshold with:
+
+```sh
+MENTAT_L3_RUNS=20 go test -tags e2e ./e2e/ -run TestMeta -v
+```
 
 ## 3. Strict-mode proofs
 
@@ -50,14 +57,16 @@ Expected:
 ## 4. Qualifier visibility (request-scoped honesty)
 
 ```sh
-mentat run features/checkout.feature --config mentat.yaml
+mentat run --config mentat.yaml --junit /tmp/orderflow.xml features/checkout.feature
 ```
 
 With the orderflow http target (non-strict): every absence/count/budget verdict
-in console and JUnit output carries
-`trace-completeness: bounded by ingestion window (settle 5s)…` — on pass and
-fail alike. Switch the target to `completeness: {mode: strict}` (orderflow
-sentinel scenario) and the qualifier disappears.
+in the emitted report (`--junit` here; likewise `--report-json` / `--report-html`)
+carries `trace-completeness: bounded by ingestion window (settle 5s)…` — on pass
+AND fail alike. The live console surfaces reasons only on a failing step, so the
+pass-side qualifier lives in the report files, not stdout (see SC-003). Switch the
+target to `completeness: {mode: strict}` (orderflow sentinel scenario) and the
+qualifier disappears.
 
 ## 5. Overhead check (SC-005)
 

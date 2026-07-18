@@ -622,9 +622,13 @@ func TestDriveNResolveFailureBecomesSample(t *testing.T) {
 	cor.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("run-x").Times(2)
 	// first resolve OK, second fails -> failed sample, not an aborted batch.
 	tr := &trace.Trace{Spans: []*trace.Span{{Name: "root"}}}
+	// The shell target (built directly, no config.Load) derives Contract{Kind:"spawned"}
+	// with a zero Mode/Settle — the exact-match pins that the engine passes the derived
+	// contract, not a bare RunID (feature 008 T008).
+	wantReq := core.ResolveRequest{RunID: "run-x", Contract: core.CompletenessContract{Kind: "spawned"}}
 	gomock.InOrder(
-		cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), "run-x").Return(tr, nil),
-		cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), "run-x").Return(nil, errors.New("store down")),
+		cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), wantReq).Return(tr, nil),
+		cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), wantReq).Return(nil, errors.New("store down")),
 	)
 	eng, err := Build(cfg, st, cor)
 	if err != nil {
@@ -932,7 +936,7 @@ func TestDriveOnceRunBudget(t *testing.T) {
 				mc := mocks.NewMockCorrelator(ctrl)
 				mc.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("run-1")
 				mc.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-					func(ctx context.Context, _ core.TraceStore, _ string) (*trace.Trace, error) {
+					func(ctx context.Context, _ core.TraceStore, _ core.ResolveRequest) (*trace.Trace, error) {
 						select {
 						case <-ctx.Done():
 							return nil, ctx.Err()
@@ -1157,7 +1161,7 @@ func TestDriveNParallelResolveOverlapsOutsideSlot(t *testing.T) {
 	cor := mocks.NewMockCorrelator(ctrl)
 	cor.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("run-ov").AnyTimes()
 	cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(ctx context.Context, _ core.TraceStore, _ string) (*trace.Trace, error) {
+		func(ctx context.Context, _ core.TraceStore, _ core.ResolveRequest) (*trace.Trace, error) {
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
@@ -1286,7 +1290,7 @@ func TestDriveNParallelResolveConcurrencyCappedAtEight(t *testing.T) {
 	var mu sync.Mutex
 	inFlight, highWater := 0, 0
 	cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(ctx context.Context, _ core.TraceStore, _ string) (*trace.Trace, error) {
+		func(ctx context.Context, _ core.TraceStore, _ core.ResolveRequest) (*trace.Trace, error) {
 			mu.Lock()
 			inFlight++
 			if inFlight > highWater {
@@ -1555,6 +1559,142 @@ func TestDriveSilentByDefaultEmitsZeroBytes(t *testing.T) {
 }
 
 // --- Feature 005 (US3, D4): OTLP endpoint injection must not sabotage ambient telemetry ---
+
+// --- Feature 008 (T007/T008): per-run completeness contract derivation ---
+
+// TestDriveDrivesBeforeResolve is a regression pin (T007a, guards FR-001): a live
+// drive must invoke the Driver BEFORE the Correlator resolves the trace — the settle
+// window is anchored at drive-return, so a future refactor that reordered resolve
+// ahead of drive would silently break the completeness barrier. gomock.InOrder locks
+// the sequence. Expected green immediately; kept as a guard.
+func TestDriveDrivesBeforeResolve(t *testing.T) {
+	cfg := config.Config{
+		OTLPEndpoint: "http://localhost:4318",
+		Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+		Targets: map[string]config.Target{
+			"sut": {Adapter: "orderpin", Command: []string{"x"}, MaxConcurrency: 1},
+		},
+	}
+	tr := &trace.Trace{Spans: []*trace.Span{{Name: "root"}}, Roots: []*trace.Span{{Name: "root"}}}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	drv := mocks.NewMockDriver(ctrl)
+	cor := mocks.NewMockCorrelator(ctrl)
+
+	cor.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("run-1")
+	// The pin: Driver.Run strictly precedes Correlator.Resolve.
+	gomock.InOrder(
+		drv.EXPECT().Run(gomock.Any(), gomock.Any()).Return(core.RunResult{Output: core.Output{Answer: "ok"}}, nil),
+		cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).Return(tr, nil),
+	)
+
+	eng, err := Build(cfg, st, cor, WithExtraDriver("orderpin", stubDriverFactory(drv)))
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if _, err := eng.Drive(context.Background(), "sut", nil); err != nil {
+		t.Fatalf("Drive: %v", err)
+	}
+}
+
+// TestDriveDerivesCompletenessContract pins T007b/T008: the engine derives a per-run
+// CompletenessContract from the target's adapter kind + completeness config and passes
+// it inside the ResolveRequest to cor.Resolve. Kind is adapter-derived (shell→spawned,
+// http→request — mcp/grpc are a forward-mapping, not tested here); Mode and Settle pass
+// through the loaded config (kind-defaulted at config load). The DoAndReturn capture
+// asserts on the actual ResolveRequest the engine built.
+func TestDriveDerivesCompletenessContract(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	tests := []struct {
+		name         string
+		yaml         string
+		target       string
+		args         []string
+		wantContract core.CompletenessContract
+	}{
+		{
+			name: "shell adapter, no completeness block → spawned/settle/2s default",
+			yaml: `targets:
+  bot:
+    adapter: shell
+    command: ["sh", "-c", "echo hi"]`,
+			target:       "bot",
+			wantContract: core.CompletenessContract{Kind: "spawned", Mode: "settle", Settle: 2 * time.Second},
+		},
+		{
+			name: "http adapter, no completeness block → request/settle/5s default",
+			yaml: fmt.Sprintf(`targets:
+  api:
+    adapter: http
+    http:
+      url: %q
+      method: POST`, srv.URL),
+			target:       "api",
+			args:         []string{"--scenario", "happy"},
+			wantContract: core.CompletenessContract{Kind: "request", Mode: "settle", Settle: 5 * time.Second},
+		},
+		{
+			name: "shell adapter, explicit settle passes through",
+			yaml: `targets:
+  bot:
+    adapter: shell
+    command: ["sh", "-c", "echo hi"]
+    completeness:
+      settle: 10s`,
+			target:       "bot",
+			wantContract: core.CompletenessContract{Kind: "spawned", Mode: "settle", Settle: 10 * time.Second},
+		},
+		{
+			name: "shell adapter, strict mode passes through",
+			yaml: `targets:
+  bot:
+    adapter: shell
+    command: ["sh", "-c", "echo hi"]
+    completeness:
+      mode: strict`,
+			target:       "bot",
+			wantContract: core.CompletenessContract{Kind: "spawned", Mode: "strict", Settle: 2 * time.Second},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := config.Load([]byte(tt.yaml))
+			if err != nil {
+				t.Fatalf("config.Load: %v", err)
+			}
+			tr := &trace.Trace{Spans: []*trace.Span{{Name: "root"}}, Roots: []*trace.Span{{Name: "root"}}}
+			ctrl := gomock.NewController(t)
+			st := mocks.NewMockTraceStore(ctrl)
+			cor := mocks.NewMockCorrelator(ctrl)
+			cor.EXPECT().Inject(gomock.Any(), gomock.Any()).Return("run-1")
+			var gotReq core.ResolveRequest
+			cor.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, _ core.TraceStore, req core.ResolveRequest) (*trace.Trace, error) {
+					gotReq = req
+					return tr, nil
+				})
+
+			eng, err := Build(cfg, st, cor)
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			if _, err := eng.Drive(context.Background(), tt.target, tt.args); err != nil {
+				t.Fatalf("Drive: %v", err)
+			}
+			if gotReq.RunID != "run-1" {
+				t.Fatalf("ResolveRequest.RunID = %q, want %q", gotReq.RunID, "run-1")
+			}
+			if gotReq.Contract != tt.wantContract {
+				t.Fatalf("ResolveRequest.Contract = %+v, want %+v", gotReq.Contract, tt.wantContract)
+			}
+		})
+	}
+}
 
 // TestDriveOnceInjectsOTLPEndpointConditionally pins FR-006/SC-004: driveOnce may
 // inject OTEL_EXPORTER_OTLP_ENDPOINT into the run spec ONLY when the configured

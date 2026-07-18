@@ -10,7 +10,7 @@ authors (sections 1–2), report readers (section 3), and implementers (section 
 | spawned (`shell`, future `mcp`) | SUT process exit (drive-return) + settle window (default 2s) + feature-002 stability gate | complete forest, provided the SUT flushes telemetry on exit and spawns no surviving children (process-group coverage arrives with feature 003) |
 | request-scoped (`http`, future `grpc`) | response received (drive-return) + settle window (default 5s) + stability gate | **bounded, not exact**: spans exported after the window are missed; verdicts carry the qualifier (section 3) |
 | any, strict mode | exactly one in-trace sentinel; resolved forest count == declared count | exact completeness or a hard error — never a verdict over partial evidence |
-| historical (`mentatctl` replay/format/diff) | none (`KnownComplete`) | trace is immutable; fetched once, no polling |
+| historical (`mentatctl` replay/format/diff) | none — the separate `ResolveComplete` method | trace is immutable; fetched once, no polling |
 
 **SUT contract (documented, spawned targets)**: flush and shut down the tracer
 provider before process exit (standard OTel SDK shutdown). A SUT that exits
@@ -55,14 +55,17 @@ Exact wording is pinned by unit tests; shapes:
 | strict: duplicate sentinels | `correlate: run %q: strict mode: %d sentinel spans found (want exactly 1): [%s, %s, …]` |
 | strict: count short at timeout | `correlate: run %q: strict mode: %d of %d declared spans within %v` |
 | strict: count exceeded | `correlate: run %q: strict mode: %d spans exceed declared test.span.count=%d` |
+| strict: sentinel present but non-integer | `correlate: run %q: strict mode: sentinel span %s has non-integer test.span.count=%q` (span id + raw value; never a silent `declared=0`) |
 | config: unknown mode | `target %q: completeness.mode must be "settle" or "strict", got %q` |
 | config: bad settle | `target %q: completeness.settle: %v` (wrapping the duration parse error, or `must be >= 0, got %s`) |
 
 ## 5. Compatibility
 
-- `Correlator.Resolve` signature changes (`ResolveRequest`); all in-repo callers
-  updated in the same change; gomock mocks regenerated. Must land before (or
-  amend) feature 007's public-surface manifest.
+- The live `Correlator.Resolve` signature changes (`ResolveRequest`); the separate
+  `ResolveComplete` method is unchanged; the one in-repo live caller (engine) is
+  updated in the same change; gomock mocks regenerated. Feature 007 is already
+  merged, so 008 expands its surface gate to method sets and regenerates
+  `public-surface.golden` in the same PR (the gate is otherwise blind to this).
 - `Verdict.Qualifiers` and `config.Target.Completeness` are additive; omitted
   config preserves today's behaviour plus the kind-default settle window.
 - Feature 002's stability gate semantics are byte-for-byte preserved underneath

@@ -13,6 +13,40 @@ targets:
     adapter: shell
     run_timeout: 2s
     command: ["sh", "-c", "sleep 987654 & sleep 987654"]
+  # A deliberately late-exporting SUT for the feature-008 (US1) L3 proof: it
+  # force-flushes a decoy batch, idles past the 600ms stability window, then
+  # force-flushes a forbidden delete_record execute_tool span BEFORE it exits. The
+  # settle barrier below holds resolution open until the complete forest (including
+  # delete_record) is observed, so an absence assertion on that tool fails on the
+  # complete evidence instead of passing green on the partial decoy forest. Because
+  # delete_record is force-flushed pre-exit, the post-exit settle only needs to
+  # cover collector/Tempo ingestion lag — the shell/spawned default (2s) suffices;
+  # it need NOT exceed the SUT's 1500ms intra-process delay.
+  late-flush:
+    adapter: shell
+    command: ["./bin/researchbot", "--scenario", "late-flush"]
+    completeness:
+      mode: settle
+      settle: 2s
+  # Feature-008 (US3) strict-mode sentinel targets. Each drives a researchbot
+  # sentinel scenario that stamps the in-trace test.span.count declaration; strict
+  # mode makes resolution refuse any verdict until the resolved forest reaches EXACTLY
+  # the declared count, and hard-error on any mismatch. sentinel-good declares the
+  # count it emits (resolves green, no qualifier — FR-009); sentinel-short declares
+  # more than it emits (count-short resolution error); sentinel-dup declares twice
+  # (ambiguous-declaration resolution error). e2e/strict_meta_test.go is the L3 proof.
+  sentinel-good:
+    adapter: shell
+    command: ["./bin/researchbot", "--scenario", "sentinel-good"]
+    completeness: { mode: strict }
+  sentinel-short:
+    adapter: shell
+    command: ["./bin/researchbot", "--scenario", "sentinel-short"]
+    completeness: { mode: strict }
+  sentinel-dup:
+    adapter: shell
+    command: ["./bin/researchbot", "--scenario", "sentinel-dup"]
+    completeness: { mode: strict }
   checkout:
     adapter: http
     max_concurrency: 8
