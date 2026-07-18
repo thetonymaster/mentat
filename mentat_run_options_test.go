@@ -12,7 +12,10 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/thetonymaster/mentat"
 )
@@ -90,11 +93,86 @@ func twoScenarioFeature(answer string) string {
 `, answer)
 }
 
-// TestWithConcurrency proves WithConcurrency is plumbed into godog: an unset/zero
-// value runs at the default (1) and a value >1 runs a multi-scenario feature green
-// (the pretty formatter is concurrency-wrapped by godog, so >1 must not break the
-// run). Concurrency itself is not directly observable from Results, so the proof is
-// that both scenarios still pass green at each level.
+// concurrencyDriver observes REAL scenario overlap: each Run increments a shared
+// atomic active counter, records the maximum ever seen, then rendezvouses at a
+// 2-party barrier so two concurrent scenarios are provably inside Run at once. The
+// last arriver (active reaches 2) closes release, freeing both immediately; a
+// serialized run (concurrency 1) never gets a peer and falls through the barrier's
+// deadline instead of blocking forever, leaving the max at 1. All shared state is via
+// atomics + a close-once channel, so the test is -race clean. It writes the same
+// 1-span trace busDriver does so the run resolves green.
+type concurrencyDriver struct {
+	bus     *bus
+	answer  string
+	active  *int64
+	maxSeen *int64
+	release chan struct{}
+	once    *sync.Once
+}
+
+func (d concurrencyDriver) Run(_ context.Context, spec mentat.RunSpec) (mentat.RunResult, error) {
+	n := atomic.AddInt64(d.active, 1)
+	for {
+		old := atomic.LoadInt64(d.maxSeen)
+		if n <= old || atomic.CompareAndSwapInt64(d.maxSeen, old, n) {
+			break
+		}
+	}
+	if n >= 2 {
+		d.once.Do(func() { close(d.release) }) // last arriver frees both immediately
+	}
+	select {
+	case <-d.release: // a peer overlapped
+	case <-time.After(3 * time.Second): // serialized: never block forever
+	}
+	atomic.AddInt64(d.active, -1)
+
+	root := &mentat.Span{ID: "root", Name: "membus.run", Kind: mentat.KindServer, Status: mentat.StatusOk}
+	d.bus.put(spec.RunID, &mentat.Trace{RunID: spec.RunID, Roots: []*mentat.Span{root}, Spans: []*mentat.Span{root}})
+	return mentat.RunResult{RunID: spec.RunID, Output: mentat.Output{Answer: d.answer}}, nil
+}
+
+// runConcurrencyProbe runs a two-scenario feature through mentat.Run with the counting
+// concurrencyDriver at godog concurrency 2 and a per-target MaxConcurrency of 2 (so the
+// engine's per-target SUT slot does not re-serialize the drives), returning the maximum
+// number of driver executions observed running at once. It deliberately does NOT reuse
+// runMembusFeature, whose target hardcodes MaxConcurrency:1 (which would serialize the
+// drives regardless of godog concurrency).
+func runConcurrencyProbe(t *testing.T, regName, answer, feature string) (mentat.Results, int64, error) {
+	t.Helper()
+	b := newBus()
+	dir := t.TempDir()
+	featPath := writeFile(t, dir, "conc.feature", feature)
+	var active, maxSeen int64
+	var once sync.Once
+	release := make(chan struct{})
+	cfg := mentat.Config{
+		Store: regName,
+		Targets: map[string]mentat.Target{
+			"bot": {Adapter: regName, Command: []string{"noop"}, MaxConcurrency: 2},
+		},
+		Poll: mentat.PollSpec{Interval: "1ms", StableFor: 1},
+	}
+	res, err := mentat.Run(context.Background(), cfg,
+		mentat.WithFeatures(featPath),
+		mentat.WithConcurrency(2),
+		mentat.WithDriver(regName, func(mentat.Config) (mentat.Driver, error) {
+			return concurrencyDriver{bus: b, answer: answer, active: &active, maxSeen: &maxSeen, release: release, once: &once}, nil
+		}),
+		mentat.WithStore(regName, func(mentat.Config) (mentat.TraceStore, error) {
+			return busStore{bus: b}, nil
+		}),
+	)
+	return res, atomic.LoadInt64(&maxSeen), err
+}
+
+// TestWithConcurrency proves WithConcurrency is plumbed into godog's scenario
+// concurrency. The clamp rows use the shared runMembusFeature helper (whose target is
+// MaxConcurrency:1) and assert both scenarios still pass green: an unset value and an
+// explicit zero both run at the default (1). The concurrency==2 row uses a counting
+// driver (MaxConcurrency:2) to OBSERVE real overlap — WithConcurrency(2) must run two
+// scenarios' drivers concurrently, so the observed maximum concurrent driver execution
+// is 2, not merely "both passed".
 func TestWithConcurrency(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -102,20 +180,37 @@ func TestWithConcurrency(t *testing.T) {
 		regName     string
 		concurrency int
 		set         bool
+		observe     bool // when true, assert real overlap (max concurrent == 2)
 	}{
 		{name: "unset defaults to 1", regName: "conc-unset", set: false},
 		{name: "explicit zero clamps to 1", regName: "conc-zero", concurrency: 0, set: true},
-		{name: "two runs multi-scenario green", regName: "conc-two", concurrency: 2, set: true},
+		{name: "two observes real overlap", regName: "conc-two", concurrency: 2, set: true, observe: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			answer := tt.regName + " ok"
+			feature := twoScenarioFeature(answer)
+
+			if tt.observe {
+				res, maxConc, err := runConcurrencyProbe(t, tt.regName, answer, feature)
+				if err != nil {
+					t.Fatalf("Run: %v", err)
+				}
+				if res.Passed != 2 || res.Failed != 0 {
+					t.Fatalf("want both scenarios green, got passed=%d failed=%d; scenarios=%+v", res.Passed, res.Failed, res.Scenarios)
+				}
+				if maxConc != 2 {
+					t.Fatalf("WithConcurrency(2) must run two scenarios' drivers concurrently: observed max %d, want 2", maxConc)
+				}
+				return
+			}
+
 			var extra []mentat.Option
 			if tt.set {
 				extra = append(extra, mentat.WithConcurrency(tt.concurrency))
 			}
-			res, err := runMembusFeature(t, tt.regName, answer, twoScenarioFeature(answer), extra...)
+			res, err := runMembusFeature(t, tt.regName, answer, feature, extra...)
 			if err != nil {
 				t.Fatalf("Run: %v", err)
 			}

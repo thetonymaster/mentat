@@ -81,10 +81,12 @@ config types", forced by the external-only in-code-construction test (SC-002):
 
 #### Run-orchestration options (consumer-zero surface — T012, research R7)
 
-The CLI is "consumer zero": everything `cmd/mentat` does is expressed through
-these options, so there is exactly one composition path. Each defaults to the
-prior library-mode behaviour (silent, no reports, unlimited), so an embedding
-caller that passes none gets an unchanged silent `Run`.
+The CLI is "consumer zero": all of `cmd/mentat`'s run *execution and composition*
+flows through these options and `mentat.Run` — there is exactly one composition
+path. (Process concerns that are not run composition — signal handling and the
+`os.Exit` call — remain in `main`.) Each option defaults to the prior library-mode
+behaviour (silent, no reports, unlimited), so an embedding caller that passes none
+gets an unchanged silent `Run`.
 
 | Symbol | Signature (shape) | Rules |
 |--------|-------------------|-------|

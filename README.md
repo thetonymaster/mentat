@@ -192,8 +192,11 @@ stability problem, not a "where is it" one.
 
 Mentat's seams — driver, store, comparator, judge — are public interfaces on the
 `github.com/thetonymaster/mentat` facade, so you can drive or grade anything
-*without forking*: register a custom adapter at the `mentat.Run` call and it works in
-`mentat.yaml` and feature files like a built-in. The guides under
+*without forking*: register a custom adapter at the `mentat.Run` call. Custom
+**drivers**, **stores**, and **judges** then work in `mentat.yaml` and feature files
+exactly like a built-in. A custom **comparator** registers and composes today, but
+invoking one from a `.feature` step needs new Gherkin grammar and is deferred to a
+future spec — so it is not yet callable from feature files. The guides under
 [`docs/extending`](docs/extending) walk each seam:
 
 - [Writing a custom Driver](docs/extending/driver.md)

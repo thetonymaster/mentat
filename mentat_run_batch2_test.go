@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/thetonymaster/mentat"
@@ -240,6 +241,96 @@ func TestRunSurfacesEmitAndBudgetErrorsTogether(t *testing.T) {
 		t.Fatalf("both-error run must still return the scenarios that ran, got %+v", res)
 	}
 	// A budget trip is not an interruption: the passed ctx was never cancelled.
+	if res.Interrupted {
+		t.Fatalf("a budget trip must NOT mark the run interrupted, got %+v", res)
+	}
+}
+
+// countingBudgetJudge counts its invocations via an atomic counter (so the test is
+// -race clean) and reports a fixed token usage whose priced cost crosses a low
+// MaxCostUSD ceiling. It is the instrument for proving the budget CANCELLATION
+// prevents a subsequent scenario's judge call — not merely that budget.Err() is set
+// after the run completes.
+type countingBudgetJudge struct {
+	calls *int64
+	usage mentat.JudgeUsage
+}
+
+func (j countingBudgetJudge) Judge(_ context.Context, _ mentat.JudgeRequest) (mentat.JudgeVerdict, error) {
+	atomic.AddInt64(j.calls, 1)
+	return mentat.JudgeVerdict{Match: true, Reason: "counting judge match", Usage: j.usage}, nil
+}
+
+// runJudgeBudgetTwoScenarios drives TWO judged scenarios (concurrency 1) through
+// mentat.Run with a counting judge, returning the number of judge calls actually made.
+// Scenario 1's fixed $0.02 spend crosses the low maxUSD ceiling; its After hook then
+// cancels the budget context so scenario 2's drive step aborts before any judge call.
+// Both scenarios use the identical judged `the result means` step, so the ONLY thing
+// keeping scenario 2's judge from firing is the budget cancellation under test.
+func runJudgeBudgetTwoScenarios(t *testing.T, regName string, maxUSD float64) (mentat.Results, int64, error) {
+	t.Helper()
+	b := newBus()
+	dir := t.TempDir()
+	feature := `Feature: judge budget cancellation stops the next scenario
+  Scenario: first judged run crosses the ceiling
+    Given the agent target "bot"
+    When I run scenario "echo"
+    Then the result means "the answer"
+  Scenario: second judged run must be prevented
+    Given the agent target "bot"
+    When I run scenario "echo"
+    Then the result means "the answer"
+`
+	featPath := writeFile(t, dir, "budget2.feature", feature)
+	var calls int64
+	cfg := mentat.Config{
+		Store: regName,
+		Targets: map[string]mentat.Target{
+			"bot": {Adapter: regName, Command: []string{"noop"}, MaxConcurrency: 1},
+		},
+		Poll:    mentat.PollSpec{Interval: "1ms", StableFor: 1},
+		Pricing: mentat.Pricing{"judge-model": {InputPerMTok: 10}}, // 2000 in tok => $0.02
+		Judge:   mentat.JudgeConfig{Backend: regName, Votes: 1, MaxCostUSD: maxUSD},
+	}
+	res, err := mentat.Run(context.Background(), cfg,
+		mentat.WithFeatures(featPath),
+		mentat.WithDriver(regName, func(mentat.Config) (mentat.Driver, error) {
+			return busDriver{bus: b, answer: "budget ok"}, nil
+		}),
+		mentat.WithStore(regName, func(mentat.Config) (mentat.TraceStore, error) {
+			return busStore{bus: b}, nil
+		}),
+		mentat.WithJudge(regName, func(mentat.Config) (mentat.Judge, error) {
+			return countingBudgetJudge{calls: &calls, usage: mentat.JudgeUsage{Calls: 1, InputTokens: 2000, OutputTokens: 0, Model: "judge-model"}}, nil
+		}),
+	)
+	return res, atomic.LoadInt64(&calls), err
+}
+
+// TestRunBudgetCancellationStopsNextScenario pins the budget CANCELLATION wiring (US6)
+// with teeth the single-scenario TestRunEnforcesJudgeBudget lacks: that test drives
+// ONE judged scenario, so it stays green even if budgetCancel were never wired
+// (budget.Err() is set post-run regardless). Here two identical judged scenarios run
+// at concurrency 1; scenario 1's $0.02 spend crosses the $0.01 ceiling and its After
+// hook cancels the budget context, so scenario 2's drive step aborts before its judge
+// call — the counting judge must be invoked EXACTLY ONCE. Without the cancellation,
+// scenario 2 would drive and judge too (count == 2).
+//
+// No t.Parallel(): reuses the shared registry-mutating Run path.
+func TestRunBudgetCancellationStopsNextScenario(t *testing.T) {
+	res, calls, err := runJudgeBudgetTwoScenarios(t, "budget-cancel-next", 0.01)
+
+	if err == nil {
+		t.Fatalf("an over-budget run must error, got nil (res=%+v)", res)
+	}
+	if !strings.Contains(err.Error(), "judge budget") {
+		t.Fatalf("error should name the budget trip, got %q", err.Error())
+	}
+	if calls != 1 {
+		t.Fatalf("budget cancellation must prevent scenario 2's judge call: judge invoked %d times, want exactly 1", calls)
+	}
+	// A budget trip is not an interruption: the passed ctx was never cancelled, only
+	// the internal budget child context.
 	if res.Interrupted {
 		t.Fatalf("a budget trip must NOT mark the run interrupted, got %+v", res)
 	}
