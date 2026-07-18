@@ -18,6 +18,20 @@ workflow).
 | Invocation idiom | direct `go test -tags e2e` like `ci.yml:116` — no new make target (none exists for e2e today; do not create a second divergent invocation path) |
 | Failure visibility | runs on the default branch; a red run appears on the repo's Actions page like any CI failure (spec edge case: no silent-failure channel) |
 
+## Known limitation: nothing enforces the mirror
+
+`nightly-l3.yml` and `ci.yml`'s e2e job must stay step-for-step identical, and
+both files say so in comments — but only a one-time hand-diff at 009 close ever
+verified it (parsed both YAMLs, compared step lists: 9 steps, identical). Two
+files that must agree, with no mechanism keeping them agreeing, will drift.
+
+Fix when someone touches either lane: extract the e2e job into a reusable
+workflow (`workflow_call`) or a composite action parameterised on
+`MENTAT_L3_RUNS`, so ci.yml passes 3 and nightly passes 20 into one definition.
+Deliberately not done in 009 — it would have meant restructuring the working CI
+lane inside a feature about surface integrity. No spec owns this yet; it is
+small enough to ride along with whichever feature next edits CI.
+
 ## Side effect on code
 
 `e2e/l3runs.go:8-10`'s comment ("The release/nightly lane sets
