@@ -10,6 +10,14 @@ on:
     - cron: '0 3 * * *'
   workflow_dispatch:
 
+# A manual dispatch landing near the 03:00 cron would otherwise run two 20-run
+# e2e jobs at once. Unlike ci.yml, this lane NEVER cancels: each run is the
+# SC-001 evidence for its trigger, and cancelling one destroys that evidence
+# (and would report as a non-green lane). Overlapping runs queue instead.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
