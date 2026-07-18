@@ -362,14 +362,36 @@ func (s busStore) Query(_ context.Context, q mentat.TraceQuery) ([]mentat.TraceR
 
 func (s busStore) Caps() mentat.StoreCaps { return mentat.StoreCaps{} }
 
+// --- Parallelism note for the Run tests below ---------------------------------
+//
+// The Run tests in this file call t.Parallel(). That is verified, not assumed:
+//
+//   - Seam registration is PER-ENGINE, not package-global: engine.Build mints a
+//     fresh registry.Registry per call and Seal()s it, so two Runs never share
+//     driver/store/comparator/judge state (spec 007 T010/T011). Reusing one custom
+//     name across CONCURRENT Runs is proven green by TestRunConcurrentIndependent
+//     in mentat_run_reentrancy_test.go.
+//   - The only package-global Run writes is the POST-run reporter map, via
+//     engine.Build → report.RegisterBuiltins. That write is idempotent (three fixed
+//     reporters under three fixed keys) and guarded by registry's own reporterMu, so
+//     concurrent Builds neither race nor disagree on a value.
+//   - Each test owns its bus (newBus) and its fixture dir (t.TempDir); no test here
+//     touches shared mutable package state or a shared path.
+//   - No test here uses t.Setenv or t.Chdir — those panic under t.Parallel().
+//   - Run narrates to io.Discard unless WithOutput is passed, and no test in this
+//     package captures os.Stdout.
+//
+// The payoff is -race pressure on the registry-isolation invariant these tests
+// guard, NOT wall clock: each run is ~0.00s (CLAUDE.md — t.Parallel is a soft
+// correctness default for unit tests, not a CI-speed measure).
+
 // TestRunCustomDriverAndStoreGreen is the KEY proof of the whole registration MVP:
 // a custom driver (registered via WithDriver) writes its trace keyed by the injected
 // spec.RunID into a shared bus, a custom store (WithStore) serves that same id, and
 // the default UUID correlator resolves it — so a fully custom driver+store pair
 // drives a scenario GREEN end to end. No built-in adapter, no Tempo, no network.
-//
-// No t.Parallel(): Run mutates the package-global registry.
 func TestRunCustomDriverAndStoreGreen(t *testing.T) {
+	t.Parallel()
 	b := newBus()
 	dir := t.TempDir()
 	feature := `Feature: custom driver and store
@@ -415,9 +437,8 @@ func TestRunCustomDriverAndStoreGreen(t *testing.T) {
 // .feature file each scenario came from (US2, FR-003): ScenarioResult.FeatureFile is
 // the source feature path, captured from godog's scenario Uri through the report
 // collector — Name alone can collide across files.
-//
-// No t.Parallel(): Run composes an engine (kept serial by convention).
 func TestRunScenarioResultCarriesFeatureFile(t *testing.T) {
+	t.Parallel()
 	b := newBus()
 	dir := t.TempDir()
 	feature := `Feature: feature-file field
@@ -470,9 +491,8 @@ func TestRunScenarioResultCarriesFeatureFile(t *testing.T) {
 // started yet) — out of 007's registration-surface scope. This test therefore asserts
 // registration/composition success for the comparator, and behavioural resolution
 // for the judge.
-//
-// No t.Parallel(): Run mutates the package-global registry.
 func TestRunCustomComparatorAndJudgeCompose(t *testing.T) {
+	t.Parallel()
 	b := newBus()
 	dir := t.TempDir()
 	feature := `Feature: custom comparator and judge compose
@@ -524,8 +544,10 @@ func TestRunCustomComparatorAndJudgeCompose(t *testing.T) {
 // last-wins overwrite (Constitution IV). All four registrable seams are covered,
 // each for both collision shapes (vs built-in, and dup vs dup).
 //
-// No t.Parallel(): Run mutates the package-global registry.
+// The subtests are parallel too: they only READ the shared dir/featPath and the four
+// stateless ok* factories, and every collision is contained in its own Run's registry.
 func TestRunDuplicateRegistrationFailsLoudly(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	featPath := writeFile(t, dir, "dup.feature", "Feature: x\n  Scenario: y\n    Given the agent target \"bot\"\n")
 	okDriver := func(mentat.Config) (mentat.Driver, error) { return busDriver{}, nil }
@@ -581,6 +603,7 @@ func TestRunDuplicateRegistrationFailsLoudly(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			cfg := mentat.Config{Store: "file", StorePath: dir, Targets: echoTarget()}
 			opts := append([]mentat.Option{mentat.WithFeatures(featPath)}, tt.opts...)
 			res, err := mentat.Run(context.Background(), cfg, opts...)
@@ -610,9 +633,8 @@ func TestRunDuplicateRegistrationFailsLoudly(t *testing.T) {
 // The custom driver+store resolve the trace GREEN, so the run reaches the comparator;
 // the comparator then fails because the scenario asserts a substring the driver's
 // answer ("meta ok") never contains.
-//
-// No t.Parallel(): mirrors the serial convention of the sibling Run tests in this file.
 func TestRunGoesRedOnComparatorViolation(t *testing.T) {
+	t.Parallel()
 	b := newBus()
 	dir := t.TempDir()
 	feature := `Feature: comparator violation goes red
