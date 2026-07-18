@@ -49,9 +49,11 @@ additive sleep (coordination note with feature 004 recorded in research R3)
 
 **Constraints**: feature 002's stability-gate semantics preserved exactly (FR-010);
 comparators remain Evidence-only and unchanged (FR-011); every barrier failure
-names the unsatisfied barrier and its values (FR-013, Constitution IV); the
-`Correlator` seam signature changes — MUST land before feature 007 freezes the
-public API manifest, or 007's manifest must be updated in the same change
+names the unsatisfied barrier and its values (FR-013, Constitution IV); the live
+`Correlator.Resolve` seam signature changes — and because feature 007 is already
+merged and its surface gate is blind to re-exported interface method sets, 008
+expands that gate to render method sets and regenerates 007's public-surface
+golden in the same PR (see Complexity Tracking)
 
 **Scale/Scope**: 6 packages touched (`core`, `correlate`, `config`, `engine`,
 `report`, `store` untouched) + `tracelab/researchbot` + `features/meta/` + `e2e/`
@@ -104,7 +106,7 @@ internal/core/mocks/             # regenerated gomock mocks (Correlator signatur
 internal/correlate/correlate.go  # barrier-aware Resolve: settle window, strict sentinel termination
 internal/config/config.go        # per-target completeness block (mode, settle) + validation + defaults
 internal/engine/engine.go        # build contract per target; attach qualifier to sensitive verdicts
-internal/report/                 # render Verdict.Qualifiers in console/JUnit output
+internal/report/                 # render Verdict.Qualifiers in every emitted report format (json, html, junit) + ScenarioResult carry-through
 cmd/mentat/main.go               # thread contract defaults (poll config already flows here)
 cmd/mentatctl/main.go            # replay/diff resolve historical traces as known-complete (no barrier)
 tracelab/researchbot/            # late-flush scenario; strict-mode sentinel scenarios (good + short-count)
@@ -120,10 +122,10 @@ tracelab/meta/e2e assets.
 
 ## Complexity Tracking
 
-No constitution violations. One cross-feature coordination risk (not a violation)
-recorded here for visibility:
+No constitution violations. Two cross-feature notes (not violations), both now
+resolved or gated, recorded here for visibility:
 
 | Risk | Why accepted | Mitigation |
 |------|--------------|------------|
-| `Correlator.Resolve` signature change while 007 prepares to freeze the public API | The contract is per-run data; smuggling it through config or engine-side sleeps would either break "wired once" or turn the settle window into a fixed additive sleep (fighting feature 004) | Land 008's seam change before 007's manifest freeze, or update 007's `contracts/public-surface.md` in the same PR; ordering note also in spec Assumptions |
-| Feature 002 not yet implemented; 008 builds on its hardened gate | Spec declares 002-first ordering | tasks.md for 008 must not start until 002's correlate/engine tasks are merged |
+| Live `Correlator.Resolve` signature change lands on 007's ALREADY-MERGED public surface, which the surface gate does NOT catch — it renders only the alias line `type Correlator = core.Correlator`, never the method set | The contract is per-run data; smuggling it through config or engine-side sleeps would either break "wired once" or turn the settle window into a fixed additive sleep (fighting feature 004). The real hazard is the gate's blindness to re-exported interface method sets, not the signature change itself | Fix the root cause: expand `surface_test.go` to resolve aliased interfaces into their method sets, then regenerate `public-surface.golden` in 008's PR as the deliberate acknowledgment act under feature 007's FR-005 surface-manifest policy (T028). The known-complete path stays the pre-existing separate `ResolveComplete` method — 008 adds NO `KnownComplete` flag |
+| Feature 002 (verdict integrity) is a hard prerequisite; 008 builds on its hardened stability gate | Spec declares 002-first ordering | 002 is merged; T001 gates on it (correlate hard-errors on deadline-with-unstable-spans, `correlate.go`) before any 008 work starts |

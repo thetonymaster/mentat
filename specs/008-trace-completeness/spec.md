@@ -207,13 +207,17 @@ verdicts proceed normally.
 
 - **SC-001**: The late-flush meta-scenario never passes: across 20 consecutive L3 runs
   against the late-exporting SUT, absence assertions produce zero green verdicts — every
-  run either fails on complete evidence or ends in a loud, descriptive error.
+  run either fails on complete evidence or ends in a loud, descriptive error. Enforced by
+  the e2e meta-test's CI-tunable repeat count (`MENTAT_L3_RUNS`: default 3 for PR CI, set
+  to 20 in the release/nightly lane) — the criterion's threshold and its gate are the
+  same test, so 20 is machine-checked, not only a manual proof.
 - **SC-002**: Zero verdicts are produced for spawned-process runs while the SUT is
   still running, demonstrated by a harness scenario that holds the process alive past
   the point where the span count would otherwise appear stable.
 - **SC-003**: 100% of absence and aggregate verdicts on request-scoped targets without
-  strict mode carry the ingestion-window-bounded qualifier in every report format that
-  shows verdict reasons.
+  strict mode carry the ingestion-window-bounded qualifier in every emitted report
+  format that shows verdict reasons — the json, html, and junit reporters — on pass
+  and fail alike.
 - **SC-004**: In strict mode, 100% of count mismatches, missing sentinels, and
   duplicate sentinels end in a hard error naming the expected and observed values;
   zero verdicts are ever computed from partial evidence.
