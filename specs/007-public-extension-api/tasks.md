@@ -48,7 +48,7 @@
 
 **Independent Test**: external-style test drives a feature file via Run against the file store, asserts verdicts programmatically.
 
-- [X] T008 [US2] **(pulled into MVP — the example's green run requires `Run`)** Failing tests: `Run(ctx, Config, opts...)` returns `Results{Scenarios, Passed, Failed, Interrupted}` with per-scenario name/verdict/reasons matching the report collector; the suite report aggregates (`TotalCost`, and `JudgeTotal` when a scenario made a judge call — nil otherwise, no fabricated zeros) mirror `core.RunReport` (FR-003 "report data"); `LoadConfig` + in-code `Config` both work in mentat_run_test.go (go-test-writer, red). NOTE: `ScenarioResult` omits the "feature file" field — the report collector never captures `scenario.Uri`; adding it needs steps→collector plumbing (deferred). Status-equivalence-to-CLI-FAIL proof is T013 (deferred).
+- [X] T008 [US2] **(pulled into MVP — the example's green run requires `Run`)** Failing tests: `Run(ctx, Config, opts...)` returns `Results{Scenarios, Passed, Failed, Interrupted}` with per-scenario name/verdict/reasons matching the report collector; the suite report aggregates (`TotalCost`, and `JudgeTotal` when a scenario made a judge call — nil otherwise, no fabricated zeros) mirror `core.RunReport` (FR-003 "report data"); `LoadConfig` + in-code `Config` both work in mentat_run_test.go (go-test-writer, red). NOTE: `ScenarioResult` now carries `FeatureFile` — `steps.go` passes `scenario.Uri` through `report.Derive` → `core.ScenarioResult` → the facade (post-MVP, Q-blessed 2026-07-17; proof `TestRunScenarioResultCarriesFeatureFile`). Status-equivalence-to-CLI-FAIL proof is T013 (deferred).
 - [X] T009 [US2] **(pulled into MVP)** Implement Run (godog execution behind the facade, results adapter from collector) + Results/ScenarioResult types in mentat.go, run.go (go-test-writer, green). ⚠️ Reentrancy across `Run` calls is NOT yet safe: the package-global registry persists custom registrations, so a 2nd `Run` reusing a custom name hits a false collision (tension with US2 acceptance #2 / R3). Clean fix = per-Build registry scoping (wide blast radius across `ResetForTest` tests) → T010/T011 (deferred).
 - [X] T010 [US2] Failing tests: two sequential + two concurrent Run calls independent and `-race` clean (no shared registration state); ctx cancellation mid-suite → feature-003 semantics, `Results.Interrupted` set in mentat_run_reentrancy_test.go (go-test-writer, red). Sequential + concurrent were RED on the package-global registry (false store-collision / shared-map race); cancellation was already correct (run.go), so its test went green immediately and now pins the behaviour.
 - [X] T011 [US2] Harden Run reentrancy/cancellation as needed. Root fix: the seam registry is now per-engine (`registry.Registry` constructed per `engine.Build`/`BuildStore`, owned by the Engine, sealed at the composition root) instead of package-global — so each Run owns its registrations (no sequential leak, no concurrent race). Reporters stay package-global (post-run rendering, own mutex). Cancellation needed no change. Files: internal/registry/registry.go (struct + methods; reporters split), internal/engine/{build,store,engine,options}.go, internal/comparator/{result,result_span,matchers}.go, internal/judge/judge.go, + test migrations (ResetForTest+global Register → engine.WithExtra* / local registry.New). go-reviewer gate: PASS.
@@ -105,3 +105,12 @@ US2 makes the CLI consumer zero (T012's golden parity protects users) and proves
 the run surface fails loudly (T013's L3 meta-test). US3 last so the golden file
 freezes a settled surface, not a moving one. Do NOT tag v1; the stability policy
 explicitly defers that decision.
+
+## Out of scope (deferred by decision)
+
+- **Custom-comparator Gherkin invocation** (Q, 2026-07-17): `WithComparator` registers a
+  custom comparator and it composes at Build, but invoking it from a `.feature` step needs
+  new Gherkin grammar + generic expectation parsing. 007 publishes the registration surface
+  only; first-class custom-comparator steps are deferred to a dedicated future spec (008).
+  Documented in `run.go` `ComparatorFactory` and `TestRunCustomComparatorAndJudgeCompose`.
+  (Custom drivers and stores DO work end-to-end today — see examples/kafkaecho.)

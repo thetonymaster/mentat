@@ -22,13 +22,14 @@ import (
 // the best-effort detail — an empty sequence, cost 0 for that run — and records a
 // human-readable DerivationNote instead of returning an error. The degradation
 // stays visible in the JSON and HTML report (no silent fallback, constitution IV).
-func Derive(name string, tags []string, v core.Verdict, evs []core.Evidence, pricing core.Pricing) core.ScenarioResult {
+func Derive(name, featureFile string, tags []string, v core.Verdict, evs []core.Evidence, pricing core.Pricing) core.ScenarioResult {
 	sr := core.ScenarioResult{
-		Name:      name,
-		Tags:      tags,
-		Pass:      v.Pass,
-		Reasons:   v.Reasons,
-		Aggregate: v.Detail,
+		Name:        name,
+		FeatureFile: featureFile,
+		Tags:        tags,
+		Pass:        v.Pass,
+		Reasons:     v.Reasons,
+		Aggregate:   v.Detail,
 	}
 	// Carry the judge-token ledger through unchanged (US6). Derive is an observer, so
 	// it does NOT price it here (an unknown-model pricing error would fail a scenario,

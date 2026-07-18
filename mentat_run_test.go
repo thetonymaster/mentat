@@ -332,6 +332,53 @@ func TestRunCustomDriverAndStoreGreen(t *testing.T) {
 	}
 }
 
+// TestRunScenarioResultCarriesFeatureFile proves a library consumer can tell which
+// .feature file each scenario came from (US2, FR-003): ScenarioResult.FeatureFile is
+// the source feature path, captured from godog's scenario Uri through the report
+// collector — Name alone can collide across files.
+//
+// No t.Parallel(): Run composes an engine (kept serial by convention).
+func TestRunScenarioResultCarriesFeatureFile(t *testing.T) {
+	b := newBus()
+	dir := t.TempDir()
+	feature := `Feature: feature-file field
+  Scenario: a scenario reports its source file
+    Given the agent target "bot"
+    When I run scenario "echo"
+    Then the result contains "ff ok"
+`
+	featPath := writeFile(t, dir, "source.feature", feature)
+	cfg := mentat.Config{
+		Store: "membus",
+		Targets: map[string]mentat.Target{
+			"bot": {Adapter: "membus", Command: []string{"noop"}, MaxConcurrency: 1},
+		},
+		Poll: mentat.PollSpec{Interval: "1ms", StableFor: 1},
+	}
+	res, err := mentat.Run(context.Background(), cfg,
+		mentat.WithFeatures(featPath),
+		mentat.WithDriver("membus", func(mentat.Config) (mentat.Driver, error) {
+			return busDriver{bus: b, answer: "ff ok"}, nil
+		}),
+		mentat.WithStore("membus", func(mentat.Config) (mentat.TraceStore, error) {
+			return busStore{bus: b}, nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Scenarios) != 1 {
+		t.Fatalf("want 1 scenario, got %d", len(res.Scenarios))
+	}
+	ff := res.Scenarios[0].FeatureFile
+	if ff == "" {
+		t.Fatal("ScenarioResult.FeatureFile is empty; want the source .feature path")
+	}
+	if !strings.HasSuffix(ff, "source.feature") {
+		t.Fatalf("FeatureFile %q should name the source feature file", ff)
+	}
+}
+
 // TestRunCustomComparatorAndJudgeCompose proves WithComparator and WithJudge are
 // consumed at the composition root without error, alongside a custom driver+store,
 // yielding a GREEN run. The custom judge is selected by cfg.Judge.Backend, so Build
@@ -340,9 +387,10 @@ func TestRunCustomDriverAndStoreGreen(t *testing.T) {
 //
 // The custom comparator is registered and composes, but is NOT invoked from a
 // feature step: the built-in Gherkin grammar maps steps onto the built-in comparator
-// names only, and wiring a custom step is out of scope for T004/T005 (flagged). This
-// test therefore asserts registration/composition success for the comparator, and
-// behavioural resolution for the judge.
+// names only, and first-class custom-comparator steps are deferred to a future spec
+// (008) — out of 007's registration-surface scope. This test therefore asserts
+// registration/composition success for the comparator, and behavioural resolution
+// for the judge.
 //
 // No t.Parallel(): Run mutates the package-global registry.
 func TestRunCustomComparatorAndJudgeCompose(t *testing.T) {

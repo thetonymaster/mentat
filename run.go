@@ -86,7 +86,9 @@ type StoreFactory = func(Config) (TraceStore, error)
 // under a name via WithComparator. The comparator reads Evidence only (Constitution
 // I). NOTE: the built-in Gherkin grammar maps steps onto the built-in comparator
 // names, so a custom comparator is registered and composable today but is not yet
-// invokable from a feature step without grammar plumbing (out of scope for T004/T005).
+// invokable from a .feature step without new grammar. First-class custom-comparator
+// Gherkin steps are deliberately OUT of scope for feature 007 (which publishes the
+// registration surface); they are deferred to a dedicated future spec (008).
 type ComparatorFactory = func(Config) (Comparator, error)
 
 // JudgeFactory builds a custom Judge from the resolved Config. Registered under a
@@ -151,7 +153,11 @@ type Results struct {
 // @runs(N) scenario). Judge is this scenario's judge ledger, nil when it made no
 // judge call.
 type ScenarioResult struct {
-	Name           string
+	Name string
+	// FeatureFile is the source .feature file this scenario was parsed from (godog's
+	// scenario Uri), so a consumer running several feature files can tell scenarios
+	// apart by origin, not just by Name (which may collide across files).
+	FeatureFile    string
 	Pass           bool
 	Reasons        []string
 	Cost           float64
@@ -281,6 +287,7 @@ func toResults(rep core.RunReport) Results {
 		}
 		res.Scenarios = append(res.Scenarios, ScenarioResult{
 			Name:           sc.Name,
+			FeatureFile:    sc.FeatureFile,
 			Pass:           sc.Pass,
 			Reasons:        sc.Reasons,
 			Cost:           sc.Cost,

@@ -122,7 +122,7 @@ func InitializerWithBudget(eng *engine.Engine, col *report.Collector, budget *re
 			// report.Derive is an observer and never fails a scenario (audit A8):
 			// a derivation problem yields a DerivationNote on the entry, not an
 			// error. The verdict comes only from stepErr, so the hook returns nil.
-			sr := report.Derive(scenario.Name, tagNames(scenario.Tags), v, w.evs, w.eng.Pricing())
+			sr := report.Derive(scenario.Name, scenario.Uri, tagNames(scenario.Tags), v, w.evs, w.eng.Pricing())
 			w.col.Append(sr)
 			// Post-scenario judge budget (US6): account this scenario's completed judge
 			// cost. On a trip (or an unpriceable usage) abort the suite context so the
