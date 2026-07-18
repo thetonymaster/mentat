@@ -9,6 +9,9 @@ const KindUnspecified = trace.KindUnspecified
 const StatusError = trace.StatusError
 const StatusOk = trace.StatusOk
 const StatusUnset = trace.StatusUnset
+field (Completeness) Mode string
+field (Completeness) Settle time.Duration
+field (Completeness) SettleRaw string
 field (CompletenessContract) Kind string
 field (CompletenessContract) Mode string
 field (CompletenessContract) Settle time.Duration
@@ -139,6 +142,7 @@ method (TraceStore) FetchPayload(ctx context.Context, id string) ([]byte, error)
 method (TraceStore) Query(ctx context.Context, q TraceQuery) ([]TraceRef, error)
 type Comparator = core.Comparator
 type ComparatorFactory = func(Config) (Comparator, error)
+type Completeness = config.Completeness
 type CompletenessContract = core.CompletenessContract
 type Config = config.Config
 type Correlator = core.Correlator

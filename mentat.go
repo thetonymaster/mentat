@@ -133,6 +133,10 @@ type HTTP = config.HTTP
 // ExtractConfig is a target's answer-extraction policy (Target.Extract).
 type ExtractConfig = config.ExtractConfig
 
+// Completeness is a target's trace-completeness policy: mode (settle|strict) plus
+// the settle window (Target.Completeness).
+type Completeness = config.Completeness
+
 // Endpoint is an endpoint holder (Config.Tempo).
 type Endpoint = config.Endpoint
 
