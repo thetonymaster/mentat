@@ -209,6 +209,31 @@ func Load(data []byte) (Config, error) {
 	if err := dec.Decode(&c); err != nil && !errors.Is(err, io.EOF) {
 		return Config{}, fmt.Errorf("parse config: %w", err)
 	}
+	if err := Resolve(&c); err != nil {
+		return Config{}, err
+	}
+	return c, nil
+}
+
+// Resolve applies every default, normalisation and validation a Config needs
+// before it can be handed to the engine, in place. It is the second half of
+// Load — Load is exactly "read file + strict decode + Resolve" — so a Config
+// built as a Go struct literal by a library caller gets a byte-identical
+// effective contract to the same configuration written as YAML (FR-008..FR-010).
+//
+// It is idempotent: resolving an already-resolved Config is a no-op returning
+// nil, so the CLI path (Load, then mentat.Run) may re-enter it safely. Defaults
+// apply only to zero-valued fields, so a value set explicitly in code is never
+// overwritten. Where a raw string field sits beside its resolved twin
+// (Completeness.SettleRaw/Settle, Target.RunTimeout/Budget), a non-empty raw is
+// parsed and wins, an empty raw keeps a non-zero resolved value, and an empty
+// raw with a zero resolved value takes the default. A raw that parses to a value
+// conflicting with a simultaneously-set resolved twin is a hard error naming both
+// fields — ambiguity is never guessed (Constitution IV).
+//
+// Every failure returns a descriptive, wrapped error naming the offending target,
+// field and value; there is no silent fallback to a default on bad input.
+func Resolve(c *Config) error {
 	if c.Store == "" {
 		c.Store = "tempo"
 	}
@@ -216,7 +241,7 @@ func Load(data []byte) (Config, error) {
 	// a hard load error rather than a silent default that would later scan the process
 	// working directory (Constitution IV). For any other store storePath is ignored.
 	if c.Store == "file" && strings.TrimSpace(c.StorePath) == "" {
-		return Config{}, fmt.Errorf("storePath is required when store is %q", "file")
+		return fmt.Errorf("storePath is required when store is %q", "file")
 	}
 	if c.Expectations == "" {
 		c.Expectations = "expectations"
@@ -232,11 +257,19 @@ func Load(data []byte) (Config, error) {
 	// here rather than becoming a silent default (Constitution IV).
 	killGrace, err := resolveKillGrace(c.KillGrace)
 	if err != nil {
-		return Config{}, err
+		return err
+	}
+	killGrace, err = resolveKillGraceTwin(c.KillGrace, killGrace, c.Budget.KillGrace)
+	if err != nil {
+		return err
 	}
 	suiteTimeout, suiteUnbounded, err := resolveTimeout("run_timeout", c.RunTimeout, DefaultRunTimeout, false)
 	if err != nil {
-		return Config{}, err
+		return err
+	}
+	suiteTimeout, suiteUnbounded, err = resolveBudgetTwin("run_timeout", c.RunTimeout, suiteTimeout, suiteUnbounded, c.Budget)
+	if err != nil {
+		return err
 	}
 	c.Budget = RunBudget{Timeout: suiteTimeout, Unbounded: suiteUnbounded, KillGrace: killGrace}
 	for name, t := range c.Targets {
@@ -245,7 +278,7 @@ func Load(data []byte) (Config, error) {
 			def = 1 // unknown-at-load adapter: existence is validated at engine.Build against the driver registry
 		}
 		if t.MaxConcurrency < 0 {
-			return Config{}, fmt.Errorf("target %q: max_concurrency must be >= 0, got %d", name, t.MaxConcurrency)
+			return fmt.Errorf("target %q: max_concurrency must be >= 0, got %d", name, t.MaxConcurrency)
 		}
 		if t.MaxConcurrency == 0 {
 			t.MaxConcurrency = def
@@ -254,33 +287,45 @@ func Load(data []byte) (Config, error) {
 			url := strings.TrimSpace(t.HTTP.URL)
 			method := strings.TrimSpace(t.HTTP.Method)
 			if url == "" {
-				return Config{}, fmt.Errorf("target %q: http.url is required when adapter is http", name)
+				return fmt.Errorf("target %q: http.url is required when adapter is http", name)
 			}
 			if method == "" {
-				return Config{}, fmt.Errorf("target %q: http.method is required when adapter is http", name)
+				return fmt.Errorf("target %q: http.method is required when adapter is http", name)
 			}
 			t.HTTP.URL = url
 			t.HTTP.Method = method
 		}
-		tt, tu, terr := resolveTimeout(fmt.Sprintf("target %q run_timeout", name), t.RunTimeout, suiteTimeout, suiteUnbounded)
+		key := fmt.Sprintf("target %q run_timeout", name)
+		tt, tu, terr := resolveTimeout(key, t.RunTimeout, suiteTimeout, suiteUnbounded)
 		if terr != nil {
-			return Config{}, terr
+			return terr
 		}
-		t.Budget = RunBudget{Timeout: tt, Unbounded: tu, KillGrace: killGrace}
+		tt, tu, terr = resolveBudgetTwin(key, t.RunTimeout, tt, tu, t.Budget)
+		if terr != nil {
+			return terr
+		}
+		// A zero KillGrace on an otherwise-explicit budget is not a choice — it
+		// disarms the driver's reap (shell.go only sets cmd.WaitDelay when it is
+		// positive), so it takes the suite value like any other zero field (Law 2).
+		targetKillGrace := killGrace
+		if t.Budget.KillGrace != 0 {
+			targetKillGrace = t.Budget.KillGrace
+		}
+		t.Budget = RunBudget{Timeout: tt, Unbounded: tu, KillGrace: targetKillGrace}
 		re, eerr := validateExtract(name, t.Adapter, t.Extract)
 		if eerr != nil {
-			return Config{}, eerr
+			return eerr
 		}
 		t.Extract.compiled = re
 		comp, cerr := resolveCompleteness(name, t.Adapter, t.Completeness)
 		if cerr != nil {
-			return Config{}, cerr
+			return cerr
 		}
 		t.Completeness = comp
 		c.Targets[name] = t
 	}
 	if err := validatePricing(c.Pricing); err != nil {
-		return Config{}, err
+		return err
 	}
 	if c.Judge.Backend == "" {
 		c.Judge.Backend = "claude"
@@ -292,9 +337,9 @@ func Load(data []byte) (Config, error) {
 		c.Judge.Votes = 1
 	}
 	if err := validateJudge(c.Judge); err != nil {
-		return Config{}, err
+		return err
 	}
-	return c, nil
+	return nil
 }
 
 // validateJudge rejects a judge block that cannot yield a defined verdict: a vote
@@ -388,9 +433,15 @@ func resolveCompleteness(target, adapter string, c Completeness) (Completeness, 
 	}
 	raw := strings.TrimSpace(c.SettleRaw)
 	if raw == "" {
-		// Omitted: apply the adapter kind-default (shell 2s / http 5s). Adapters with
+		// No raw value. On the YAML path that always means "omitted", so the adapter
+		// kind-default (shell 2s / http 5s) applies. On the code path a caller writes
+		// the RESOLVED twin directly, so a non-zero Settle is an explicit choice and
+		// wins over the default (Law 2) — only a zero window takes it. Adapters with
 		// no registered default keep a zero window — not a speculative guarantee.
-		c.Settle = defaultSettle[adapter]
+		// A caller wanting a genuine zero window writes SettleRaw: "0s".
+		if c.Settle == 0 {
+			c.Settle = defaultSettle[adapter]
+		}
 		return c, nil
 	}
 	d, err := time.ParseDuration(raw)
@@ -399,6 +450,17 @@ func resolveCompleteness(target, adapter string, c Completeness) (Completeness, 
 	}
 	if d < 0 {
 		return Completeness{}, fmt.Errorf("target %q: completeness.settle: must be >= 0, got %s", target, d)
+	}
+	// Both halves of the twin are set and they disagree: the caller wrote a raw
+	// string AND a resolved value that mean different things, and nothing in the
+	// config says which was intended. Picking one would silently discard the other,
+	// so this is a hard error naming both fields and both values (Constitution IV).
+	// Agreement is not a conflict — that is the state an already-resolved config is
+	// in, and rejecting it would break idempotency (Law 1).
+	if c.Settle != 0 && c.Settle != d {
+		return Completeness{}, fmt.Errorf(
+			"target %q: completeness.settle %q resolves to %s but Completeness.Settle is already set to %s; set exactly one of them",
+			target, raw, d, c.Settle)
 	}
 	c.Settle = d
 	return c, nil
@@ -452,6 +514,58 @@ func resolveTimeout(key, raw string, defTimeout time.Duration, defUnbounded bool
 		return 0, false, fmt.Errorf("%s: must be > 0, got %q (use %q for no limit)", key, raw, unboundedValue)
 	}
 	return d, false, nil
+}
+
+// budgetIsExplicit reports whether a RunBudget carries a timeout decision written
+// directly in code, as opposed to a zero value still awaiting resolution. Unbounded
+// counts: it is the explicit opt-out, and there is no magic zero Timeout meaning
+// "forever" (see RunBudget's contract) — a zero Timeout with Unbounded false is an
+// unresolved field, which is exactly why engine.go's `budget.Timeout > 0` guard
+// would otherwise let a hand-built config run without any bound at all.
+func budgetIsExplicit(b RunBudget) bool { return b.Timeout != 0 || b.Unbounded }
+
+// formatBound renders a (timeout, unbounded) pair for an error message, so a
+// conflict between "unbounded" and a duration reads as words rather than as a
+// bare 0s that looks like a missing value.
+func formatBound(d time.Duration, unbounded bool) string {
+	if unbounded {
+		return unboundedValue
+	}
+	return d.String()
+}
+
+// resolveBudgetTwin applies Laws 2 and 3 to the RunTimeout/Budget twin at either
+// suite or target level. A zero-valued Budget defers entirely to the raw value
+// (the YAML path — unchanged). An explicit Budget wins over a default, and when
+// BOTH a raw run_timeout and an explicit Budget are set and disagree, neither can
+// be preferred without silently discarding the other, so it is a hard error naming
+// both fields and both values (Constitution IV). Agreement is not a conflict —
+// that is the state an already-resolved config is in (Law 1, idempotency).
+func resolveBudgetTwin(key, raw string, fromRaw time.Duration, rawUnbounded bool, b RunBudget) (time.Duration, bool, error) {
+	if !budgetIsExplicit(b) {
+		return fromRaw, rawUnbounded, nil
+	}
+	if strings.TrimSpace(raw) != "" && (b.Timeout != fromRaw || b.Unbounded != rawUnbounded) {
+		return 0, false, fmt.Errorf(
+			"%s %q resolves to %s but Budget.Timeout is already set to %s; set exactly one of them",
+			key, strings.TrimSpace(raw), formatBound(fromRaw, rawUnbounded), formatBound(b.Timeout, b.Unbounded))
+	}
+	return b.Timeout, b.Unbounded, nil
+}
+
+// resolveKillGraceTwin applies the same two laws to the kill_grace/Budget.KillGrace
+// twin. A zero explicit value defers to the raw-derived one; a non-zero explicit
+// value wins; both set and disagreeing is a hard error naming both.
+func resolveKillGraceTwin(raw string, fromRaw, explicit time.Duration) (time.Duration, error) {
+	if explicit == 0 {
+		return fromRaw, nil
+	}
+	if strings.TrimSpace(raw) != "" && explicit != fromRaw {
+		return 0, fmt.Errorf(
+			"kill_grace %q resolves to %s but Budget.KillGrace is already set to %s; set exactly one of them",
+			strings.TrimSpace(raw), fromRaw, explicit)
+	}
+	return explicit, nil
 }
 
 // resolveKillGrace parses the suite kill_grace. Empty → DefaultKillGrace. It must be

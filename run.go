@@ -279,6 +279,41 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 		return Results{}, fmt.Errorf("mentat: no feature paths; pass at least one via WithFeatures")
 	}
 
+	// Defensive copy of Targets before Resolve. cfg arrives BY VALUE, but Targets is
+	// a map, so its header still points at the CALLER's backing store; config.Resolve
+	// writes resolved targets back into it (`c.Targets[name] = t`). Without this copy a
+	// single Run would silently rewrite the caller's Config (zero MaxConcurrency/
+	// Budget/Completeness becoming resolved values) and two concurrent Runs sharing one
+	// Config would data-race on the map — both breaking the spec-007 T010/T011
+	// guarantee that Run is reentrant and concurrency-safe. DO NOT "simplify" this
+	// away: Run does not own its caller's Config.
+	//
+	// Shallow is sufficient, and deliberate. Resolve replaces whole Target VALUES, so a
+	// fresh map with copied values severs every write it makes. The other reference
+	// types reachable from Config are audited read-only in Resolve: Pricing is only
+	// range-read by validatePricing, and Target.Command / Target.HTTP.Headers are never
+	// written (Resolve assigns HTTP.URL/Method on its own local Target copy). Copying
+	// them too would be cargo cult.
+	if cfg.Targets != nil {
+		targets := make(map[string]config.Target, len(cfg.Targets))
+		for name, t := range cfg.Targets {
+			targets[name] = t
+		}
+		cfg.Targets = targets
+	}
+
+	// Resolve the Config before ANY composition call (BuildCorrelator/BuildStore/
+	// Build), so a cfg built as a Go struct literal gets the same defaults,
+	// normalisations and hard errors as the same configuration written as YAML and
+	// read through LoadConfig (FR-008..FR-010, contracts/config-resolve.md). Without
+	// this the library path silently skipped every Load-only rule — a bad completeness
+	// mode or pricing rate would reach the engine and the SUT would be driven under a
+	// config that should never have been accepted. Resolve is idempotent, so the CLI
+	// path (LoadConfig, then Run) may re-enter it safely.
+	if err := config.Resolve(&cfg); err != nil {
+		return Results{}, fmt.Errorf("mentat: resolving config: %w", err)
+	}
+
 	// Narration: the same logger is injected into every seam (correlator + engine +
 	// drivers) — no package-global logger, no slog.SetDefault. With no WithVerbosity
 	// the writer is nil and both flags false, so NewLogger returns a discard handler:

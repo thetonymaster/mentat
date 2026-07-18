@@ -70,9 +70,11 @@ func (e *Engine) resolve(ctx context.Context, runID string, contract core.Comple
 // shell spawns a process whose trace settles on exit ("spawned"); http is a bounded
 // request/response ("request"). mcp/grpc are a documented forward-mapping with no driver
 // yet, so they are not mapped here (YAGNI) — a target with any other adapter carries an
-// empty kind. Mode and Settle ride through from the target's config, kind-defaulted at
-// config load. Comparators never see this contract (invariant #1) — it rides the resolve
-// seam only.
+// empty kind. Mode and Settle ride through from the target's config, kind-defaulted by
+// config.Resolve — which BOTH construction paths run (config.Load for YAML, mentat.Run
+// for a code-built Config), so a struct-literal target carries the same resolved window
+// a YAML one does (feature 009, FR-008..FR-010). Comparators never see this contract
+// (invariant #1) — it rides the resolve seam only.
 func completenessContract(t config.Target) core.CompletenessContract {
 	var kind string
 	switch t.Adapter {
