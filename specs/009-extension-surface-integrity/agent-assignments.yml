@@ -1,0 +1,107 @@
+# Agent Assignments
+# Feature: 009-extension-surface-integrity
+# Generated: 2026-07-18
+# Command: /speckit.agent-assign.assign
+
+agents_scanned:
+  - name: "go-coder"
+    source: "project"
+    description: "Non-TDD Go work — scaffolding, config, deploy/CI, mocks regen, docs edits, behavior-preserving refactors; refuses behaviour changes (routes to go-test-writer)"
+  - name: "go-context-builder"
+    source: "project"
+    description: "Read-only context scout emitting structured pre-planning briefings; cannot edit files"
+  - name: "go-reviewer"
+    source: "project"
+    description: "Read-only reviewer — 'pair' mid-task scan or 'gate' pre-commit audit with PASS/BLOCK verdict"
+  - name: "go-test-writer"
+    source: "project"
+    description: "Owns the red→green→refactor TDD loop for all features/bugfixes; one failing test at a time; refuses scaffolding/config work"
+
+assignments:
+  T001:
+    agent: "default"
+    reason: "Git branch + individually-staged commit of planning artifacts; main loop retains commit accountability (repo git rules)"
+  T002:
+    agent: "default"
+    reason: "Run-and-observe baseline verification (make ci, TestPublicSurface); no editing"
+  T003:
+    agent: "go-test-writer"
+    reason: "RED: failing renderer unit test in surface_test.go — start of the US1 TDD loop"
+  T004:
+    agent: "go-test-writer"
+    reason: "GREEN: struct-expansion implementation in surface_test.go to satisfy T003"
+  T005:
+    agent: "go-test-writer"
+    reason: "Golden regeneration + no-regression verification is part of the US1 TDD loop's evidence"
+  T006:
+    agent: "go-test-writer"
+    reason: "Mutation rehearsal (red/green flip) and its documented narrative — test-discipline work"
+  T007:
+    agent: "go-coder"
+    reason: "stability.md docs edit; no behaviour change"
+  T008:
+    agent: "go-test-writer"
+    reason: "RED: first failing config.Resolve test — start of the US2 TDD loop"
+  T009:
+    agent: "go-test-writer"
+    reason: "GREEN: extract Resolve from Load, existing suite must stay green"
+  T010:
+    agent: "go-test-writer"
+    reason: "Idempotency / explicit-value-wins / twin-conflict laws, one red row at a time"
+  T011:
+    agent: "go-test-writer"
+    reason: "Full 13-row parity table (defaults + hard errors), TDD"
+  T012:
+    agent: "go-test-writer"
+    reason: "Divergence suspects settled by test, not assumption"
+  T013:
+    agent: "go-test-writer"
+    reason: "RED: facade-level mentat.Run resolution test"
+  T014:
+    agent: "go-test-writer"
+    reason: "GREEN: wire config.Resolve into run.go before the three composition calls"
+  T015:
+    agent: "go-coder"
+    reason: "Comment-only correction (engine.go) + kafkaecho/coverage verification sweep"
+  T016:
+    agent: "go-test-writer"
+    reason: "RED: facade-only composite-literal compile test (mentat.Completeness undefined)"
+  T017:
+    agent: "go-test-writer"
+    reason: "GREEN: Completeness alias in mentat.go + deliberate golden regen"
+  T018:
+    agent: "go-test-writer"
+    reason: "Reachable-set sweep with compile-test coverage for every reachable struct"
+  T019:
+    agent: "go-coder"
+    reason: "External-module witness: build/vet + make example policing check"
+  T020:
+    agent: "go-coder"
+    reason: "Create docs/extending/new-seam.md (canonical taxonomy + checklist)"
+  T021:
+    agent: "go-coder"
+    reason: "Reference edits at the two divergent taxonomy sites (comment + md)"
+  T022:
+    agent: "go-coder"
+    reason: "Quickstart V4 grep verification of the US4 deliverables"
+  T023:
+    agent: "go-coder"
+    reason: "CI config: .github/workflows/nightly-l3.yml mirroring ci.yml's e2e job"
+  T024:
+    agent: "go-coder"
+    reason: "Comment sync in e2e/l3runs.go to name the real lane"
+  T025:
+    agent: "default"
+    reason: "gh workflow dispatch + run watch; operational, records green-run URL"
+  T026:
+    agent: "default"
+    reason: "/coverage skill invocation across packages (80% floor)"
+  T027:
+    agent: "default"
+    reason: "Local e2e suite run against the harness; run-and-observe"
+  T028:
+    agent: "default"
+    reason: "Quickstart V1–V4 + make ci final validation; run-and-observe"
+  T029:
+    agent: "go-reviewer"
+    reason: "Gate-mode pre-commit audit (PASS/BLOCK) before the PR; PR assembly stays with the main loop"
