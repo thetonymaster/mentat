@@ -123,24 +123,47 @@ func TestGatewayBodyMatchesExpectedResult(t *testing.T) {
 
 func TestLeafHandler(t *testing.T) {
 	tests := []struct {
-		name        string
-		service     string
-		scenario    string
-		wantStatus  int
-		wantErrSpan bool // expect an Error-status child span
+		name string
+		// service is the leaf under test; scenario is the injected X-Scenario.
+		service  string
+		scenario string
+		// wantErrSpanName is the name of the single Error-status child span the
+		// leaf must emit ("" = the leaf must emit no Error-status span at all).
+		wantStatus      int
+		wantErrSpanName string
 	}{
 		{
-			name:        "payment_decline -> 402 with error span",
-			service:     ServicePayment,
-			scenario:    "payment_decline",
-			wantStatus:  http.StatusPaymentRequired,
-			wantErrSpan: true,
+			name:            "payment_decline -> 402 with error span",
+			service:         ServicePayment,
+			scenario:        "payment_decline",
+			wantStatus:      http.StatusPaymentRequired,
+			wantErrSpanName: "payment.declined",
+		},
+		{
+			// The `error` scenario is header-only fault injection: notify still
+			// answers 200 (so the gateway chain completes to a happy 201) and the
+			// ONLY red-worthy signal is this one errored child span — the A1 L3
+			// proof that an error-budget comparator can go red on span status
+			// alone, independent of any HTTP status mapping.
+			name:            "notify error -> 200 but one errored child span",
+			service:         ServiceNotify,
+			scenario:        "error",
+			wantStatus:      http.StatusOK,
+			wantErrSpanName: "notify.error",
 		},
 		{
 			name:       "inventory_out -> 409",
 			service:    ServiceInventory,
 			scenario:   "inventory_out",
 			wantStatus: http.StatusConflict,
+		},
+		{
+			// `error` on a non-terminal leaf must NOT inject a fault: the branch is
+			// keyed on notify specifically.
+			name:       "error scenario on a non-notify leaf stays clean",
+			service:    ServiceAuth,
+			scenario:   "error",
+			wantStatus: http.StatusOK,
 		},
 		{
 			name:       "default (auth happy) -> 200",
@@ -173,18 +196,23 @@ func TestLeafHandler(t *testing.T) {
 				t.Errorf("status = %d, want %d", rec.Code, tt.wantStatus)
 			}
 
-			if tt.wantErrSpan {
-				spans := waitForSpans(t, exp)
-				foundErr := false
-				for _, s := range spans {
-					if s.Status().Code.String() == "Error" {
-						foundErr = true
-						break
-					}
+			if tt.wantErrSpanName == "" {
+				// No fault injected: the leaf must not have started any span at
+				// all, so a clean run cannot be mistaken for a degraded one.
+				if got := exp.GetSpans().Snapshots(); len(got) != 0 {
+					t.Errorf("expected no spans, got %d", len(got))
 				}
-				if !foundErr {
-					t.Errorf("expected an Error-status span but found none in %d spans", len(spans))
+				return
+			}
+
+			var errSpanNames []string
+			for _, s := range waitForSpans(t, exp) {
+				if s.Status().Code.String() == "Error" {
+					errSpanNames = append(errSpanNames, s.Name())
 				}
+			}
+			if !reflect.DeepEqual(errSpanNames, []string{tt.wantErrSpanName}) {
+				t.Errorf("Error-status spans = %v, want exactly [%s]", errSpanNames, tt.wantErrSpanName)
 			}
 		})
 	}

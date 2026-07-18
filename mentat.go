@@ -2,17 +2,31 @@
 // test framework. It re-exports — via zero-cost type aliases — exactly the seam
 // interfaces and evidence/contract types a third-party module needs to implement
 // a custom adapter or embed Mentat as a library, without importing anything
-// under internal/ (spec 007 FR-001; audit finding G1).
+// under internal/.
 //
 // Because every symbol here is a Go type alias to the underlying internal type,
 // a value satisfying a facade interface satisfies the internal seam by identity
 // — no adapters, no conversions. Everything not aliased here stays internal on
-// purpose: the surface is the minimum viable set (one-way door), and each alias
-// below is individually justified per SC-006.
+// purpose: the surface is deliberately the minimum viable set, since widening it
+// later is easy and narrowing it is a breaking change.
 //
-// This file is the skeleton (feature 007, tasks T002–T003): types and constants
-// only. Registration options (With*), the Run entry point, Config, and Results
-// arrive in later tasks.
+// The package provides four things:
+//
+//   - The seam interfaces you implement to extend Mentat: Driver, TraceStore,
+//     Comparator and Judge, plus the Correlator and Reporter types their
+//     contracts reference.
+//   - The evidence and contract vocabulary those seams exchange — Evidence,
+//     Output, Verdict, RunSpec, RunResult, the trace forest (Trace, Span) and the
+//     span status/kind constants.
+//   - The mentat.yaml configuration surface (Config and its nested types),
+//     constructible in code or loaded from disk with LoadConfig.
+//   - The library entry point: Run executes a suite and returns Results, and the
+//     With* Options configure it — WithFeatures, WithOutput, WithVerbosity,
+//     WithConcurrency, WithTags, WithFailFast and WithReports for suite setup, and
+//     WithDriver, WithStore, WithComparator and WithJudge to register custom
+//     adapters under a name that config and feature files can then reference.
+//
+// Run and the Options live in run.go; this file holds the aliases and constants.
 package mentat
 
 import (
@@ -30,25 +44,27 @@ type Driver = core.Driver
 type TraceStore = core.TraceStore
 
 // Comparator is the behaviour-assertion seam: a registrable adapter
-// (WithComparator hook); reads Evidence only (Constitution I).
+// (WithComparator hook). It reads Evidence only — never a store or a driver —
+// which is what keeps comparators portable across agents and microservices.
 type Comparator = core.Comparator
 
 // Judge is the semantic-verdict seam: a registrable adapter (WithJudge hook).
 type Judge = core.Judge
 
 // Correlator is the tag-first correlation seam. Exposed as a type because
-// contracts reference it; deliberately has no registration hook yet
-// (three-examples rule — no external demand, spec Assumptions).
+// contracts reference it; it deliberately has no registration hook yet, because
+// no concrete external demand for one has appeared.
 type Correlator = core.Correlator
 
 // Reporter is the report-rendering seam. Exposed as a type because contracts
-// reference it; deliberately has no registration hook yet (three-examples rule).
+// reference it; it deliberately has no registration hook yet, for the same reason
+// as Correlator.
 type Reporter = core.Reporter
 
 // --- Evidence & contract types (aliases to internal/core) ---
 
-// Evidence is everything a comparator may inspect about one run (the Comparator
-// contract's input; Constitution I portability boundary).
+// Evidence is everything a comparator may inspect about one run: the Comparator
+// contract's input, and the boundary that keeps comparators portable.
 type Evidence = core.Evidence
 
 // Output is the driver-captured boundary result carried by Evidence and
@@ -94,16 +110,16 @@ type JudgeVerdict = core.JudgeVerdict
 
 // JudgeUsage is a summable judge-token ledger row (calls + tokens + derived cost).
 // It is transitively required by Results/ScenarioResult, which carry the suite- and
-// scenario-level judge ledgers a library caller inspects (spec 007 FR-003).
+// scenario-level judge ledgers a library caller inspects.
 type JudgeUsage = core.JudgeUsage
 
 // --- Config surface (aliases to internal/config) ---
 //
 // Config aliases the internal config so the mentat.yaml surface is constructible
-// in code AND loadable from disk (LoadConfig) with no duplicate/conversion type to
-// drift (FR-003; research R2). The nested types below are the reachable "mentat.yaml
-// surface": an external caller must be able to NAME them to build a Config literal
-// (e.g. a Targets map), which an alias to Config alone does not provide.
+// in code AND loadable from disk (LoadConfig) with no duplicate or conversion type
+// that could drift. The nested types below are the reachable "mentat.yaml surface":
+// an external caller must be able to NAME them to build a Config literal (e.g. a
+// Targets map), which an alias to Config alone does not provide.
 
 // Config is the whole mentat.yaml configuration, constructible in code or via LoadConfig.
 type Config = config.Config
@@ -138,7 +154,8 @@ type RunBudget = config.RunBudget
 // --- Trace forest types (aliases to internal/trace) ---
 
 // Trace is the run's trace forest (Evidence.Trace; the TraceStore.DecodePayload
-// result). A run may span >1 root (Constitution II — never assume a single root).
+// result). It is a forest, not a tree: one run may span more than one root trace
+// (multi-turn or sub-agent runs), so never assume a single root.
 type Trace = trace.Trace
 
 // Span is a single span within a Trace forest (the unit a store decoder builds
@@ -153,7 +170,7 @@ const FailureKindDriver = core.FailureKindDriver
 // FailureKindResolve is Evidence.FailureKind when trace resolution failed.
 const FailureKindResolve = core.FailureKindResolve
 
-// --- Canonical span status vocabulary (feature 002; from internal/trace) ---
+// --- Canonical span status vocabulary (from internal/trace) ---
 
 // StatusUnset is Span.Status when no status was set.
 const StatusUnset = trace.StatusUnset
@@ -164,7 +181,7 @@ const StatusOk = trace.StatusOk
 // StatusError is Span.Status for an errored span.
 const StatusError = trace.StatusError
 
-// --- Canonical span kind vocabulary (feature 002; from internal/trace) ---
+// --- Canonical span kind vocabulary (from internal/trace) ---
 
 // KindInternal is Span.Kind for an internal span.
 const KindInternal = trace.KindInternal

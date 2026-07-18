@@ -11,7 +11,7 @@ from Tempo, and run **comparators** that assert *how it behaved* and *what it pr
 make harness-up
 
 # 2. run the behaviour specs against the researchbot agent SUT
-go run ./cmd/mentat run features/
+go run ./cmd/mentat run features/research_agent.feature
 
 # 3. inspect a run manually
 go run ./cmd/mentatctl agent run --target research-agent --scenario happy
@@ -19,6 +19,11 @@ go run ./cmd/mentatctl agent tools --last
 
 make harness-down
 ```
+
+> The quickstart names a single feature file rather than the whole `features/`
+> directory because `features/meta/` is the **deliberately-failing** meta-test corpus
+> (bad answers, wrong tool order, blown budgets, hung SUTs) that exists to prove
+> Mentat goes red on bad behaviour — running it is expected to fail.
 
 ## How it works
 
@@ -163,8 +168,11 @@ turn on narration, and **all narration goes to stderr**:
 
 ```bash
 go run ./cmd/mentat run -vv features/     # local debugging: injected env + poll rounds
-go run ./cmd/mentatctl -v agent run --target research-agent --scenario happy
+go run ./cmd/mentatctl agent run -v --target research-agent --scenario happy
 ```
+
+`mentatctl` registers `-v`/`-vv` **per verb**, not globally, so the flag goes after
+the `<domain> <verb>` pair — a leading `-v` is rejected with the usage line.
 
 `-vv` never logs inherited environment beyond the keys Mentat itself sets, so ambient
 secrets in the runner's environment do not leak into narration.

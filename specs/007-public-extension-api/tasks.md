@@ -115,6 +115,10 @@ explicitly defers that decision.
   Documented in `run.go` `ComparatorFactory` and `TestRunCustomComparatorAndJudgeCompose`.
   (Custom drivers and stores DO work end-to-end today — see examples/kafkaecho.)
 
+  _Renumbered 2026-07-18: the "(008)" above is stale — feature 008 shipped as
+  trace-completeness. This work is now planned as spec 010 (custom comparator steps)
+  and has not been started. The original sentence is left intact as the 007-era record._
+
 ---
 
 ## Phase 7: Convergence

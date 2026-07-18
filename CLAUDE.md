@@ -116,7 +116,11 @@ from Tempo, and run **comparators** that assert how it behaved and what it produ
 - `/coverage` — run `go test` with coverage and enforce the 80% floor.
 
 <!-- SPECKIT START -->
-For additional context about technologies to be used, project structure,
-shell commands, and other important information, read the current plan
-at specs/007-public-extension-api/plan.md
+Features 001–008 are shipped (through `specs/008-trace-completeness`); every
+`tasks.md` under `specs/` is fully checked off, so there is no in-flight plan as
+of 2026-07-18. For additional context about technologies used, project structure,
+shell commands, and other important information, read `specs/` as history —
+each feature dir carries its `spec.md`, `plan.md`, `tasks.md`, and `contracts/`.
+When work is in flight, the current plan is the `plan.md` of the highest-numbered
+spec dir whose `tasks.md` still has unchecked tasks.
 <!-- SPECKIT END -->
