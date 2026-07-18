@@ -28,11 +28,21 @@
 //
 //	method (Correlator) Resolve(ctx context.Context, store TraceStore, req ResolveRequest) (*trace.Trace, error)
 //
-// Non-interface aliases (structs, maps, `= any`) are unaffected — they stay the
-// alias line only. This still honors R4: NO go/types / importer / x/tools — the
-// interface method set is read from the aliased package's AST, not resolved by a
-// type checker. Non-module aliases (stdlib) have no local source to parse and so
-// stay alias-line-only (none such today).
+// Re-exported STRUCT aliases (feature 009 F1) are expanded the same way and for
+// the same reason: "type Verdict = core.Verdict" is blind to a field being added,
+// removed or re-typed, so every EXPORTED field of an aliased struct is rendered as
+//
+//	field (Verdict) Qualifiers []string
+//
+// Unexported fields are omitted (not a public promise), the field type is printed
+// as written in the aliased source, and fields are emitted in declaration order.
+// Map, func and `= any` aliases stay alias-line-only — their declaration text
+// already IS their complete shape (contracts/surface-golden-v2.md rule 3).
+//
+// This still honors R4: NO go/types / importer / x/tools — the method and field
+// sets are read from the aliased package's AST, not resolved by a type checker.
+// Non-module aliases (stdlib) have no local source to parse and so stay
+// alias-line-only (none such today).
 //
 // Every rendered symbol is collapsed to a single whitespace-normalized line, and
 // the whole set is sort.Strings'd, so source declaration order never churns the
@@ -68,6 +78,24 @@
 // the test returned GREEN. This proves the gate now bites method-set changes on
 // re-exported interfaces — the 008 Correlator.Resolve signature change would no
 // longer slip through with zero golden diff.
+//
+// MUTATION REHEARSAL (feature 009 T006, struct-FIELD drift, 2026-07-18, performed
+// once, reverted): the golden was blind to struct-alias fields too — a bare
+// "type Verdict = core.Verdict" line cannot see a field appear, which is precisely
+// how Verdict.Qualifiers and Target.Completeness reached the public surface with
+// zero golden diff. With the field-set-aware golden present and green, an exported
+// field `XProbe bool` was added to core.Verdict in internal/core/core.go. Running
+// this test went RED with:
+//
+//	public surface drifted from golden "specs/007-public-extension-api/contracts/public-surface.golden".
+//	  symbols present now but NOT in golden (added/changed):
+//	        - field (Verdict) XProbe bool
+//	  symbols in golden but NOT present now (removed/changed):
+//	        (none)
+//
+// naming exactly the drifted type (Verdict) and the injected field, then core.go
+// was reverted (byte-identical, `git diff` empty) and the test returned GREEN.
+// This proves the gate now bites field-set changes on re-exported structs.
 package mentat_test
 
 import (
@@ -144,6 +172,56 @@ func TestPublicSurfaceGolden(t *testing.T) {
 		surfaceGoldenPath, surfaceIndent(added), surfaceIndent(removed), goldenUpdateEnv)
 }
 
+// TestSurfaceRenderStructFields is the feature 009 US1 renderer contract
+// (contracts/surface-golden-v2.md rendering rules 2 and 3): a re-exported STRUCT
+// alias must expand to its exported field set, so an added/removed/re-typed field
+// of `core.Verdict` or `config.Target` is drift the gate can see. A bare alias
+// line ("type Verdict = core.Verdict") is blind to it — exactly the blindness that
+// let Verdict.Qualifiers and Target.Completeness land with zero golden diff.
+//
+// The rows are the contract's three obligations plus their violation cases:
+// expansion happens (Verdict/Target/ExtractConfig exported fields), unexported
+// fields are NOT surface (ExtractConfig.compiled), and non-struct aliases stay
+// single-line (the map alias Pricing, the interface alias Correlator).
+func TestSurfaceRenderStructFields(t *testing.T) {
+	t.Parallel()
+	lines := surfaceRender(t)
+
+	tests := []struct {
+		name  string
+		line  string // exact rendered line when exact, else a line prefix
+		exact bool
+		want  bool // whether the rendering must contain such a line
+	}{
+		{name: "struct alias expands the drifted Verdict.Qualifiers field", line: "field (Verdict) Qualifiers []string", exact: true, want: true},
+		{name: "struct alias expands the drifted Target.Completeness field", line: "field (Target) Completeness Completeness", exact: true, want: true},
+		{name: "field type is rendered as written in the aliased source", line: "field (Verdict) Judge *JudgeUsage", exact: true, want: true},
+		{name: "struct alias expands ExtractConfig exported fields", line: "field (ExtractConfig) Mode string", exact: true, want: true},
+		{name: "unexported field is not surface", line: "field (ExtractConfig) compiled", exact: false, want: false},
+		{name: "map alias stays single-line", line: "field (Pricing)", exact: false, want: false},
+		{name: "interface alias renders methods, not fields", line: "field (Correlator)", exact: false, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var got bool
+			for _, l := range lines {
+				if (tt.exact && l == tt.line) || (!tt.exact && strings.HasPrefix(l, tt.line)) {
+					got = true
+					break
+				}
+			}
+			if got != tt.want {
+				kind := "prefix"
+				if tt.exact {
+					kind = "line"
+				}
+				t.Fatalf("rendered surface: %s %q present = %v, want %v", kind, tt.line, got, tt.want)
+			}
+		})
+	}
+}
+
 // surfaceCtx carries the cross-file state the renderer needs to resolve a
 // re-exported interface alias (e.g. `type Correlator = core.Correlator`) into its
 // METHOD SET. R4 stays honored — STDLIB ONLY, no go/types / importer / x/tools:
@@ -160,6 +238,13 @@ type surfaceCtx struct {
 	// ifaces caches, per parsed aliased dir, its exported interface type literals by
 	// name. A dir is parsed lazily on first lookup.
 	ifaces map[string]map[string]*ast.InterfaceType
+	// structs caches, per parsed aliased dir, its exported struct type literals by
+	// name (feature 009 F1 — struct-alias field expansion). Same lazy-parse shape as
+	// ifaces.
+	structs map[string]map[string]*ast.StructType
+	// typeSpecs caches the exported top-level type specs of each aliased dir, so the
+	// dir is read and parsed once for both indexers.
+	typeSpecs map[string][]*ast.TypeSpec
 }
 
 // surfaceRender parses every non-test source file in the package dir and returns
@@ -172,10 +257,12 @@ func surfaceRender(t *testing.T) []string {
 		t.Fatalf("read package dir: %v", err)
 	}
 	c := &surfaceCtx{
-		fset:    token.NewFileSet(),
-		modPath: surfaceModulePath(t),
-		imports: map[string]string{},
-		ifaces:  map[string]map[string]*ast.InterfaceType{},
+		fset:      token.NewFileSet(),
+		modPath:   surfaceModulePath(t),
+		imports:   map[string]string{},
+		ifaces:    map[string]map[string]*ast.InterfaceType{},
+		structs:   map[string]map[string]*ast.StructType{},
+		typeSpecs: map[string][]*ast.TypeSpec{},
 	}
 	var files []*ast.File
 	for _, e := range entries {
@@ -271,6 +358,13 @@ func (c *surfaceCtx) renderGenDecl(t *testing.T, d *ast.GenDecl) []string {
 						if iface := c.lookupInterface(t, pkg.Name, sel.Sel.Name); iface != nil {
 							out = append(out, c.renderInterfaceMethods(t, s.Name.Name, iface)...)
 						}
+						// Symmetrically, a re-exported STRUCT alias renders its EXPORTED FIELD
+						// SET (feature 009 F1): the alias line alone is blind to a field being
+						// added, removed or re-typed — which is how Verdict.Qualifiers and
+						// Target.Completeness reached users with zero golden diff.
+						if st := c.lookupStruct(t, pkg.Name, sel.Sel.Name); st != nil {
+							out = append(out, c.renderStructFields(t, s.Name.Name, st)...)
+						}
 					}
 				}
 			}
@@ -308,11 +402,28 @@ func (c *surfaceCtx) lookupInterface(t *testing.T, pkg, name string) *ast.Interf
 	return c.ifaces[dir][name]
 }
 
-// indexInterfaces parses every non-test .go file in dir and indexes its exported
-// `type X interface { … }` declarations by name.
+// indexInterfaces indexes dir's exported `type X interface { … }` declarations by name.
 func (c *surfaceCtx) indexInterfaces(t *testing.T, dir string) map[string]*ast.InterfaceType {
 	t.Helper()
 	out := map[string]*ast.InterfaceType{}
+	for _, ts := range c.exportedTypeSpecs(t, dir) {
+		if iface, ok := ts.Type.(*ast.InterfaceType); ok {
+			out[ts.Name.Name] = iface
+		}
+	}
+	return out
+}
+
+// exportedTypeSpecs parses every non-test .go file in an aliased package dir and
+// returns its exported top-level type specs, cached per dir so a dir is walked
+// once no matter how many alias kinds (interface, struct) index it. Both indexers
+// share this walk so they can never drift apart on which files count as source.
+func (c *surfaceCtx) exportedTypeSpecs(t *testing.T, dir string) []*ast.TypeSpec {
+	t.Helper()
+	if cached, ok := c.typeSpecs[dir]; ok {
+		return cached
+	}
+	var out []*ast.TypeSpec
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("read aliased package dir %q: %v", dir, err)
@@ -336,10 +447,73 @@ func (c *surfaceCtx) indexInterfaces(t *testing.T, dir string) map[string]*ast.I
 				if !ok || !ts.Name.IsExported() {
 					continue
 				}
-				if iface, ok := ts.Type.(*ast.InterfaceType); ok {
-					out[ts.Name.Name] = iface
-				}
+				out = append(out, ts)
 			}
+		}
+	}
+	c.typeSpecs[dir] = out
+	return out
+}
+
+// lookupStruct resolves a re-exported alias target `pkg.name` to its struct type
+// literal in the aliased package's source, or nil when pkg is non-local or name is
+// not a struct (an interface/map/func/`= any` alias stays alias-line-only — rule 3
+// of contracts/surface-golden-v2.md).
+func (c *surfaceCtx) lookupStruct(t *testing.T, pkg, name string) *ast.StructType {
+	t.Helper()
+	dir, ok := c.imports[pkg]
+	if !ok {
+		return nil
+	}
+	if c.structs[dir] == nil {
+		c.structs[dir] = c.indexStructs(t, dir)
+	}
+	return c.structs[dir][name]
+}
+
+// indexStructs indexes dir's exported `type X struct { … }` declarations by name.
+func (c *surfaceCtx) indexStructs(t *testing.T, dir string) map[string]*ast.StructType {
+	t.Helper()
+	out := map[string]*ast.StructType{}
+	for _, ts := range c.exportedTypeSpecs(t, dir) {
+		if st, ok := ts.Type.(*ast.StructType); ok {
+			out[ts.Name.Name] = st
+		}
+	}
+	return out
+}
+
+// renderStructFields renders each EXPORTED field of a re-exported struct as a
+// normalized, alias-named one-line declaration:
+//
+//	field (Verdict) Qualifiers []string
+//
+// so adding, removing or re-typing an exported field is caught as drift, and the
+// failure message names the drifted type via the alias in parentheses. Rules
+// (contracts/surface-golden-v2.md rule 2): exported fields only (an unexported
+// field like config.ExtractConfig.compiled is not a public promise); the type is
+// printed exactly as written in the aliased package's source, so a rename of the
+// named type is drift; embedded fields are rendered as written (the embedded type,
+// when public, is frozen by its own entry); fields are emitted in declaration order.
+// Struct TAGS are deliberately not rendered — the contract freezes name + type.
+func (c *surfaceCtx) renderStructFields(t *testing.T, alias string, st *ast.StructType) []string {
+	t.Helper()
+	if st.Fields == nil {
+		return nil
+	}
+	var out []string
+	for _, field := range st.Fields.List {
+		typ := surfacePrint(t, c.fset, field.Type)
+		if len(field.Names) == 0 {
+			// Embedded field: the type IS the field, so render it as written.
+			out = append(out, "field ("+alias+") "+typ)
+			continue
+		}
+		for _, n := range field.Names {
+			if !n.IsExported() {
+				continue
+			}
+			out = append(out, "field ("+alias+") "+n.Name+" "+typ)
 		}
 	}
 	return out

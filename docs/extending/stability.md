@@ -24,8 +24,9 @@ A PR that changes the public surface MUST, in the *same* PR:
 
 1. **Update the golden surface file.**
    `specs/007-public-extension-api/contracts/public-surface.golden` records the
-   exported surface (with the alias caveat below). Regenerating it to match your
-   change is the
+   exported surface — every exported symbol, every seam interface's method set, and
+   every exported field of every re-exported struct (see the reach section below).
+   Regenerating it to match your change is the
    *acknowledgment act* — the diff to that file is the reviewer-visible record that
    the surface change was intended, not incidental.
 2. **Add a CHANGELOG entry.** Describe the change under the appropriate heading
@@ -40,8 +41,8 @@ A surface change that skips these is not a valid change; it is drift.
 ## The golden gate (how drift is caught)
 
 Silent surface drift is a **CI failure**, not a review judgment call. A golden
-surface test (`surface_test.go`) renders the facade's exported surface into a
-canonical text form and diffs it against
+surface test (`TestPublicSurfaceGolden` in `surface_test.go`) renders the facade's
+exported surface into a canonical text form and diffs it against
 [`specs/007-public-extension-api/contracts/public-surface.golden`](../../specs/007-public-extension-api/contracts/public-surface.golden).
 It runs under plain `go test` (part of the standard gate), so:
 
@@ -50,38 +51,87 @@ It runs under plain `go test` (part of the standard gate), so:
 - To make it pass you regenerate the golden (act 1 above), which forces the change
   into the reviewed diff.
 
-### What the gate does and does not catch (interim state)
-
-Be precise about the gate's reach — it is strong at the facade level and has one
-known blind spot.
-
-**Caught today:**
+### What the gate catches
 
 - Exported symbols **added, removed, or renamed** at the facade level.
 - **Function and method signatures** — a changed parameter or result is a diff.
 - **Interface method sets.** Each seam interface's methods are rendered
   individually (e.g. `method (Comparator) Compare(ctx context.Context, ev Evidence,
   e Expectation) (Verdict, error)`), so adding, removing, or re-signing a seam
-  method is loud. This landed in feature 008 (T028).
+  method is loud.
 - **Struct fields of types declared in the facade package itself** — `Results` and
   `ScenarioResult` render with their fields inline.
+- **Exported fields of re-exported structs.** Most of the public surface is built
+  from **zero-cost type aliases** to internal types (`type Verdict = core.Verdict`,
+  `type Target = config.Target`). The golden does not stop at the alias
+  declaration: it expands each aliased struct into **one line per exported field**,
+  named by the facade alias.
 
-**Not caught yet (known gap):**
+  ```
+  field (Verdict) Qualifiers []string
+  field (Target) Completeness Completeness
+  ```
 
-Most of the public surface is built from **zero-cost type aliases** to internal
-types (`type Verdict = core.Verdict`, `type Target = config.Target`). The golden
-records the *alias declaration*, not the aliased struct's fields — so **adding a
-field to an aliased struct produces no golden diff at all**. Both
-`Verdict.Qualifiers` and `Target.Completeness` were added with zero golden churn.
-Argument types reached through aliases are likewise not expanded: a change inside
-`config.Config` is invisible behind `ComparatorFactory = func(Config) (Comparator,
-error)`.
+  **Adding, removing, or re-typing an exported field of a re-exported struct fails
+  `TestPublicSurfaceGolden`, and the failure names the drifted type** in
+  parentheses. The field type is rendered exactly as written in the aliased
+  package's source, so renaming a named field type is drift too. Unexported fields
+  are omitted — they are not a public promise.
 
-This is a known **interim** gap, not the intended end state. Closing it — expanding
-aliased struct fields and argument types into the golden — is planned for **spec
-009**, which will restore the strong claim that every exported type, signature, and
-struct field is frozen. Until then, treat a field added to an aliased struct as
-requiring the three acts *by author discipline*, because CI will not remind you.
+### What the gate does not catch
+
+Four boundaries, stated here so they are not tribal knowledge. All four are known
+and accepted; none is a TODO.
+
+1. **Aliases of map, func, and `any` types stay single-line.** Only *struct* and
+   *interface* aliases are expanded. A declaration like `type ComparatorFactory =
+   func(Config) (Comparator, error)` is rendered as written and needs no expansion —
+   the declaration text already *is* the complete shape. This is by design
+   ([`surface-golden-v2.md`](../../specs/009-extension-surface-integrity/contracts/surface-golden-v2.md)
+   rule 3). Note the narrower case it also covers: an alias to a *named* map or func
+   type in an internal package, such as `type Pricing = config.Pricing`, renders as
+   just that line, so re-typing `config.Pricing` from `map[string]ModelRate` to
+   something else is **not** a golden diff.
+
+2. **Struct tags are not rendered.** The gate freezes field **name and type only**.
+   Renaming a `yaml:"…"` tag on a `Config` or `Target` field is a real break for
+   every user's `mentat.yaml` — and it produces **zero golden diff**. Tag changes
+   are governed by author discipline and review, not by CI.
+
+3. **Field reordering is not detected.** The renderer collapses every symbol to one
+   line and then sorts the whole set (`surface_test.go:294`), a deliberate
+   determinism choice documented at `surface_test.go:48` so that source declaration
+   order never churns the golden. Reordering the fields of a struct therefore
+   produces zero diff — the same as it has always done for interface methods. This
+   is intentional: declaration order is not treated as part of the promised surface.
+
+4. **Expansion is one level deep, and only through facade aliases.** A struct's
+   fields are frozen when the facade itself re-exports that struct. A struct
+   reachable only as the *type of a field* is not expanded in turn: `field (Verdict)
+   Detail *AggregateDetail`, `field (RunSpec) Extract ExtractPolicy`, and `field
+   (RunSpec) HTTP HTTPSpec` freeze those field names and type names, but the field
+   sets of `AggregateDetail`, `ExtractPolicy`, and `HTTPSpec` are not themselves in
+   the golden, because no `type AggregateDetail = core.AggregateDetail` alias exists
+   on the facade. Adding a field to one of them is invisible to the gate. The
+   mechanical fix, when one of these matters, is to re-export it from the facade —
+   the alias line brings its field set into the golden with it.
+
+5. **Types reachable through *seam* signatures are not guaranteed nameable.** The
+   nameability sweep that feature 009 froze walks outward from `Config` and
+   `Results` (see
+   [`facade-nameability.md`](../../specs/009-extension-surface-integrity/contracts/facade-nameability.md));
+   it does not walk seam-interface parameter and result types. Four types are
+   therefore frozen in the golden but cannot be named from outside the module:
+   `AggregateDetail`, `ExtractPolicy`, `HTTPSpec`, and `RunReport`. The practical
+   consequence is sharpest for `RunReport`: **`Reporter` is an aliased seam
+   interface that an external module cannot implement**, because it cannot write
+   the type of its own method parameter. Likewise a Comparator author cannot
+   construct a `Verdict` with `Detail` set, and a Driver author cannot build a
+   `RunSpec` with `Extract` or `HTTP` set.
+
+   This is a verified, deliberately-deferred gap, not an oversight: closing it
+   means widening the public surface, which is a one-way door and gets its own
+   spec rather than riding along in 009. Recorded as input to spec 010.
 
 > Every symbol on the surface earns its place: the manifest rule is that a symbol
 > appears in the contract *with a justification, or it does not get exported*. See
@@ -104,3 +154,5 @@ of this surface:
 - [Writing a custom Comparator](comparator.md)
 - [Writing a custom Judge](judge.md)
 - [The Evidence a comparator inspects](evidence.md)
+- [Adding a new seam](new-seam.md) — the canonical seam taxonomy and the checklist
+  a new seam must satisfy, including the surface acts above.
