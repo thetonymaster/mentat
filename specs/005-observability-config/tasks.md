@@ -138,3 +138,9 @@ acceptance scenario 2 places injected-env values and per-poll span counts under 
 but the authoritative contract (contracts/narration-and-errors.md) and the code gate
 them under `-vv` (Debug). Code matches the contract; reconcile spec.md only if AS2 is
 authoritative.
+
+_RESOLVED 2026-07-18 (doc-only):_ the contract was ruled authoritative — no code
+changed. `spec.md` US1 acceptance scenario 2 now splits the two levels as shipped:
+`-v` narrates the drive/resolve lifecycle (target+command, run id, store endpoint,
+resolution outcome), and `-vv` adds the injected SUT env (`drive.env`, Mentat-set
+keys only) plus per-poll rounds (`resolve.poll`: round, spans seen, stable streak).

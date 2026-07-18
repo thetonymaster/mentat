@@ -35,8 +35,16 @@ to check; rerunning with `-v` shows the lifecycle narration.
    wait, and a checklist of likely causes (collector down / wrong endpoint / SUT
    not instrumented).
 2. **Given** `-v`/`--verbose`, **When** any scenario runs, **Then** the log
-   narrates: target and command driven, run id, injected env names+values, store
-   endpoint, each poll round's observed span count, and final resolution outcome.
+   narrates the drive/resolve lifecycle: target and command driven, run id, store
+   endpoint, and the final resolution outcome. **And given** `-vv`,
+   **Then** the log additionally narrates the injected SUT env (names+values,
+   Mentat-set keys only) and each poll round's detail (round, spans seen, stable
+   streak).
+   (Reconciled 2026-07-18: this scenario originally placed the injected-env values
+   and per-poll span counts under `-v`. The authoritative contract
+   [`contracts/narration-and-errors.md`](contracts/narration-and-errors.md) and the
+   shipped code both gate those two under `-vv`; contract and code win, and the
+   text above now matches them. See the resolved note in `tasks.md`.)
 3. **Given** default verbosity, **When** a healthy suite runs, **Then** output is
    exactly as today (no new noise on the happy path).
 
