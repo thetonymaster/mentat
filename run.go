@@ -18,8 +18,7 @@ import (
 
 // LoadConfig reads and parses a mentat.yaml file into a Config. The path is named
 // in every error (a missing/unreadable file or a malformed document) so a failure
-// is diagnosable from the message alone — never a silent zero-value Config
-// (Constitution IV).
+// is diagnosable from the message alone — never a silent zero-value Config.
 func LoadConfig(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -64,8 +63,7 @@ type runOptions struct {
 	// default) writes no report files. Set via WithReports.
 	reports map[string]string
 	// drivers/stores/comparators/judges are custom-adapter registrations funneled into
-	// the composition root by Run (spec 007 FR-002); each is a name + a factory built
-	// from Config.
+	// the composition root by Run; each is a name + a factory built from Config.
 	drivers     []driverReg
 	stores      []storeReg
 	comparators []comparatorReg
@@ -98,7 +96,7 @@ type (
 // DriverFactory builds a custom Driver from the resolved Config. Registered under a
 // name via WithDriver; the name then works in config/feature files like a built-in
 // adapter. A factory that cannot build its driver returns an error, never a nil
-// driver (Constitution IV).
+// driver.
 type DriverFactory = func(Config) (Driver, error)
 
 // StoreFactory builds a custom TraceStore from the resolved Config. Registered
@@ -106,13 +104,13 @@ type DriverFactory = func(Config) (Driver, error)
 type StoreFactory = func(Config) (TraceStore, error)
 
 // ComparatorFactory builds a custom Comparator from the resolved Config. Registered
-// under a name via WithComparator. The comparator reads Evidence only (Constitution
-// I). NOTE: the built-in Gherkin grammar maps steps onto the built-in comparator
-// names, so a custom comparator is registered and composable today but is not yet
-// invokable from a .feature step without new grammar. First-class custom-comparator
-// Gherkin steps are deliberately OUT of scope for feature 007 (which publishes the
-// registration surface); they are planned as spec 010, custom comparator steps,
-// which has not been started yet.
+// under a name via WithComparator. The comparator reads Evidence only — never a
+// store or a driver — which is what keeps comparators portable. NOTE: the built-in
+// Gherkin grammar maps steps onto the built-in comparator names, so a custom
+// comparator is registered and composable today but is not yet invokable from a
+// .feature step without new grammar. Publishing the registration surface is
+// deliberately all this does for now; first-class custom-comparator Gherkin steps
+// are planned future work (tracked in-repo as spec 010) that has not been started.
 type ComparatorFactory = func(Config) (Comparator, error)
 
 // JudgeFactory builds a custom Judge from the resolved Config. Registered under a
@@ -122,16 +120,16 @@ type JudgeFactory = func(Config) (Judge, error)
 
 // WithFeatures adds feature files or directories the suite runs. It is additive
 // across calls, so WithFeatures("a") and WithFeatures("b") together run both. At
-// least one feature path is required — Run has no implicit "features" default
-// (Constitution IV: no silent fallback).
+// least one feature path is required: Run has no implicit "features" default and
+// refuses loudly rather than silently guessing a corpus to run.
 func WithFeatures(paths ...string) Option {
 	return func(o *runOptions) { o.featurePaths = append(o.featurePaths, paths...) }
 }
 
 // WithOutput narrates the godog pretty report to w. The default is library mode:
 // with no WithOutput, Run narrates nothing (io.Discard), so embedding Mentat never
-// writes to stdout unless the caller asks. A nil w is treated as the default
-// (Constitution IV: a zero value behaves as the documented default, never a crash).
+// writes to stdout unless the caller asks. A nil w is treated as that default: a zero
+// value behaves as the documented default, never a crash.
 func WithOutput(w io.Writer) Option {
 	return func(o *runOptions) { o.output = w }
 }
@@ -141,8 +139,8 @@ func WithOutput(w io.Writer) Option {
 // -v/-vv mapping the CLI exposes (engine.NewLogger). The default is library mode:
 // with no WithVerbosity (or both flags false) Run injects a silent discard logger, so
 // embedding Mentat narrates nothing unless the caller asks. A nil w is treated as the
-// silent default (Constitution IV: a zero value behaves as the documented default,
-// never a nil-writer panic).
+// silent default: a zero value behaves as the documented default, never a nil-writer
+// panic.
 func WithVerbosity(w io.Writer, verbose, debug bool) Option {
 	return func(o *runOptions) {
 		o.logWriter = w
@@ -178,17 +176,16 @@ func WithFailFast(stop bool) Option {
 // empty map): embedding Mentat writes no files unless the caller asks. A write failure
 // is a Run error that preserves the underlying reporter wording (e.g. "writing junit
 // report") and still returns the populated Results — the suite ran, only emission
-// failed (Constitution IV: no silent fallback).
+// failed. The write failure is surfaced, never swallowed.
 func WithReports(targets map[string]string) Option {
 	return func(o *runOptions) { o.reports = targets }
 }
 
 // WithDriver registers a custom Driver factory under name, funneling it into this
 // Run's composition root before sealing. The name works in config (Target.Adapter)
-// and feature files exactly like a built-in adapter (US1). A name already taken by
-// a built-in or an earlier registration is a loud collision error from Run
-// (FR-002); registration cannot happen after the root is sealed (options exist only
-// here).
+// and feature files exactly like a built-in adapter. A name already taken by a
+// built-in or an earlier registration is a loud collision error from Run;
+// registration cannot happen after the root is sealed (options exist only here).
 func WithDriver(name string, f DriverFactory) Option {
 	return func(o *runOptions) { o.drivers = append(o.drivers, driverReg{name: name, factory: f}) }
 }
@@ -212,7 +209,7 @@ func WithJudge(name string, f JudgeFactory) Option {
 }
 
 // Results is the structured outcome of a Run — the library-mode equivalent of the
-// CLI's report + exit status (FR-003). A red suite is reflected here (Failed > 0),
+// CLI's report + exit status. A red suite is reflected here (Failed > 0),
 // not as a Run error: Run returns a non-nil error only for harness/composition
 // failures. TotalCost and JudgeTotal mirror core.RunReport's suite aggregates;
 // JudgeTotal is nil unless a scenario actually made a judge call (no fabricated
@@ -230,7 +227,7 @@ type Results struct {
 // consumer (and the CLI as "consumer zero") can turn a Run into an os.Exit code with
 // one call: an interrupted run is 130 (128 + SIGINT, and it wins over a red suite so
 // CI can tell cancellation from a plain failure), else any failed scenario is 1, else
-// 0. This is the Results ⇔ CLI exit-semantics contract (public-surface.md).
+// 0. These three codes are the stable Results-to-exit-status contract.
 func (r Results) ExitCode() int {
 	switch {
 	case r.Interrupted:
@@ -277,7 +274,7 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 	}
 	// No implicit "features" default: godog silently defaults an empty Paths to the
 	// ./features directory, which would run an unrelated corpus. Refuse loudly
-	// instead (Constitution IV: no silent fallback).
+	// instead of silently falling back.
 	if len(ro.featurePaths) == 0 {
 		return Results{}, fmt.Errorf("mentat: no feature paths; pass at least one via WithFeatures")
 	}
@@ -285,9 +282,8 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 	// Narration: the same logger is injected into every seam (correlator + engine +
 	// drivers) — no package-global logger, no slog.SetDefault. With no WithVerbosity
 	// the writer is nil and both flags false, so NewLogger returns a discard handler:
-	// library mode narrates nothing, byte-identical to the pre-Batch-2 default. A nil
-	// writer with a level set narrates to io.Discard (Constitution IV: no nil-writer
-	// panic).
+	// library mode narrates nothing, byte-identical to the previous default. A nil
+	// writer with a level set narrates to io.Discard rather than panicking.
 	logWriter := ro.logWriter
 	if logWriter == nil {
 		logWriter = io.Discard
@@ -319,9 +315,9 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 	// Build the engine composition options: the silent logger first, then the custom
 	// seams. Drivers/comparators are funneled as factories (like stores/judges), so the
 	// engine defers construction until AFTER its collision check — a name clashing with
-	// a built-in surfaces a loud collision error and never runs the factory (FR-002),
-	// and a factory error surfaces at Build (build engine), wrapped and named there
-	// (Constitution IV: never a silent nil seam).
+	// a built-in surfaces a loud collision error and never runs the factory, and a
+	// factory error surfaces at Build (build engine), wrapped and named there —
+	// never a silent nil seam.
 	buildOpts := []engine.Option{engine.WithLogger(logger)}
 	for _, d := range ro.drivers {
 		if d.factory == nil {
@@ -356,26 +352,26 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 	}
 
 	// Library mode narrates nothing by default: an unset WithOutput leaves the godog
-	// pretty report going to io.Discard (Constitution IV: a nil writer behaves as the
-	// documented default, never a nil-writer panic in godog).
+	// pretty report going to io.Discard: a nil writer behaves as the documented
+	// default, never a nil-writer panic in godog.
 	out := ro.output
 	if out == nil {
 		out = io.Discard
 	}
 	// Default concurrency stays 1: an unset or non-positive value is the documented
-	// default, not a zero passed through to godog (Constitution IV).
+	// default, not a zero passed through to godog.
 	concurrency := ro.concurrency
 	if concurrency < 1 {
 		concurrency = 1
 	}
 
-	// Judge-spend budget (US6): once completed judge cost crosses cfg.Judge.MaxCostUSD,
+	// Judge-spend budget: once completed judge cost crosses cfg.Judge.MaxCostUSD,
 	// the After hook cancels budgetCtx so no NEW scenario starts a judge call. budgetCtx
 	// is a CHILD of the passed ctx (a caller cancellation still cancels everything), but
 	// `interrupted` keys off the PASSED ctx alone below — a budget trip cancels budgetCtx
 	// yet must NOT mark the run interrupted. An unset/0 ceiling disables accounting:
 	// report.NewBudget with max<=0 makes Add a no-op, so an unbudgeted run stays
-	// byte-identical to the pre-Batch-2 flow.
+	// byte-identical to the unbudgeted flow that predates it.
 	budget := report.NewBudget(cfg.Judge.MaxCostUSD, eng.Pricing())
 	budgetCtx, budgetCancel := context.WithCancel(ctx)
 	defer budgetCancel()
@@ -396,7 +392,7 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 
 	// Validate feature loading up front: suite.Run folds a load/parse failure into a
 	// non-zero exit code with zero collected scenarios, which would otherwise surface
-	// as an empty green Results — a silent fallback (Constitution IV). RetrieveFeatures
+	// as an empty green Results — a silent fallback. RetrieveFeatures
 	// parses the same Options.Paths, so a missing or malformed .feature is a loud,
 	// path-named harness error here instead of a fake success (and godog does not leak
 	// the parse error to stderr on the discarded Run path).
@@ -411,7 +407,7 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 	rep := col.Report(started, time.Since(started), interrupted)
 	// Price fills the judge-ledger cost (a no-op with no judge calls). An
 	// unknown/ambiguous judge model is a hard Run error — never a report carrying a
-	// fabricated $0 for a real call (Constitution IV).
+	// fabricated $0 for a real call.
 	if err := report.Price(&rep, eng.Pricing()); err != nil {
 		return Results{}, fmt.Errorf("mentat: price judge ledger: %w", err)
 	}
@@ -419,7 +415,7 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 	// Emit the requested report files AFTER pricing (so the judge ledger cost is
 	// rendered), mirroring the CLI. A write failure preserves the reporter wording
 	// (e.g. "writing junit report") and still returns the completed Results — the run
-	// happened, only emission failed (Constitution IV). No WithReports ⇒ no files. The
+	// happened, only emission failed. No WithReports ⇒ no files. The
 	// error is captured (not early-returned) so a simultaneous budget trip is not masked.
 	var emitErr error
 	if len(ro.reports) > 0 {
@@ -428,7 +424,7 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 		}
 	}
 
-	// A tripped judge budget is a hard Run error (US6), read AFTER pricing and report
+	// A tripped judge budget is a hard Run error, read AFTER pricing and report
 	// emission so the operator still gets the full accounting first (mirrors the CLI
 	// ordering). The wrapped Budget error names spend, ceiling, and the crossing
 	// scenario. An unset/0 ceiling never trips, so Err() is nil.
