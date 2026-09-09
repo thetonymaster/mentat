@@ -45,7 +45,15 @@ func EmitReports(rep result.Results, targets map[string]string, resolve Reporter
 		path := targets[name]
 		r, ok := resolve.Reporter(name)
 		if !ok {
-			errs = append(errs, fmt.Errorf("unknown reporter %q (registered: %s)", name, strings.Join(resolve.Reporters(), ", ")))
+			// Name the alternatives so a typo fixes itself. "none registered" rather
+			// than an empty list: RegisterBuiltins always runs at the composition root,
+			// so an empty registry is not reachable today — but "(registered: )" would
+			// be a message that degrades silently if it ever became so.
+			registered := "none registered"
+			if names := resolve.Reporters(); len(names) > 0 {
+				registered = strings.Join(names, ", ")
+			}
+			errs = append(errs, fmt.Errorf("unknown reporter %q (registered: %s)", name, registered))
 			continue
 		}
 		if err := emitAtomic(r, rep, path); err != nil {

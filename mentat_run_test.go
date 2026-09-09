@@ -192,6 +192,10 @@ func TestRunRejectsNilFactories(t *testing.T) {
 		{name: "nil store factory", opt: mentat.WithStore("xs", nil), wantSub: "WithStore"},
 		{name: "nil comparator factory", opt: mentat.WithComparator("xc", nil), wantSub: "WithComparator"},
 		{name: "nil judge factory", opt: mentat.WithJudge("xj", nil), wantSub: "WithJudge"},
+		// The sixth seam (feature 010). Added after a gate audit found WithReporter had
+		// shipped without the row every sibling has — the guard was correct, but nothing
+		// executed it.
+		{name: "nil reporter factory", opt: mentat.WithReporter("xr", nil), wantSub: "WithReporter"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

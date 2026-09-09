@@ -32,7 +32,6 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   *and* the position that reaches it. This closes stability boundary 4, which had been a
   hand-performed check.
 
-
 - **Public extension API — extend without forking.** A root `github.com/thetonymaster/mentat`
   package re-exports the seam interfaces (`Driver`, `TraceStore`, `Comparator`, `Judge`,
   plus `Correlator`/`Reporter` as types), the `Evidence`/`Verdict`/`Output`/`Config`
