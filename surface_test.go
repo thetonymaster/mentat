@@ -41,8 +41,12 @@
 // errors at the consumer's call site. Without the ordinal, any permutation rendered
 // byte-identically (the whole line set is sorted). Unexported fields are omitted
 // (not a public promise) and do NOT consume an ordinal, so a purely internal field
-// addition does not churn the golden. The field type is printed as written in the
-// aliased source.
+// addition does not churn the golden. The field type is printed with go/printer and
+// then NORMALIZED to the facade's vocabulary (feature 010 T059): a re-exported
+// internal type renders under its facade name, so `*core.JudgeUsage` reads
+// `*JudgeUsage` no matter which internal package declares the struct. Alias and const
+// DECLARATION lines keep their internal target — that is where a rename of the
+// underlying type surfaces as drift.
 // Map, func and `= any` aliases stay alias-line-only — their declaration text
 // already IS their complete shape (contracts/surface-golden-v2.md rule 3).
 //
@@ -229,7 +233,15 @@ func TestSurfaceRenderStructFields(t *testing.T) {
 	}{
 		{name: "struct alias expands the drifted Verdict.Qualifiers field", line: "field (Verdict)[02] Qualifiers []string", exact: true, want: true},
 		{name: "struct alias expands the drifted Target.Completeness field", line: "field (Target)[07] Completeness Completeness", exact: true, want: true},
-		{name: "field type is rendered as written in the aliased source", line: "field (Verdict)[04] Judge *JudgeUsage", exact: true, want: true},
+		{name: "field type renders under its facade name, not the declaring package's", line: "field (Verdict)[04] Judge *JudgeUsage", exact: true, want: true},
+		// The T059 complement: the SAME type reached from a struct in a DIFFERENT
+		// internal package must render identically. Before normalization this line
+		// read "*core.JudgeUsage" purely because Results moved to internal/result.
+		{name: "same type renders identically from another package", line: "field (Results)[08] JudgeTotal *JudgeUsage", exact: true, want: true},
+		// Alias DECLARATION lines are deliberately NOT normalized: naming the target
+		// is the line's entire purpose, and it is where a rename of the underlying
+		// type shows up as drift now that field lines no longer repeat it.
+		{name: "alias declaration keeps its internal target", line: "type JudgeUsage = core.JudgeUsage", exact: true, want: true},
 		{name: "struct alias expands ExtractConfig exported fields", line: "field (ExtractConfig)[00] Mode string", exact: true, want: true},
 		// Substring, not prefix: the ordinal sits between the alias and the field
 		// name, so a prefix of "field (ExtractConfig) compiled" could never match
@@ -361,6 +373,72 @@ type surfaceCtx struct {
 	// typeSpecs caches the exported top-level type specs of each aliased dir, so the
 	// dir is read and parsed once for both indexers.
 	typeSpecs map[string][]*ast.TypeSpec
+	// facadeNames maps an alias TARGET ("core.JudgeUsage") to the facade name that
+	// re-exports it ("JudgeUsage"), for normalizing rendered types (feature 010 T059).
+	facadeNames map[string]string
+}
+
+// collectFacadeNames records every `type X = pkg.Y` on the facade whose target is a
+// module-internal package, so rendered types can be normalized to the name a CALLER
+// writes rather than the name the declaring package happens to use.
+func (c *surfaceCtx) collectFacadeNames(f *ast.File) {
+	for _, decl := range f.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			ts, ok := spec.(*ast.TypeSpec)
+			if !ok || !ts.Name.IsExported() || !ts.Assign.IsValid() {
+				continue
+			}
+			sel, ok := ts.Type.(*ast.SelectorExpr)
+			if !ok {
+				continue
+			}
+			pkg, ok := sel.X.(*ast.Ident)
+			if !ok {
+				continue
+			}
+			if _, local := c.imports[pkg.Name]; !local {
+				continue
+			}
+			c.facadeNames[pkg.Name+"."+sel.Sel.Name] = ts.Name.Name
+		}
+	}
+}
+
+// surfaceInternalQualified matches a module-internal package qualifier on a type name.
+var surfaceInternalQualified = regexp.MustCompile(`\b([a-z][a-z0-9]*)\.([A-Z][A-Za-z0-9_]*)\b`)
+
+// normalizeTypes rewrites internal-package-qualified type names in a rendered line to the
+// FACADE name that re-exports them: `*core.JudgeUsage` becomes `*JudgeUsage` (T059).
+//
+// The golden is a record of the PUBLIC surface, so it should speak the caller's
+// vocabulary. Method signatures already did — `method (Correlator) Resolve(…, store
+// TraceStore, …)`, never `core.TraceStore` — because those types are declared in the same
+// package as the interface and so were written bare. Field types did not, because whether
+// a qualifier appears depended on which internal package happened to declare the STRUCT,
+// not on the type itself. That produced two renderings of one type
+// (`field (Verdict)[04] Judge *JudgeUsage` vs `field (Results)[08] JudgeTotal
+// *core.JudgeUsage`) and, worse, made MOVING a type between internal packages churn the
+// golden in a way that reads like an API change. Feature 010 hit exactly that when Results
+// moved to internal/result.
+//
+// Stdlib qualifiers (time.Duration, *regexp.Regexp, *trace.Trace where unaliased) are left
+// alone — they are not the facade's to rename, and a caller writes them exactly so.
+// Alias and const DECLARATION lines are not passed through here: `type Comparator =
+// core.Comparator` must keep its target, since naming it is the line's entire purpose.
+func (c *surfaceCtx) normalizeTypes(s string) string {
+	if len(c.facadeNames) == 0 {
+		return s
+	}
+	return surfaceInternalQualified.ReplaceAllStringFunc(s, func(m string) string {
+		if name, ok := c.facadeNames[m]; ok {
+			return name
+		}
+		return m
+	})
 }
 
 // surfaceRender parses every non-test source file in the package dir and returns
@@ -373,12 +451,13 @@ func surfaceRender(t *testing.T) []string {
 		t.Fatalf("read package dir: %v", err)
 	}
 	c := &surfaceCtx{
-		fset:      token.NewFileSet(),
-		modPath:   surfaceModulePath(t),
-		imports:   map[string]string{},
-		ifaces:    map[string]map[string]*ast.InterfaceType{},
-		structs:   map[string]map[string]*ast.StructType{},
-		typeSpecs: map[string][]*ast.TypeSpec{},
+		fset:        token.NewFileSet(),
+		modPath:     surfaceModulePath(t),
+		imports:     map[string]string{},
+		ifaces:      map[string]map[string]*ast.InterfaceType{},
+		structs:     map[string]map[string]*ast.StructType{},
+		typeSpecs:   map[string][]*ast.TypeSpec{},
+		facadeNames: map[string]string{},
 	}
 	var files []*ast.File
 	for _, e := range entries {
@@ -393,6 +472,11 @@ func surfaceRender(t *testing.T) []string {
 		}
 		c.addImports(f)
 		files = append(files, f)
+	}
+	// Collect the facade's alias targets before rendering, so a type can be normalized
+	// to the name a CALLER writes regardless of which file declared the alias (T059).
+	for _, f := range files {
+		c.collectFacadeNames(f)
 	}
 	// Render only after every facade import is recorded, so an alias in run.go
 	// resolves against imports declared in any facade file.
@@ -669,7 +753,7 @@ func (c *surfaceCtx) renderStructMethods(t *testing.T, pkg, alias, target string
 			stripped.Recv = nil
 			stripped.Doc = nil
 			sig := strings.TrimPrefix(surfacePrint(t, c.fset, &stripped), "func "+fd.Name.Name)
-			out = append(out, "method ("+alias+") "+fd.Name.Name+sig)
+			out = append(out, c.normalizeTypes("method ("+alias+") "+fd.Name.Name+sig))
 		}
 	}
 	return out
@@ -739,14 +823,14 @@ func (c *surfaceCtx) renderStructFields(t *testing.T, alias string, st *ast.Stru
 			// over-report, and for a drift gate over-reporting is the safe
 			// direction. No unexported embedded type exists on the surface
 			// today, so this branch changes no current golden line.
-			out = append(out, ordinal()+typ)
+			out = append(out, c.normalizeTypes(ordinal()+typ))
 			continue
 		}
 		for _, n := range field.Names {
 			if !n.IsExported() {
 				continue
 			}
-			out = append(out, ordinal()+n.Name+" "+typ)
+			out = append(out, c.normalizeTypes(ordinal()+n.Name+" "+typ))
 		}
 	}
 	return out
@@ -772,7 +856,7 @@ func (c *surfaceCtx) renderInterfaceMethods(t *testing.T, alias string, iface *a
 			// Embedded interface (Ident / SelectorExpr): render the embedded name so an
 			// embedding change is not silently dropped. None of the six re-exported
 			// interfaces embed today, but a future embed must still churn the golden.
-			out = append(out, "method ("+alias+") "+surfacePrint(t, c.fset, field.Type))
+			out = append(out, c.normalizeTypes("method ("+alias+") "+surfacePrint(t, c.fset, field.Type)))
 			continue
 		}
 		// go/printer renders a bare FuncType as "func(params) results"; strip the
@@ -780,7 +864,7 @@ func (c *surfaceCtx) renderInterfaceMethods(t *testing.T, alias string, iface *a
 		// method signature receiver-named by the facade alias.
 		sig := strings.TrimPrefix(surfacePrint(t, c.fset, ft), "func")
 		for _, mname := range field.Names {
-			out = append(out, "method ("+alias+") "+mname.Name+sig)
+			out = append(out, c.normalizeTypes("method ("+alias+") "+mname.Name+sig))
 		}
 	}
 	return out
@@ -1015,12 +1099,13 @@ func surfaceAliases(t *testing.T) (*surfaceCtx, []surfaceAlias) {
 		t.Fatalf("read package dir: %v", err)
 	}
 	c := &surfaceCtx{
-		fset:      token.NewFileSet(),
-		modPath:   surfaceModulePath(t),
-		imports:   map[string]string{},
-		ifaces:    map[string]map[string]*ast.InterfaceType{},
-		structs:   map[string]map[string]*ast.StructType{},
-		typeSpecs: map[string][]*ast.TypeSpec{},
+		fset:        token.NewFileSet(),
+		modPath:     surfaceModulePath(t),
+		imports:     map[string]string{},
+		ifaces:      map[string]map[string]*ast.InterfaceType{},
+		structs:     map[string]map[string]*ast.StructType{},
+		typeSpecs:   map[string][]*ast.TypeSpec{},
+		facadeNames: map[string]string{},
 	}
 	var files []*ast.File
 	for _, e := range entries {

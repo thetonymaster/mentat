@@ -16,8 +16,18 @@ renders:
    existing import-dir resolution, `surfaceCtx`) to an `*ast.StructType` is
    followed by its **exported fields**, one per line, using the same layout
    convention T028 established for interface methods:
-   - field name + type exactly as written in the aliased package's source,
-     printed with `go/printer` mode 0 (formatting-noise-proof);
+   - field name + type printed with `go/printer` mode 0 (formatting-noise-proof),
+     then **normalized to the facade's vocabulary** (amended by feature 010, T059):
+     an internal-package-qualified name that the facade re-exports renders under
+     its facade name, so `*core.JudgeUsage` reads `*JudgeUsage`. Originally this
+     said "exactly as written in the aliased package's source", which made the
+     rendering depend on which internal package declared the STRUCT rather than on
+     the type itself — one type then rendered two ways (`field (Verdict)[04] Judge
+     *JudgeUsage` beside `field (Results)[08] JudgeTotal *core.JudgeUsage`), and
+     MOVING a type between internal packages churned the golden in a way that read
+     like an API change. Method signatures already rendered facade names, so this
+     also makes fields and methods agree. Stdlib qualifiers (`time.Duration`,
+     `*regexp.Regexp`) are untouched — a caller writes those exactly so;
    - unexported fields omitted (e.g. `config.ExtractConfig.compiled` — it is not
      a public promise);
    - embedded fields rendered as written (the embedded type, if public, is frozen

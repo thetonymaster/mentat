@@ -38,7 +38,7 @@ field (Config)[10] KillGrace string
 field (Config)[11] Budget RunBudget
 field (Endpoint)[00] Endpoint string
 field (Evidence)[00] RunID string
-field (Evidence)[01] Trace *trace.Trace
+field (Evidence)[01] Trace *Trace
 field (Evidence)[02] Output Output
 field (Evidence)[03] Failed bool
 field (Evidence)[04] FailureKind string
@@ -92,7 +92,7 @@ field (Results)[04] TotalCost float64
 field (Results)[05] StartedAt time.Time
 field (Results)[06] Duration time.Duration
 field (Results)[07] Interrupted bool
-field (Results)[08] JudgeTotal *core.JudgeUsage
+field (Results)[08] JudgeTotal *JudgeUsage
 field (RunBudget)[00] Timeout time.Duration
 field (RunBudget)[01] Unbounded bool
 field (RunBudget)[02] KillGrace time.Duration
@@ -123,9 +123,9 @@ field (ScenarioResult)[05] Qualifiers []string
 field (ScenarioResult)[06] Cost float64
 field (ScenarioResult)[07] Sequence []string
 field (ScenarioResult)[08] Runs []RunRecord
-field (ScenarioResult)[09] Aggregate *core.AggregateDetail
+field (ScenarioResult)[09] Aggregate *AggregateDetail
 field (ScenarioResult)[10] DerivationNote string
-field (ScenarioResult)[11] Judge *core.JudgeUsage
+field (ScenarioResult)[11] Judge *JudgeUsage
 field (ScenarioResult)[12] RunIDs []string
 field (Span)[00] ID string
 field (Span)[01] ParentID string
@@ -173,10 +173,10 @@ func WithVerbosity(w io.Writer, verbose, debug bool) Option
 method (Comparator) Compare(ctx context.Context, ev Evidence, e Expectation) (Verdict, error)
 method (Comparator) Name() string
 method (Correlator) Inject(ctx context.Context, spec *RunSpec) (runID string)
-method (Correlator) Resolve(ctx context.Context, store TraceStore, req ResolveRequest) (*trace.Trace, error)
-method (Correlator) ResolveComplete(ctx context.Context, store TraceStore, runID string) (*trace.Trace, error)
+method (Correlator) Resolve(ctx context.Context, store TraceStore, req ResolveRequest) (*Trace, error)
+method (Correlator) ResolveComplete(ctx context.Context, store TraceStore, runID string) (*Trace, error)
 method (Driver) Run(ctx context.Context, spec RunSpec) (RunResult, error)
-method (ExtractConfig) Policy() core.ExtractPolicy
+method (ExtractConfig) Policy() ExtractPolicy
 method (Judge) Judge(ctx context.Context, req JudgeRequest) (JudgeVerdict, error)
 method (Reporter) Report(res Results, w io.Writer) error
 method (Results) ExitCode() int
@@ -186,7 +186,7 @@ method (Span) AttrInt(k string) (int, bool)
 method (Trace) ByOp(op string) []*Span
 method (Trace) Envelope() time.Duration
 method (TraceStore) Caps() StoreCaps
-method (TraceStore) DecodePayload(id string, payload []byte) (*trace.Trace, error)
+method (TraceStore) DecodePayload(id string, payload []byte) (*Trace, error)
 method (TraceStore) FetchPayload(ctx context.Context, id string) ([]byte, error)
 method (TraceStore) Query(ctx context.Context, q TraceQuery) ([]TraceRef, error)
 type AggregateDetail = core.AggregateDetail
