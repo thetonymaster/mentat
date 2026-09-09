@@ -292,8 +292,11 @@ func surfaceRenderStructSrc(t *testing.T, fields string) []string {
 	if st == nil {
 		t.Fatalf("no struct literal parsed from:\n%s", fields)
 	}
+	// No facadeNames and no dir: normalizeTypes short-circuits on an empty map, so this
+	// helper exercises the raw rendering. The normalization path is covered end-to-end by
+	// the golden and by TestNormalizeTypesResolvesInDeclaringPackage.
 	c := &surfaceCtx{fset: fset}
-	out := c.renderStructFields(t, "S", st)
+	out := c.renderStructFields(t, "", "S", st)
 	sort.Strings(out) // mirror surfaceRender's global sort — the golden is sorted
 	return out
 }
@@ -373,9 +376,65 @@ type surfaceCtx struct {
 	// typeSpecs caches the exported top-level type specs of each aliased dir, so the
 	// dir is read and parsed once for both indexers.
 	typeSpecs map[string][]*ast.TypeSpec
-	// facadeNames maps an alias TARGET ("core.JudgeUsage") to the facade name that
-	// re-exports it ("JudgeUsage"), for normalizing rendered types (feature 010 T059).
+	// facadeNames maps an alias target keyed by module-relative DIR + type name
+	// ("internal/core.JudgeUsage") to the facade name re-exporting it ("JudgeUsage"),
+	// for normalizing rendered types (feature 010 T059).
+	//
+	// Keyed by dir, not by the facade's local import name: the text being normalized was
+	// printed from ANOTHER package's AST, and that package has its own import namespace.
+	// A package importing something else as `core` would otherwise have its types
+	// rewritten to Mentat's facade names — asserting a foreign type is part of this API.
 	facadeNames map[string]string
+	// dirImports caches each rendered package's OWN local-import-name -> dir map, so a
+	// qualifier in text printed from that package resolves in the right namespace.
+	dirImports map[string]map[string]string
+	// dupAlias collects "one target, two facade names" collisions, reported by the
+	// caller so the failure names them all rather than the first.
+	dupAlias []string
+}
+
+// importsOf returns dir's local package name -> module-relative dir map, parsed once.
+// Only module-internal imports are recorded; a qualifier that resolves to nothing here is
+// stdlib or third-party and is left exactly as the author wrote it.
+func (c *surfaceCtx) importsOf(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	if m, ok := c.dirImports[dir]; ok {
+		return m
+	}
+	m := map[string]string{}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read aliased package dir %q: %v", dir, err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(c.fset, filepath.Join(dir, name), nil, parser.ImportsOnly)
+		if err != nil {
+			t.Fatalf("parse aliased source %s: %v", filepath.Join(dir, name), err)
+		}
+		for _, imp := range f.Imports {
+			path := strings.Trim(imp.Path.Value, `"`)
+			var d string
+			switch {
+			case path == c.modPath:
+				d = "."
+			case strings.HasPrefix(path, c.modPath+"/"):
+				d = strings.TrimPrefix(path, c.modPath+"/")
+			default:
+				continue
+			}
+			local := path[strings.LastIndex(path, "/")+1:]
+			if imp.Name != nil {
+				local = imp.Name.Name
+			}
+			m[local] = d
+		}
+	}
+	c.dirImports[dir] = m
+	return m
 }
 
 // collectFacadeNames records every `type X = pkg.Y` on the facade whose target is a
@@ -400,10 +459,19 @@ func (c *surfaceCtx) collectFacadeNames(f *ast.File) {
 			if !ok {
 				continue
 			}
-			if _, local := c.imports[pkg.Name]; !local {
+			dir, local := c.imports[pkg.Name]
+			if !local {
 				continue
 			}
-			c.facadeNames[pkg.Name+"."+sel.Sel.Name] = ts.Name.Name
+			key := dir + "." + sel.Sel.Name
+			// Two facade names for one target would make a field's rendering depend on
+			// declaration order, contradicting the documented property that moving a
+			// symbol between mentat.go and run.go is deliberately not a diff. Fail loudly
+			// rather than pick one.
+			if prior, dup := c.facadeNames[key]; dup && prior != ts.Name.Name {
+				c.dupAlias = append(c.dupAlias, key+" is aliased as both "+prior+" and "+ts.Name.Name)
+			}
+			c.facadeNames[key] = ts.Name.Name
 		}
 	}
 }
@@ -429,12 +497,24 @@ var surfaceInternalQualified = regexp.MustCompile(`\b([a-z][a-z0-9]*)\.([A-Z][A-
 // alone — they are not the facade's to rename, and a caller writes them exactly so.
 // Alias and const DECLARATION lines are not passed through here: `type Comparator =
 // core.Comparator` must keep its target, since naming it is the line's entire purpose.
-func (c *surfaceCtx) normalizeTypes(s string) string {
+func (c *surfaceCtx) normalizeTypes(t *testing.T, dir, s string) string {
 	if len(c.facadeNames) == 0 {
 		return s
 	}
+	imports := c.importsOf(t, dir)
 	return surfaceInternalQualified.ReplaceAllStringFunc(s, func(m string) string {
-		if name, ok := c.facadeNames[m]; ok {
+		qual, typ, ok := strings.Cut(m, ".")
+		if !ok {
+			return m
+		}
+		// Resolve the qualifier in the package the text was PRINTED FROM, not in the
+		// facade's namespace. A qualifier that names nothing module-internal there is
+		// stdlib and stays exactly as written.
+		qdir, local := imports[qual]
+		if !local {
+			return m
+		}
+		if name, ok := c.facadeNames[qdir+"."+typ]; ok {
 			return name
 		}
 		return m
@@ -458,6 +538,7 @@ func surfaceRender(t *testing.T) []string {
 		structs:     map[string]map[string]*ast.StructType{},
 		typeSpecs:   map[string][]*ast.TypeSpec{},
 		facadeNames: map[string]string{},
+		dirImports:  map[string]map[string]string{},
 	}
 	var files []*ast.File
 	for _, e := range entries {
@@ -477,6 +558,11 @@ func surfaceRender(t *testing.T) []string {
 	// to the name a CALLER writes regardless of which file declared the alias (T059).
 	for _, f := range files {
 		c.collectFacadeNames(f)
+	}
+	if len(c.dupAlias) > 0 {
+		sort.Strings(c.dupAlias)
+		t.Fatalf("the facade aliases one internal target under two names, so a field's "+
+			"rendering would depend on declaration order:\n%s", surfaceIndent(c.dupAlias))
 	}
 	// Render only after every facade import is recorded, so an alias in run.go
 	// resolves against imports declared in any facade file.
@@ -556,14 +642,14 @@ func (c *surfaceCtx) renderGenDecl(t *testing.T, d *ast.GenDecl) []string {
 				if sel, ok := s.Type.(*ast.SelectorExpr); ok {
 					if pkg, ok := sel.X.(*ast.Ident); ok {
 						if iface := c.lookupInterface(t, pkg.Name, sel.Sel.Name); iface != nil {
-							out = append(out, c.renderInterfaceMethods(t, s.Name.Name, iface)...)
+							out = append(out, c.renderInterfaceMethods(t, c.imports[pkg.Name], s.Name.Name, iface)...)
 						}
 						// Symmetrically, a re-exported STRUCT alias renders its EXPORTED FIELD
 						// SET (feature 009 F1): the alias line alone is blind to a field being
 						// added, removed or re-typed — which is how Verdict.Qualifiers and
 						// Target.Completeness reached users with zero golden diff.
 						if st := c.lookupStruct(t, pkg.Name, sel.Sel.Name); st != nil {
-							out = append(out, c.renderStructFields(t, s.Name.Name, st)...)
+							out = append(out, c.renderStructFields(t, c.imports[pkg.Name], s.Name.Name, st)...)
 							// …and its EXPORTED METHOD SET (feature 010 F1). A method on a
 							// LOCALLY-declared type is caught by the FuncDecl branch above, but
 							// once that type becomes an alias its methods live in the aliased
@@ -753,7 +839,7 @@ func (c *surfaceCtx) renderStructMethods(t *testing.T, pkg, alias, target string
 			stripped.Recv = nil
 			stripped.Doc = nil
 			sig := strings.TrimPrefix(surfacePrint(t, c.fset, &stripped), "func "+fd.Name.Name)
-			out = append(out, c.normalizeTypes("method ("+alias+") "+fd.Name.Name+sig))
+			out = append(out, c.normalizeTypes(t, dir, "method ("+alias+") "+fd.Name.Name+sig))
 		}
 	}
 	return out
@@ -781,11 +867,13 @@ func surfaceReceiverTypeName(expr ast.Expr) string {
 // failure message names the drifted type via the alias in parentheses. Rules
 // (contracts/surface-golden-v2.md rule 2): exported fields only (an unexported
 // field like config.ExtractConfig.compiled is not a public promise); the type is
-// printed exactly as written in the aliased package's source, so a rename of the
-// named type is drift; embedded fields are rendered as written (the embedded type,
-// when public, is frozen by its own entry); fields are emitted in declaration order.
+// printed by go/printer and then normalized to its facade name (T059), so a rename of
+// the underlying type surfaces on the ALIAS line rather than here — field lines no
+// longer repeat the internal name; embedded fields are rendered as written (the
+// embedded type, when public, is frozen by its own entry); fields are emitted in
+// declaration order.
 // Struct TAGS are deliberately not rendered — the contract freezes name + type.
-func (c *surfaceCtx) renderStructFields(t *testing.T, alias string, st *ast.StructType) []string {
+func (c *surfaceCtx) renderStructFields(t *testing.T, dir, alias string, st *ast.StructType) []string {
 	t.Helper()
 	if st.Fields == nil {
 		return nil
@@ -823,14 +911,14 @@ func (c *surfaceCtx) renderStructFields(t *testing.T, alias string, st *ast.Stru
 			// over-report, and for a drift gate over-reporting is the safe
 			// direction. No unexported embedded type exists on the surface
 			// today, so this branch changes no current golden line.
-			out = append(out, c.normalizeTypes(ordinal()+typ))
+			out = append(out, c.normalizeTypes(t, dir, ordinal()+typ))
 			continue
 		}
 		for _, n := range field.Names {
 			if !n.IsExported() {
 				continue
 			}
-			out = append(out, c.normalizeTypes(ordinal()+n.Name+" "+typ))
+			out = append(out, c.normalizeTypes(t, dir, ordinal()+n.Name+" "+typ))
 		}
 	}
 	return out
@@ -842,9 +930,12 @@ func (c *surfaceCtx) renderStructFields(t *testing.T, alias string, st *ast.Stru
 //	method (Correlator) Resolve(ctx context.Context, store TraceStore, req ResolveRequest) (*trace.Trace, error)
 //
 // so a signature change to ANY re-exported interface method is caught as drift.
-// The receiver is the FACADE alias name (Correlator), not core.Correlator; the
-// parameter/result types are rendered exactly as written in the aliased source.
-func (c *surfaceCtx) renderInterfaceMethods(t *testing.T, alias string, iface *ast.InterfaceType) []string {
+// The receiver is the FACADE alias name (Correlator), not core.Correlator. Parameter
+// and result types are printed by go/printer and then normalized to their facade names
+// (T059) — most were already bare, being same-package references, but four qualified
+// ones (trace.Trace x3, core.ExtractPolicy) were not, and now render as Trace and
+// ExtractPolicy alongside the fields.
+func (c *surfaceCtx) renderInterfaceMethods(t *testing.T, dir, alias string, iface *ast.InterfaceType) []string {
 	t.Helper()
 	if iface.Methods == nil {
 		return nil
@@ -856,7 +947,7 @@ func (c *surfaceCtx) renderInterfaceMethods(t *testing.T, alias string, iface *a
 			// Embedded interface (Ident / SelectorExpr): render the embedded name so an
 			// embedding change is not silently dropped. None of the six re-exported
 			// interfaces embed today, but a future embed must still churn the golden.
-			out = append(out, c.normalizeTypes("method ("+alias+") "+surfacePrint(t, c.fset, field.Type)))
+			out = append(out, c.normalizeTypes(t, dir, "method ("+alias+") "+surfacePrint(t, c.fset, field.Type)))
 			continue
 		}
 		// go/printer renders a bare FuncType as "func(params) results"; strip the
@@ -864,7 +955,7 @@ func (c *surfaceCtx) renderInterfaceMethods(t *testing.T, alias string, iface *a
 		// method signature receiver-named by the facade alias.
 		sig := strings.TrimPrefix(surfacePrint(t, c.fset, ft), "func")
 		for _, mname := range field.Names {
-			out = append(out, c.normalizeTypes("method ("+alias+") "+mname.Name+sig))
+			out = append(out, c.normalizeTypes(t, dir, "method ("+alias+") "+mname.Name+sig))
 		}
 	}
 	return out
@@ -1106,6 +1197,7 @@ func surfaceAliases(t *testing.T) (*surfaceCtx, []surfaceAlias) {
 		structs:     map[string]map[string]*ast.StructType{},
 		typeSpecs:   map[string][]*ast.TypeSpec{},
 		facadeNames: map[string]string{},
+		dirImports:  map[string]map[string]string{},
 	}
 	var files []*ast.File
 	for _, e := range entries {
@@ -1212,4 +1304,92 @@ func surfaceFuncRefs(fn *ast.FuncType, self string) []string {
 		}
 	}
 	return out
+}
+
+// --- T059 / gate-audit follow-ups: unit-test the normalization primitives ----------
+
+// TestSurfaceNamedRefsQualifiesBareIdents is the regression test for the bug the 010
+// nameability rehearsal caught: the first version of surfaceNamedRefs collected only
+// qualified selectors, so a same-package reference — which is how internal/core writes
+// `Detail *AggregateDetail` — was invisible, and the sweep reported zero offenders while
+// blind. That bug was found by a mutation rehearsal; this pins it so the next one is
+// found by a test.
+func TestSurfaceNamedRefsQualifiesBareIdents(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		expr string // a type expression as written inside package "core"
+		want []string
+	}{
+		{name: "bare exported ident is qualified with its own package", expr: "AggregateDetail", want: []string{"core.AggregateDetail"}},
+		{name: "pointer to bare ident", expr: "*AggregateDetail", want: []string{"core.AggregateDetail"}},
+		{name: "slice of bare ident", expr: "[]RunRecord", want: []string{"core.RunRecord"}},
+		{name: "already-qualified selector is kept", expr: "*trace.Trace", want: []string{"trace.Trace"}},
+		{name: "predeclared types are not references", expr: "string", want: nil},
+		{name: "unexported ident is not surface", expr: "compiled", want: nil},
+		{name: "map contributes key and value", expr: "map[Kind]Detail", want: []string{"core.Kind", "core.Detail"}},
+		{name: "func type contributes params and results", expr: "func(Evidence) (Verdict, error)", want: []string{"core.Evidence", "core.Verdict"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			expr, err := parser.ParseExpr(tt.expr)
+			if err != nil {
+				t.Fatalf("parse %q: %v", tt.expr, err)
+			}
+			got := surfaceNamedRefs(expr, "core")
+			if len(got) != len(tt.want) {
+				t.Fatalf("surfaceNamedRefs(%q) = %v, want %v", tt.expr, got, tt.want)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Errorf("surfaceNamedRefs(%q)[%d] = %q, want %q", tt.expr, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestNormalizeTypesResolvesInDeclaringPackage pins the property the gate audit flagged:
+// a qualifier in rendered text must be resolved in the namespace of the package the text
+// was PRINTED FROM, never the facade's. Keying on the facade's local import names would
+// let any package that imports something else as `core` have its types silently rewritten
+// to Mentat's facade names — the golden would then assert a foreign type is part of this
+// API.
+func TestNormalizeTypesResolvesInDeclaringPackage(t *testing.T) {
+	t.Parallel()
+
+	c := &surfaceCtx{
+		facadeNames: map[string]string{"internal/core.JudgeUsage": "JudgeUsage"},
+		dirImports: map[string]map[string]string{
+			// The real case: internal/result imports internal/core as "core".
+			"internal/result": {"core": "internal/core"},
+			// The hazard: a package that binds the SAME local name to something else.
+			"internal/decoy": {"core": "internal/somewhere-else"},
+			// And one that does not import it at all.
+			"internal/lonely": {},
+		},
+	}
+	tests := []struct {
+		name string
+		dir  string
+		in   string
+		want string
+	}{
+		{name: "resolves to the facade name in the real package", dir: "internal/result", in: "field (Results)[08] JudgeTotal *core.JudgeUsage", want: "field (Results)[08] JudgeTotal *JudgeUsage"},
+		{name: "same local name bound elsewhere is left alone", dir: "internal/decoy", in: "field (X)[00] Bogus *core.JudgeUsage", want: "field (X)[00] Bogus *core.JudgeUsage"},
+		{name: "unimported qualifier is left alone", dir: "internal/lonely", in: "field (X)[00] Y *core.JudgeUsage", want: "field (X)[00] Y *core.JudgeUsage"},
+		{name: "stdlib qualifiers are never touched", dir: "internal/result", in: "field (Results)[06] Duration time.Duration", want: "field (Results)[06] Duration time.Duration"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := c.normalizeTypes(t, tt.dir, tt.in); got != tt.want {
+				t.Errorf("normalizeTypes(%q, %q)\n got  %q\n want %q", tt.dir, tt.in, got, tt.want)
+			}
+		})
+	}
 }

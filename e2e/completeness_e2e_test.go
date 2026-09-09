@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/result"
 )
 
 // wantBoundedQualifier5s is the canonical trace-completeness qualifier (contracts §3)
@@ -51,7 +51,7 @@ func TestCompletenessQualifierInReports(t *testing.T) {
 			flag: "--report-json",
 			file: "report.json",
 			assert: func(t *testing.T, data []byte) {
-				var rep core.RunReport
+				var rep result.Results
 				if err := json.Unmarshal(data, &rep); err != nil {
 					t.Fatalf("invalid json in report: %v\nraw:\n%s", err, data)
 				}
@@ -111,7 +111,7 @@ func TestCompletenessQualifierInReports(t *testing.T) {
 
 // hasQualifier reports whether any scenario in the report carries the given qualifier
 // string verbatim in its ScenarioResult.Qualifiers.
-func hasQualifier(rep core.RunReport, want string) bool {
+func hasQualifier(rep result.Results, want string) bool {
 	for _, s := range rep.Scenarios {
 		for _, q := range s.Qualifiers {
 			if q == want {

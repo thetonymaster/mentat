@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/result"
 )
 
 // TestL3_ReportReflectsFailure proves that a failing run writes a JSON report
@@ -48,7 +48,7 @@ func TestL3_ReportReflectsFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("report not written: %v\ncombined output:\n%s", err, out)
 	}
-	var rep core.RunReport
+	var rep result.Results
 	if err := json.Unmarshal(data, &rep); err != nil {
 		t.Fatalf("invalid json in report: %v\nraw:\n%s", err, data)
 	}

@@ -12,6 +12,9 @@ renders:
 
 1. **Unchanged**: top-level funcs/consts/vars; alias lines; interface aliases
    expanded to their full method sets (008 T028 behaviour — MUST NOT regress).
+   **Amended by feature 010 (T059)**: the method-set *expansion* is unchanged, but
+   parameter and result types are now normalized to their facade names by the same
+   rule 2 pass. Four method lines changed accordingly.
 2. **New — struct expansion**: an alias whose right-hand side resolves (via the
    existing import-dir resolution, `surfaceCtx`) to an `*ast.StructType` is
    followed by its **exported fields**, one per line, using the same layout

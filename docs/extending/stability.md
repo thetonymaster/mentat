@@ -74,9 +74,13 @@ It runs under plain `go test` (part of the standard gate), so:
 
   **Adding, removing, or re-typing an exported field of a re-exported struct fails
   `TestPublicSurfaceGolden`, and the failure names the drifted type** in
-  parentheses. The field type is rendered exactly as written in the aliased
-  package's source, so renaming a named field type is drift too. Unexported fields
-  are omitted — they are not a public promise.
+  parentheses. The field type is printed by `go/printer` and then **normalized to
+  its facade name** (feature 010, T059), so one type renders one way no matter which
+  internal package declares the struct — `*core.JudgeUsage` reads `*JudgeUsage`.
+  Renaming the underlying type is still drift, but it surfaces on the **alias line**
+  (`type JudgeUsage = core.JudgeUsage`), which a rename must update or the module will
+  not compile; field lines no longer repeat the internal name. Unexported fields are
+  omitted — they are not a public promise.
 
 - **The declaration ORDER of those fields**, via the bracketed zero-padded ordinal.
   Permuting two fields changes no field name and no field type, but it is a real
