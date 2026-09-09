@@ -162,6 +162,7 @@ func WithFailFast(stop bool) Option
 func WithFeatures(paths ...string) Option
 func WithJudge(name string, f JudgeFactory) Option
 func WithOutput(w io.Writer) Option
+func WithReporter(name string, f ReporterFactory) Option
 func WithReports(targets map[string]string) Option
 func WithStore(name string, f StoreFactory) Option
 func WithTags(expr string) Option
@@ -213,6 +214,7 @@ type Output = core.Output
 type PollSpec = config.PollSpec
 type Pricing = config.Pricing
 type Reporter = result.Reporter
+type ReporterFactory = func(Config) (Reporter, error)
 type ResolveRequest = core.ResolveRequest
 type Results = result.Results
 type RunBudget = config.RunBudget

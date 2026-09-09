@@ -147,12 +147,12 @@ outcome with full fidelity.
 ### Tests for User Story 1 (REQUIRED — Test-First) ⚠️
 
 - [X] T020 [P] [US1] In `mentat_external_test.go`, declare a type whose method set matches `Reporter` using facade names only — **confirm it fails to compile** (acceptance 1)
-- [ ] T021 [P] [US1] Add `TestCustomReporter` in `mentat_run_test.go`: register a facade-only reporter via `WithReporter`, select it via `WithReports`, run a suite, assert it received the run's outcome and produced output (acceptance 2)
-- [ ] T022 [P] [US1] Add a collision test: registering a reporter under a name already taken fails loudly naming the conflict, never last-wins (acceptance 3)
-- [ ] T023 [P] [US1] Add an error-path test: a registered reporter returning an error surfaces the failure **with the reporter named** while `Results` are still returned, and the `errors.Join` composition at `run.go:471-476` still surfaces a simultaneous budget trip (acceptance 4)
-- [ ] T024 [P] [US1] Add a **characterization** test that `WithReports` naming an unregistered reporter is a loud error naming the unknown name. Note: `EmitReports` already errors on this (`internal/report/emit.go:38`) — this pins existing behaviour through the refactor, it is not a missing error path
-- [ ] T025 [P] [US1] Assert the three built-in reporters compile against the **published** seam with their field reads unmodified — under D5 this is how SC-008 is verified, not by counting fields (acceptance 5)
-- [ ] T026 [US1] Add `TestConcurrentReporterRegistration` in `mentat_run_test.go`: two genuinely concurrent `Run` calls register **different** reporters under the **same** name; each uses its own (acceptance 7, SC-010). Must run under `-race`
+- [X] T021 [P] [US1] Add `TestCustomReporter` in `mentat_run_test.go`: register a facade-only reporter via `WithReporter`, select it via `WithReports`, run a suite, assert it received the run's outcome and produced output (acceptance 2)
+- [X] T022 [P] [US1] Add a collision test: registering a reporter under a name already taken fails loudly naming the conflict, never last-wins (acceptance 3)
+- [X] T023 [P] [US1] Add an error-path test: a registered reporter returning an error surfaces the failure **with the reporter named** while `Results` are still returned, and the `errors.Join` composition at `run.go:471-476` still surfaces a simultaneous budget trip (acceptance 4)
+- [X] T024 [P] [US1] Add a **characterization** test that `WithReports` naming an unregistered reporter is a loud error naming the unknown name. Note: `EmitReports` already errors on this (`internal/report/emit.go:38`) — this pins existing behaviour through the refactor, it is not a missing error path
+- [X] T025 [P] [US1] Assert the three built-in reporters compile against the **published** seam with their field reads unmodified — under D5 this is how SC-008 is verified, not by counting fields (acceptance 5)
+- [X] T026 [US1] Add `TestConcurrentReporterRegistration` in `mentat_run_test.go`: two genuinely concurrent `Run` calls register **different** reporters under the **same** name; each uses its own (acceptance 7, SC-010). Must run under `-race`
 
 ### Implementation — 5a: the move (PURE — no shape change)
 
@@ -181,11 +181,11 @@ outcome with full fidelity.
 
 ### Implementation — 5d: registration
 
-- [ ] T039 [US1] Add `RegisterReporter`/`Reporter` methods to `*Registry` in `internal/registry/registry.go` beside the other seams, sealed by `Build`; **delete** the package-global block at `registry.go:184-193` **together with its rationale comment** — the comment justifies the global by a call path that has not existed since the 007 recompose
-- [ ] T040 [US1] Change `EmitReports`/`emitAtomic` in `internal/report/emit.go` to take the resolved reporter set (or the `*Registry`) alongside `Results`; the caller at `run.go:457` holds both. State the signature in the code, do not leave it implicit
-- [ ] T041 [US1] Add `ReporterFactory` and `WithReporter(name string, f ReporterFactory) Option` to `run.go`, mirroring `WithComparator` (`run.go:201`); wire reporter registration into `engine.Build` (`internal/engine/build.go:56`) at the single composition root
-- [ ] T042 [US1] Confirm T020–T026 all GREEN, with T026 under `go test . -race`
-- [ ] T043 [US1] Verify the root package, `internal/result`, `internal/registry`, `internal/report` and `internal/engine` each hold ≥80% coverage
+- [X] T039 [US1] Add `RegisterReporter`/`Reporter` methods to `*Registry` in `internal/registry/registry.go` beside the other seams, sealed by `Build`; **delete** the package-global block at `registry.go:184-193` **together with its rationale comment** — the comment justifies the global by a call path that has not existed since the 007 recompose
+- [X] T040 [US1] Change `EmitReports`/`emitAtomic` in `internal/report/emit.go` to take the resolved reporter set (or the `*Registry`) alongside `Results`; the caller at `run.go:457` holds both. State the signature in the code, do not leave it implicit
+- [X] T041 [US1] Add `ReporterFactory` and `WithReporter(name string, f ReporterFactory) Option` to `run.go`, mirroring `WithComparator` (`run.go:201`); wire reporter registration into `engine.Build` (`internal/engine/build.go:56`) at the single composition root
+- [X] T042 [US1] Confirm T020–T026 all GREEN, with T026 under `go test . -race`
+- [X] T043 [US1] Verify the root package, `internal/result`, `internal/registry`, `internal/report` and `internal/engine` each hold ≥80% coverage
 
 **Checkpoint**: Six of six seams implementable; the `RunReport` name is retired.
 

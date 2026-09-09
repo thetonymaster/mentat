@@ -13,6 +13,7 @@ import (
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/engine"
 	"github.com/thetonymaster/mentat/internal/report"
+	"github.com/thetonymaster/mentat/internal/result"
 	"github.com/thetonymaster/mentat/internal/steps"
 )
 
@@ -68,6 +69,7 @@ type runOptions struct {
 	stores      []storeReg
 	comparators []comparatorReg
 	judges      []judgeReg
+	reporters   []reporterReg
 }
 
 // driverReg / storeReg / comparatorReg / judgeReg pair a registration name with its
@@ -91,6 +93,10 @@ type (
 		name    string
 		factory JudgeFactory
 	}
+	reporterReg struct {
+		name    string
+		factory ReporterFactory
+	}
 )
 
 // DriverFactory builds a custom Driver from the resolved Config. Registered under a
@@ -112,6 +118,11 @@ type StoreFactory = func(Config) (TraceStore, error)
 // deliberately all this does for now; first-class custom-comparator Gherkin steps
 // are planned future work (tracked in-repo as spec 011) that has not been started.
 type ComparatorFactory = func(Config) (Comparator, error)
+
+// ReporterFactory builds a custom Reporter from the resolved Config. Registered under a
+// name via WithReporter; WithReports then selects it by that name exactly as it selects
+// a built-in json/html/junit reporter — there is no second selection mechanism.
+type ReporterFactory = func(Config) (Reporter, error)
 
 // JudgeFactory builds a custom Judge from the resolved Config. Registered under a
 // name via WithJudge; the judge is USED only when cfg.Judge.Backend names it (like
@@ -206,6 +217,19 @@ func WithComparator(name string, f ComparatorFactory) Option {
 // cfg.Judge.Backend names it; same collision discipline as WithDriver otherwise.
 func WithJudge(name string, f JudgeFactory) Option {
 	return func(o *runOptions) { o.judges = append(o.judges, judgeReg{name: name, factory: f}) }
+}
+
+// WithReporter registers a custom Reporter factory under name, for this Run's
+// composition root only. The reporter is USED when WithReports maps that name to an
+// output path — the same way a built-in reporter is selected — so registration and
+// selection stay two separate, composable steps. Same collision discipline as
+// WithDriver: a name already taken by a built-in or an earlier registration is a loud
+// build error, never a silent last-wins.
+//
+// Scoped per Run, not package-global (feature 010, D4): two concurrent Runs may register
+// different reporters under the same name and each uses its own.
+func WithReporter(name string, f ReporterFactory) Option {
+	return func(o *runOptions) { o.reporters = append(o.reporters, reporterReg{name: name, factory: f}) }
 }
 
 // Results, ScenarioResult, RunRecord and ExitCode moved to internal/result in feature
@@ -340,6 +364,17 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 			return j.factory(c)
 		}))
 	}
+	// Reporters are registered like every other seam and USED only when WithReports
+	// names one (feature 010). The collision check runs unconditionally, so a name
+	// clashing with a built-in fails the build even if no report was requested.
+	for _, r := range ro.reporters {
+		if r.factory == nil {
+			return Results{}, fmt.Errorf("mentat: WithReporter %q: nil factory; register a non-nil ReporterFactory", r.name)
+		}
+		buildOpts = append(buildOpts, engine.WithExtraReporter(r.name, func(c config.Config) (result.Reporter, error) {
+			return r.factory(c)
+		}))
+	}
 	eng, err := engine.Build(cfg, st, cor, buildOpts...)
 	if err != nil {
 		return Results{}, fmt.Errorf("mentat: build engine: %w", err)
@@ -413,7 +448,7 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 	// error is captured (not early-returned) so a simultaneous budget trip is not masked.
 	var emitErr error
 	if len(ro.reports) > 0 {
-		if e := report.EmitReports(rep, ro.reports); e != nil {
+		if e := report.EmitReports(rep, ro.reports, eng); e != nil {
 			emitErr = fmt.Errorf("mentat: emit reports: %w", e)
 		}
 	}

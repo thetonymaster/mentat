@@ -6,10 +6,20 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
-	"github.com/thetonymaster/mentat/internal/registry"
 	"github.com/thetonymaster/mentat/internal/result"
 )
+
+// ReporterResolver is the slice of the registry EmitReports needs: look a reporter up
+// by name, and list what is registered so an unknown name can name the alternatives.
+// Consumer-defined and deliberately two methods wide — emission has no business holding
+// a whole *registry.Registry, and this keeps the dependency inspectable (Constitution
+// III: interfaces small, defined by the consumer).
+type ReporterResolver interface {
+	Reporter(name string) (result.Reporter, bool)
+	Reporters() []string
+}
 
 // EmitReports writes each requested report format atomically. targets maps a
 // registered reporter name (json/html/junit) to its output path. Each file is
@@ -23,7 +33,7 @@ import (
 // written (map order is otherwise nondeterministic). The collected failures are
 // returned via errors.Join — nil when none, and byte-identical to the single wrapped
 // error for a single-target caller.
-func EmitReports(rep result.Results, targets map[string]string) error {
+func EmitReports(rep result.Results, targets map[string]string, resolve ReporterResolver) error {
 	names := make([]string, 0, len(targets))
 	for name := range targets {
 		names = append(names, name)
@@ -33,9 +43,9 @@ func EmitReports(rep result.Results, targets map[string]string) error {
 	var errs []error
 	for _, name := range names {
 		path := targets[name]
-		r, ok := registry.Reporter(name)
+		r, ok := resolve.Reporter(name)
 		if !ok {
-			errs = append(errs, fmt.Errorf("unknown reporter %q", name))
+			errs = append(errs, fmt.Errorf("unknown reporter %q (registered: %s)", name, strings.Join(resolve.Reporters(), ", ")))
 			continue
 		}
 		if err := emitAtomic(r, rep, path); err != nil {

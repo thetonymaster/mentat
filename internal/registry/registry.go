@@ -44,6 +44,7 @@ type Registry struct {
 	matchers             map[string]core.Matcher
 	judges               map[string]JudgeFactory
 	stores               map[string]StoreFactory
+	reporters            map[string]result.Reporter
 }
 
 // New returns an empty, open Registry ready for composition-root registration.
@@ -55,6 +56,7 @@ func New() *Registry {
 		matchers:             map[string]core.Matcher{},
 		judges:               map[string]JudgeFactory{},
 		stores:               map[string]StoreFactory{},
+		reporters:            map[string]result.Reporter{},
 	}
 }
 
@@ -182,28 +184,42 @@ func (r *Registry) Store(name string) (StoreFactory, bool) {
 	return f, ok
 }
 
-// --- Reporters: package-global, POST-run rendering seam -----------------------
+// --- Reporters: per-engine, like every other seam -----------------------------
 //
-// Reporters (json/html/junit) are a post-run rendering concern: cmd/mentat calls
-// report.EmitReports AFTER Run returns Results (not the Engine), so reporters cannot
-// be per-engine. They stay package-global under their OWN mutex (reporterMu), never
-// sealed — registration is idempotent and never gated by a build seal.
-var (
-	reporterMu sync.RWMutex
-	reporters  = map[string]result.Reporter{}
-)
+// Until feature 010 reporters lived in a package-GLOBAL map under their own mutex,
+// never sealed. The justification was that "cmd/mentat calls report.EmitReports AFTER
+// Run returns Results (not the Engine), so reporters cannot be per-engine" — a call
+// path that stopped existing at the 007 recompose, which moved emission inside Run.
+//
+// The global had to go before WithReporter could exist: a per-run registration option
+// writing into shared state is exactly the reentrancy defect T010/T011 closed for the
+// other seams, and no seal would have caught it. Two concurrent Runs registering
+// different reporters under the same name would have raced, then silently used each
+// other's.
 
-// RegisterReporter registers a Reporter under the given name.
-func RegisterReporter(name string, r result.Reporter) {
-	reporterMu.Lock()
-	defer reporterMu.Unlock()
-	reporters[name] = r
+// RegisterReporter registers a Reporter under the given name. Panics if the registry
+// is already sealed.
+func (r *Registry) RegisterReporter(name string, rep result.Reporter) {
+	r.register(func() { r.reporters[name] = rep })
 }
 
 // Reporter resolves a registered Reporter by name.
-func Reporter(name string) (result.Reporter, bool) {
-	reporterMu.RLock()
-	defer reporterMu.RUnlock()
-	r, ok := reporters[name]
-	return r, ok
+func (r *Registry) Reporter(name string) (result.Reporter, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	rep, ok := r.reporters[name]
+	return rep, ok
+}
+
+// Reporters returns the registered reporter names in sorted order, so an unknown-name
+// error can name the alternatives instead of just rejecting the input.
+func (r *Registry) Reporters() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	names := make([]string, 0, len(r.reporters))
+	for n := range r.reporters {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }

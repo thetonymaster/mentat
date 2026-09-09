@@ -12,6 +12,7 @@ import (
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/expectations"
 	"github.com/thetonymaster/mentat/internal/registry"
+	"github.com/thetonymaster/mentat/internal/result"
 	"github.com/thetonymaster/mentat/internal/trace"
 )
 
@@ -203,6 +204,19 @@ func (e *Engine) Comparator(name string) (core.Comparator, bool) {
 // AggregateComparator resolves a named aggregate comparator from this engine's registry.
 func (e *Engine) AggregateComparator(name string) (core.AggregateComparator, bool) {
 	return e.reg.AggregateComparator(name)
+}
+
+// Reporter resolves a named reporter from this engine's own registry, and Reporters
+// lists what is registered. Together they satisfy report.ReporterResolver, so the
+// emission path takes the Engine rather than a *registry.Registry — the registry stays
+// unexported and emission depends on the two methods it actually uses (feature 010).
+func (e *Engine) Reporter(name string) (result.Reporter, bool) {
+	return e.reg.Reporter(name)
+}
+
+// Reporters returns this engine's registered reporter names, sorted.
+func (e *Engine) Reporters() []string {
+	return e.reg.Reporters()
 }
 
 // Drive injects the run tag, runs the SUT, then resolves and merges its trace.

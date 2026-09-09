@@ -263,9 +263,11 @@ type stubReporter struct{}
 
 func (stubReporter) Report(_ result.Results, _ io.Writer) error { return nil }
 
-// TestReporterRegistry exercises the package-global reporter seam (reporters are a
-// post-run rendering concern, not part of the per-engine registry).
+// TestReporterRegistry exercises the reporter seam, which became per-engine in feature
+// 010 (D4) — it was a package-global map until a per-run WithReporter needed it not to be.
 func TestReporterRegistry(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name    string
 		regName string
@@ -275,15 +277,52 @@ func TestReporterRegistry(t *testing.T) {
 		{name: "found", regName: "fake", lookup: "fake", wantOK: true},
 		{name: "not-found", regName: "fake", lookup: "nope", wantOK: false},
 	}
-	RegisterReporter("fake", stubReporter{})
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, ok := Reporter(tt.lookup)
+			t.Parallel()
+
+			reg := New()
+			reg.RegisterReporter(tt.regName, stubReporter{})
+			_, ok := reg.Reporter(tt.lookup)
 			if ok != tt.wantOK {
 				t.Fatalf("Reporter(%q) ok=%v, want %v", tt.lookup, ok, tt.wantOK)
 			}
 		})
 	}
+}
+
+// TestReporterRegistryIsPerEngine is the property that made D4 necessary. Two registries
+// registering DIFFERENT reporters under the SAME name must not see each other — the
+// package-global map this replaced could not offer that, so a per-run WithReporter would
+// have raced two concurrent Runs into each other's reporters.
+func TestReporterRegistryIsPerEngine(t *testing.T) {
+	t.Parallel()
+
+	a, b := New(), New()
+	a.RegisterReporter("shared-name", stubReporter{})
+
+	if _, ok := b.Reporter("shared-name"); ok {
+		t.Fatal("a registration in one registry is visible in another — reporter state is shared")
+	}
+	if _, ok := a.Reporter("shared-name"); !ok {
+		t.Fatal("registry lost its own registration")
+	}
+}
+
+// TestReporterRegistrySeals proves reporters obey the same build-once discipline as every
+// other seam. Before 010 they were explicitly exempt ("never sealed"), which is exactly
+// the hole a post-seal registration would have slipped through.
+func TestReporterRegistrySeals(t *testing.T) {
+	t.Parallel()
+
+	reg := New()
+	reg.Seal()
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("RegisterReporter after Seal did not panic; reporters must obey the seal")
+		}
+	}()
+	reg.RegisterReporter("too-late", stubReporter{})
 }
 
 // --- Feature 003 (US4): registry sealing -------------------------------------

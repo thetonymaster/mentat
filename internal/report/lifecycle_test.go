@@ -129,7 +129,8 @@ func TestJUnitReporterQualifierOnPassAndFail(t *testing.T) {
 }
 
 func TestEmitReportsAllFormats(t *testing.T) {
-	RegisterBuiltins() // idempotent; ensures json/html/junit are registered
+	reg := registry.New()
+	RegisterBuiltins(reg)
 	dir := t.TempDir()
 	rep := result.Results{Total: 1, Failed: 1, Interrupted: true,
 		Scenarios: []result.ScenarioResult{{Name: "b", Pass: false, Reasons: []string{"boom"}}}}
@@ -138,7 +139,7 @@ func TestEmitReportsAllFormats(t *testing.T) {
 		"html":  filepath.Join(dir, "r.html"),
 		"junit": filepath.Join(dir, "r.xml"),
 	}
-	if err := EmitReports(rep, targets); err != nil {
+	if err := EmitReports(rep, targets, reg); err != nil {
 		t.Fatalf("EmitReports: %v", err)
 	}
 	for name, path := range targets {
@@ -162,7 +163,9 @@ func TestEmitReportsAllFormats(t *testing.T) {
 
 func TestEmitReportsUnknownReporterErrors(t *testing.T) {
 	dir := t.TempDir()
-	err := EmitReports(result.Results{}, map[string]string{"nope": filepath.Join(dir, "x")})
+	unknownReg := registry.New()
+	RegisterBuiltins(unknownReg)
+	err := EmitReports(result.Results{}, map[string]string{"nope": filepath.Join(dir, "x")}, unknownReg)
 	if err == nil || !strings.Contains(err.Error(), "nope") {
 		t.Fatalf("expected an unknown-reporter error naming %q, got %v", "nope", err)
 	}
@@ -178,10 +181,11 @@ func (failingReporter) Report(_ result.Results, w io.Writer) error {
 }
 
 func TestEmitReportsAtomicNoPartialFileOnError(t *testing.T) {
-	registry.RegisterReporter("failing-emit-test", failingReporter{})
+	failReg := registry.New()
+	failReg.RegisterReporter("failing-emit-test", failingReporter{})
 	dir := t.TempDir()
 	path := filepath.Join(dir, "out.xml")
-	if err := EmitReports(result.Results{}, map[string]string{"failing-emit-test": path}); err == nil {
+	if err := EmitReports(result.Results{}, map[string]string{"failing-emit-test": path}, failReg); err == nil {
 		t.Fatal("expected an error from the failing reporter")
 	}
 	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {

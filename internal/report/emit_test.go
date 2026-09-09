@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/thetonymaster/mentat/internal/registry"
 	"github.com/thetonymaster/mentat/internal/result"
 )
 
@@ -21,7 +22,8 @@ import (
 // error, so the "error contains the junit failure" assertion fails on the old code.
 func TestEmitReportsAttemptsEveryTargetOnFailure(t *testing.T) {
 	t.Parallel()
-	RegisterBuiltins() // idempotent; ensures html/json/junit are registered
+	reg := registry.New()
+	RegisterBuiltins(reg)
 	rep := result.Results{Total: 1, Passed: 1, Scenarios: []result.ScenarioResult{{Name: "ok", Pass: true}}}
 
 	tests := []struct {
@@ -58,7 +60,7 @@ func TestEmitReportsAttemptsEveryTargetOnFailure(t *testing.T) {
 			dir := t.TempDir()
 			targets, wantWritten := tt.build(dir)
 
-			err := EmitReports(rep, targets)
+			err := EmitReports(rep, targets, reg)
 			if err == nil {
 				t.Fatalf("want an error for the failing target(s), got nil")
 			}
