@@ -80,6 +80,31 @@ type Expectation = core.Expectation
 // RunSpec is the driver input (the Driver.Run and Correlator.Inject argument).
 type RunSpec = core.RunSpec
 
+// HTTPSpec is the http adapter's per-target request config, carried on RunSpec.HTTP.
+// Re-exported (feature 010) because RunSpec is a Driver.Run parameter and the field is
+// frozen on the public surface: without a facade name an external driver author could
+// name the struct but never populate that field. Distinct from Config-side HTTP, which
+// is the same shape at the configuration layer.
+type HTTPSpec = core.HTTPSpec
+
+// ExtractPolicy is the answer-extraction policy a driver applies to stdout, carried on
+// RunSpec.Extract. Re-exported for the same reason as HTTPSpec. The zero value means
+// whole-stdout extraction, so a RunSpec built without it keeps today's behaviour.
+//
+// Not to be confused with ExtractConfig, the configuration-layer form of the same policy
+// that a mentat.yaml maps onto. The difference is Pattern: ExtractConfig carries the
+// uncompiled string a user writes, and config.Load compiles it ONCE into the
+// *regexp.Regexp this type carries, so extraction never recompiles per run. A driver
+// author building a RunSpec by hand wants this type; a user editing a config file is
+// writing the other one.
+//
+// Mode takes the extraction-mode values documented on core.ExtractAnswer ("whole",
+// "marker", "pattern"); the named constants are not part of the public surface, so an
+// external caller writes the string. Pattern is a precompiled *regexp.Regexp and must
+// carry at least one capture group in pattern mode — an unresolvable extraction is a
+// hard, descriptive error, never an empty-string success.
+type ExtractPolicy = core.ExtractPolicy
+
 // RunResult is the driver output (the Driver.Run return value).
 type RunResult = core.RunResult
 

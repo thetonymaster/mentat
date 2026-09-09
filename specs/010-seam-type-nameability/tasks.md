@@ -93,15 +93,15 @@ to non-zero values using facade names only. Compiling is the proof.
 
 ### Tests for User Story 2 (REQUIRED — Test-First) ⚠️
 
-- [ ] T009 [P] [US2] In `mentat_external_test.go`, add a composite literal constructing `mentat.RunSpec` with `Extract` set (mode, marker and pattern all populated) and `HTTP` set (URL, method, headers) — **confirm the package fails to compile** (the RED for a nameability defect)
-- [ ] T010 [P] [US2] In `mentat_external_test.go`, add an `ExtractPolicy` error-path test: pattern mode whose regexp has no capture group must produce the descriptive error at `internal/core/core.go:325-329`, never a silent empty answer
+- [X] T009 [P] [US2] In `mentat_external_test.go`, add a composite literal constructing `mentat.RunSpec` with `Extract` set (mode, marker and pattern all populated) and `HTTP` set (URL, method, headers) — **confirm the package fails to compile** (the RED for a nameability defect)
+- [X] T010 [P] [US2] ~~Add an `ExtractPolicy` error-path test in `mentat_external_test.go`~~ — **premise was false; no test added.** Two facts found while attempting it: (a) the capture-group error path is **already covered**, at `internal/core/core_test.go:146` ("pattern with zero capture groups is a hard error even on a match", asserting substring `no capture group`) and `internal/config/config_test.go:290`; (b) `core.ExtractAnswer` is **not on the facade**, so an external-module test cannot invoke it — the path is only reachable through a driver. Duplicating the assertion at the facade would test nothing new and could not be written where the task said. **Real gap surfaced instead**: the mode constants `ExtractWhole`/`ExtractMarker`/`ExtractPattern` are also absent from the facade, so an external driver author must write `Mode: "pattern"` as a magic string, making a typo a runtime error rather than a compile error. Documented on the `ExtractPolicy` alias; exporting the constants is a further surface widening and therefore a scope decision, not a task — **raised for decision, see T057**
 
 ### Implementation for User Story 2
 
-- [ ] T011 [US2] Add `type ExtractPolicy = core.ExtractPolicy` and `type HTTPSpec = core.HTTPSpec` to `mentat.go`, each with a doc comment justifying its place on the surface (SC-007); confirm T009 and T010 GREEN
-- [ ] T012 [US2] Regenerate the surface golden with `MENTAT_UPDATE_GOLDEN=1 go test -run TestPublicSurfaceGolden` and hand-review `specs/007-public-extension-api/contracts/public-surface.golden` — expect 2 alias lines plus 6 expanded `field (X)[nn]` lines, nothing else
-- [ ] T013 [US2] Confirm `examples/kafkaecho` still compiles **untouched** via `make example` (SC-006)
-- [ ] T014 [US2] Verify the root package holds ≥80% coverage
+- [X] T011 [US2] Add `type ExtractPolicy = core.ExtractPolicy` and `type HTTPSpec = core.HTTPSpec` to `mentat.go`, each with a doc comment justifying its place on the surface (SC-007); confirm T009 and T010 GREEN
+- [X] T012 [US2] Regenerate the surface golden with `MENTAT_UPDATE_GOLDEN=1 go test -run TestPublicSurfaceGolden` and hand-review `specs/007-public-extension-api/contracts/public-surface.golden` — expect 2 alias lines plus 6 expanded `field (X)[nn]` lines, nothing else
+- [X] T013 [US2] Confirm `examples/kafkaecho` still compiles **untouched** via `make example` (SC-006)
+- [X] T014 [US2] Verify the root package holds ≥80% coverage
 
 **Checkpoint**: A driver author can populate `RunSpec` fully. Two of four gaps closed.
 
@@ -228,6 +228,10 @@ confirm the check fails and names it; remove it and confirm green.
 - [ ] T054 Record the per-symbol justification for every newly public symbol per `specs/007-public-extension-api/contracts/public-surface.md` (SC-007). Under D5 these types are exposed *directly* rather than mirrored, so each needs its own justification written, not inherited
 - [ ] T055 Run every check in [quickstart.md](./quickstart.md) — all six, including `go test . -race` for SC-010 and the three documentation `grep`s
 - [ ] T056 Run `make ci` green, then `go-reviewer` in `gate` mode over the staged diff, with explicit attention to the hand-reviewed `public-surface.golden` diff
+
+### Open decision raised during implementation
+
+- [ ] T057 **DECISION NEEDED — export the extraction-mode constants?** Found at T010. `mentat.ExtractPolicy` is now nameable, but `ExtractWhole`/`ExtractMarker`/`ExtractPattern` (`internal/core/core.go`) are not, so every external driver author writes `Mode: "pattern"` as a magic string and a typo fails at run time instead of compile time. The same argument applies to `FailureKind*`, which **is** already exported — so the precedent favours exporting. Against: it is a further public-surface widening, a one-way door, and outside this feature's stated scope (the spec's FR-001/FR-002 are about *types* and are already satisfied — `Mode` is a settable `string`). Options: (a) export the three constants under 010 with SC-007 justifications, (b) defer to a later spec, (c) decide the string is fine and record that in `stability.md` so it is not rediscovered. **Not to be actioned without an explicit decision**
 
 ---
 

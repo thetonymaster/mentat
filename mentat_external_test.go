@@ -7,6 +7,7 @@ package mentat_test
 
 import (
 	"context"
+	"regexp"
 	"testing"
 	"time"
 
@@ -158,6 +159,40 @@ var (
 		Judge:          &mentat.JudgeUsage{Calls: 1, Model: "claude-haiku-4-5"},
 	}
 	_ = mentat.JudgeUsage{Calls: 1, InputTokens: 120, OutputTokens: 34, CostUsd: 0.0125, Model: "claude-haiku-4-5"}
+)
+
+// Nameability proof v2 (feature 010, contracts/facade-nameability-v2.md).
+//
+// The 009 sweep above walks outward from Config and Results only. It does not walk
+// SEAM SIGNATURES, which is how four types came to be frozen on the public surface
+// while remaining unwritable from outside the module. The literals below close that
+// gap for the types a Driver and a Comparator author must construct:
+//
+//	from the Driver seam — Run(ctx, spec RunSpec):
+//	  ExtractPolicy  RunSpec.Extract    ALIAS ADDED (010 US2)
+//	  HTTPSpec       RunSpec.HTTP       ALIAS ADDED (010 US2)
+//	from the Comparator seam — Compare(ctx, ev, e) (Verdict, error):
+//	  AggregateDetail  Verdict.Detail   ALIAS ADDED (010 US3)
+//
+// As above, compiling IS the proof: this file imports only the facade, so a field
+// whose own type has no facade name breaks the build.
+var (
+	// A driver author forwarding or constructing a complete RunSpec — every
+	// composite-typed field named through the facade.
+	_ = mentat.RunSpec{
+		Target:    "agent",
+		Adapter:   "http",
+		Command:   []string{"--scenario", "smoke"},
+		Env:       map[string]string{"MENTAT_RUN": "1"},
+		Input:     "what is 6*7?",
+		HTTP:      mentat.HTTPSpec{URL: "http://localhost:8080/ask", Method: "POST", Headers: map[string]string{"content-type": "application/json"}},
+		RunID:     "run-1",
+		Tags:      map[string]string{"test.run.id": "run-1"},
+		KillGrace: 10 * time.Second,
+		Extract:   mentat.ExtractPolicy{Mode: "pattern", Marker: "ANSWER:", Pattern: regexp.MustCompile(`ANSWER:\s*(.*)`)},
+	}
+	_ = mentat.HTTPSpec{URL: "http://localhost:8080/ask", Method: "POST", Headers: map[string]string{"content-type": "application/json"}}
+	_ = mentat.ExtractPolicy{Mode: "pattern", Marker: "ANSWER:", Pattern: regexp.MustCompile(`ANSWER:\s*(.*)`)}
 )
 
 // TestFacadeSurfaceExercisesContractTypes touches the evidence/contract types a

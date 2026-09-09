@@ -37,9 +37,15 @@ field (Evidence)[05] FailureMsg string
 field (ExtractConfig)[00] Mode string
 field (ExtractConfig)[01] Marker string
 field (ExtractConfig)[02] Pattern string
+field (ExtractPolicy)[00] Mode string
+field (ExtractPolicy)[01] Marker string
+field (ExtractPolicy)[02] Pattern *regexp.Regexp
 field (HTTP)[00] URL string
 field (HTTP)[01] Method string
 field (HTTP)[02] Headers map[string]string
+field (HTTPSpec)[00] URL string
+field (HTTPSpec)[01] Method string
+field (HTTPSpec)[02] Headers map[string]string
 field (JudgeConfig)[00] Backend string
 field (JudgeConfig)[01] Model string
 field (JudgeConfig)[02] Votes int
@@ -152,7 +158,9 @@ type Endpoint = config.Endpoint
 type Evidence = core.Evidence
 type Expectation = core.Expectation
 type ExtractConfig = config.ExtractConfig
+type ExtractPolicy = core.ExtractPolicy
 type HTTP = config.HTTP
+type HTTPSpec = core.HTTPSpec
 type Judge = core.Judge
 type JudgeConfig = config.JudgeConfig
 type JudgeFactory = func(Config) (Judge, error)
