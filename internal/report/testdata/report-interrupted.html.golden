@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Mentat report</title>
+<style>body{font-family:system-ui,sans-serif;margin:2rem}table{border-collapse:collapse}
+td,th{border:1px solid #ccc;padding:.25rem .5rem}.fail{color:#b00}.pass{color:#080}
+.interrupted{background:#fee;border:1px solid #b00;padding:.5rem;color:#b00;font-weight:bold}</style>
+</head><body>
+<h1>Mentat run</h1>
+<p class="interrupted">⚠ suite interrupted — 1 scenario(s) completed before the signal</p>
+<p>1 scenarios — <span class="pass">1 passed</span>,
+<span class="fail">0 failed</span> — total cost $0.0100</p>
+
+
+<h2 class="pass">green-before-signal</h2>
+<p>cost $0.0100</p>
+
+
+
+
+
+
+
+</body></html>

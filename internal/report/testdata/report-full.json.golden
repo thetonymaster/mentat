@@ -1,0 +1,105 @@
+{
+  "Scenarios": [
+    {
+      "Name": "green-plain",
+      "Tags": null,
+      "Pass": true,
+      "Reasons": null,
+      "Cost": 0.0125,
+      "Sequence": null,
+      "Runs": null,
+      "Aggregate": null
+    },
+    {
+      "Name": "green-qualified",
+      "FeatureFile": "features/budget.feature",
+      "Tags": [
+        "@smoke",
+        "@budget"
+      ],
+      "Pass": true,
+      "Reasons": null,
+      "qualifiers": [
+        "trace-completeness: bounded by ingestion window (settle 5s); spans exported later are not observed"
+      ],
+      "Cost": 0.025,
+      "Sequence": [
+        "search",
+        "fetch",
+        "summarize"
+      ],
+      "Runs": null,
+      "Aggregate": null,
+      "judge": {
+        "calls": 2,
+        "inputTokens": 1400,
+        "outputTokens": 260,
+        "costUsd": 0.0071,
+        "model": "claude-sonnet-5"
+      }
+    },
+    {
+      "Name": "red-aggregate",
+      "FeatureFile": "features/aggregate.feature",
+      "Tags": null,
+      "Pass": false,
+      "Reasons": [
+        "rate = 0.50, want \u003e= 0.80"
+      ],
+      "Cost": 0.0075,
+      "Sequence": null,
+      "Runs": null,
+      "Aggregate": {
+        "Expr": "rate(r, pass) \u003e= 0.80",
+        "Macro": "rate",
+        "Op": "\u003e=",
+        "Computed": 0.5,
+        "Expected": 0.8,
+        "PerRun": [
+          1,
+          0
+        ]
+      },
+      "DerivationNote": "sequence derivation incomplete: span missing service.name"
+    },
+    {
+      "Name": "multi-run",
+      "Tags": null,
+      "Pass": true,
+      "Reasons": null,
+      "Cost": 0.04,
+      "Sequence": [
+        "search"
+      ],
+      "Runs": [
+        {
+          "RunID": "run-0001",
+          "Passed": true,
+          "FailureKind": "",
+          "LatencyMS": 1240,
+          "Cost": 0.02
+        },
+        {
+          "RunID": "run-0002",
+          "Passed": false,
+          "FailureKind": "budget",
+          "LatencyMS": 980,
+          "Cost": 0.02
+        }
+      ],
+      "Aggregate": null
+    }
+  ],
+  "Total": 4,
+  "Passed": 3,
+  "Failed": 1,
+  "TotalCost": 0.085,
+  "StartedAt": "2026-01-02T03:04:05Z",
+  "Duration": 1500000000,
+  "judgeTotal": {
+    "calls": 2,
+    "inputTokens": 1400,
+    "outputTokens": 260,
+    "costUsd": 0.0071
+  }
+}

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Mentat report</title>
+<style>body{font-family:system-ui,sans-serif;margin:2rem}table{border-collapse:collapse}
+td,th{border:1px solid #ccc;padding:.25rem .5rem}.fail{color:#b00}.pass{color:#080}
+.interrupted{background:#fee;border:1px solid #b00;padding:.5rem;color:#b00;font-weight:bold}</style>
+</head><body>
+<h1>Mentat run</h1>
+
+<p>4 scenarios — <span class="pass">3 passed</span>,
+<span class="fail">1 failed</span> — total cost $0.0850</p>
+<p class="judge-total">judge total: 2 call(s), 1400 in / 260 out tokens — cost $0.0071</p>
+
+<h2 class="pass">green-plain</h2>
+<p>cost $0.0125</p>
+
+
+
+
+
+
+
+<h2 class="pass">green-qualified</h2>
+<p>cost $0.0250 — sequence: search fetch summarize </p>
+<p class="judge">judge: 2 call(s), 1400 in / 260 out tokens — cost $0.0071 (claude-sonnet-5)</p>
+
+<ul class="qualifiers"><li>trace-completeness: bounded by ingestion window (settle 5s); spans exported later are not observed</li></ul>
+
+
+
+
+<h2 class="fail">red-aggregate</h2>
+<p>cost $0.0075</p>
+
+<p class="derivation-note">derivation note: sequence derivation incomplete: span missing service.name</p>
+
+<ul><li>rate = 0.50, want &gt;= 0.80</li></ul>
+<p>rate = 0.50, want &gt;= 0.80</p>
+
+
+<h2 class="pass">multi-run</h2>
+<p>cost $0.0400 — sequence: search </p>
+
+
+
+
+
+<table><tr><th>run</th><th>passed</th><th>kind</th><th>latency ms</th><th>cost</th></tr>
+<tr><td>run-0001</td><td>true</td><td></td><td>1240</td><td>0.0200</td></tr><tr><td>run-0002</td><td>false</td><td>budget</td><td>980</td><td>0.0200</td></tr>
+</table>
+
+</body></html>

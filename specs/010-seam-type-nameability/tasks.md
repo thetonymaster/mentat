@@ -51,8 +51,8 @@ or its parameter type in package `mentat` is wrong.
 
 ## Phase 1: Setup
 
-- [ ] T001 Run `make ci` and record it green as the pre-change baseline; note it in the PR description
-- [ ] T002 [P] Re-verify by **symbol** (not line number) that the call sites in [plan.md](./plan.md) Risks still hold at HEAD: `registry.RegisterReporter` callers, `registry.Reporter` callers, the `//go:generate` directive in `internal/core/core.go`, and the declaration sites of `RunReport`/`ScenarioResult`/`RunRecord`/`Reporter`. Line numbers throughout this file are pinned at `f2afdda` and drift as tasks land — treat them as hints, symbols as truth
+- [X] T001 Run `make ci` and record it green as the pre-change baseline; note it in the PR description
+- [X] T002 [P] Re-verify by **symbol** (not line number) that the call sites in [plan.md](./plan.md) Risks still hold at HEAD: `registry.RegisterReporter` callers, `registry.Reporter` callers, the `//go:generate` directive in `internal/core/core.go`, and the declaration sites of `RunReport`/`ScenarioResult`/`RunRecord`/`Reporter`. Line numbers throughout this file are pinned at `f2afdda` and drift as tasks land — treat them as hints, symbols as truth
 
 **Checkpoint**: Baseline green, call sites confirmed by symbol.
 
@@ -72,12 +72,12 @@ move records the new bytes and proves nothing — FR-013's ordering clause.
 > reordered *during transcription* is an ordinary mistake that every other check in this repo
 > is blind to.
 
-- [ ] T003 [P] Add a deterministic report fixture builder in `internal/report/fixture_test.go` — a fixed report value exercising every tagged field both set and unset: a scenario with qualifiers, one with an aggregate detail, one with a derivation note, one with judge usage, one multi-run, and one plain
-- [ ] T004 [P] Add a normalization helper in `internal/report/format_golden_test.go` replacing `StartedAt`/`Duration` with fixed placeholders, following `normalizeGoldenStdout` (`mentat_golden_test.go:44-46`); prefer fixing the fixture timestamp outright and normalizing only what cannot be fixed
-- [ ] T005 Add `TestReportFormatGolden` in `internal/report/format_golden_test.go` covering json, html and junit against `internal/report/testdata/report-{json,html,junit}.golden`; run with no golden files present and **confirm RED** (depends on T003, T004)
-- [ ] T006 Mint the three goldens with `MENTAT_UPDATE_GOLDEN=1 go test ./internal/report/ -run TestReportFormatGolden`, inspect each by eye against today's output, commit them; confirm GREEN
-- [ ] T007 Falsification rehearsal recorded in `internal/report/format_golden_test.go`: (a) rename one json tag on the scenario type → confirm RED naming the format; (b) swap two field positions → confirm RED on key order; revert both, confirm GREEN
-- [ ] T008 Verify `internal/report` holds ≥80% coverage via the `/coverage` skill
+- [X] T003 [P] Add a deterministic report fixture builder in `internal/report/fixture_test.go` — a fixed report value exercising every tagged field both set and unset: a scenario with qualifiers, one with an aggregate detail, one with a derivation note, one with judge usage, one multi-run, and one plain
+- [X] T004 [P] ~~Add a normalization helper replacing `StartedAt`/`Duration` with fixed placeholders~~ — **not needed, and deliberately not added.** The task's own preference ("fix the fixture timestamp outright and normalize only what cannot be fixed") turned out to cover everything: `StartedAt` and `Duration` are literals in the fixture, and none of the report types contains a map, so there is no iteration-order nondeterminism either. A normalizer would have been dead code. Replaced by `TestReportFormatGoldenIsDeterministic` in `internal/report/format_golden_test.go`, which renders each fixture twice and compares — making determinism a checked fact rather than an assumption
+- [X] T005 Add `TestReportFormatGolden` in `internal/report/format_golden_test.go` covering json, html and junit against `internal/report/testdata/report-{json,html,junit}.golden`; run with no golden files present and **confirm RED** (depends on T003, T004)
+- [X] T006 Mint the three goldens with `MENTAT_UPDATE_GOLDEN=1 go test ./internal/report/ -run TestReportFormatGolden`, inspect each by eye against today's output, commit them; confirm GREEN
+- [X] T007 Falsification rehearsal recorded in `internal/report/format_golden_test.go`: (a) rename one json tag on the scenario type → confirm RED naming the format; (b) swap two field positions → confirm RED on key order; revert both, confirm GREEN
+- [X] T008 Verify `internal/report` holds ≥80% coverage via the `/coverage` skill
 
 **Checkpoint**: The format is guarded and the guard is proven to fail.
 
