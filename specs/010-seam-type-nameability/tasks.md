@@ -117,14 +117,14 @@ populated using facade names only.
 
 ### Tests for User Story 3 (REQUIRED — Test-First) ⚠️
 
-- [ ] T015 [P] [US3] In `mentat_external_test.go`, add a comparator returning a `mentat.Verdict` with `Detail` set — every exported member populated — and **confirm it fails to compile**
-- [ ] T016 [P] [US3] Add a test asserting a verdict carrying `Detail` has it rendered rather than dropped, in `internal/report/report_test.go` (US3 acceptance 2)
+- [X] T015 [P] [US3] In `mentat_external_test.go`, add a comparator returning a `mentat.Verdict` with `Detail` set — every exported member populated — and **confirm it fails to compile**
+- [X] T016 [P] [US3] ~~Add a test asserting a verdict carrying `Detail` has it rendered rather than dropped~~ — **already covered in composition; no duplicate added.** US3 acceptance 2 is the chain `Verdict.Detail` → `ScenarioResult.Aggregate` → rendered output, and each link is pinned: `internal/report/derive_test.go:65,289-293` asserts the mapping (`derive.go:36`, `Aggregate: v.Detail`) including `Computed`; `internal/report/html_test.go:53,63` asserts the rendered-vs-nil branch; and T006's new `report-full.html.golden:37` now pins the rendered bytes exactly (`<p>rate = 0.50, want &gt;= 0.80</p>`). A third test asserting the same chain would be duplication, not coverage
 
 ### Implementation for User Story 3
 
-- [ ] T017 [US3] Add `type AggregateDetail = core.AggregateDetail` to `mentat.go` with its surface justification; confirm T015 and T016 GREEN
-- [ ] T018 [US3] Regenerate and hand-review the surface golden — expect 1 alias line plus 6 expanded field lines
-- [ ] T019 [US3] Confirm `make example` green and coverage floors hold
+- [X] T017 [US3] Add `type AggregateDetail = core.AggregateDetail` to `mentat.go` with its surface justification; confirm T015 and T016 GREEN
+- [X] T018 [US3] Regenerate and hand-review the surface golden — expect 1 alias line plus 6 expanded field lines
+- [X] T019 [US3] Confirm `make example` green and coverage floors hold
 
 **Checkpoint**: Three of four gaps closed. Everything so far is additive and independently shippable — a valid stopping point, and the recommended MVP.
 

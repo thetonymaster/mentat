@@ -193,6 +193,28 @@ var (
 	}
 	_ = mentat.HTTPSpec{URL: "http://localhost:8080/ask", Method: "POST", Headers: map[string]string{"content-type": "application/json"}}
 	_ = mentat.ExtractPolicy{Mode: "pattern", Marker: "ANSWER:", Pattern: regexp.MustCompile(`ANSWER:\s*(.*)`)}
+
+	// A comparator author attaching the structured detail behind an aggregate
+	// verdict, so a report can show WHY the verdict landed and not merely that it
+	// did. Verdict.Detail is frozen on the surface; before 010 its type could not
+	// be named, so this field was unreachable from outside the module.
+	_ = mentat.Verdict{
+		Pass:       false,
+		Reasons:    []string{"rate = 0.50, want >= 0.80"},
+		Qualifiers: []string{"trace-completeness: bounded by ingestion window"},
+		Detail: &mentat.AggregateDetail{
+			Expr:     "rate(r, pass) >= 0.80",
+			Macro:    "rate",
+			Op:       ">=",
+			Computed: 0.5,
+			Expected: 0.8,
+			PerRun:   []float64{1, 0},
+		},
+	}
+	_ = mentat.AggregateDetail{
+		Expr: "rate(r, pass) >= 0.80", Macro: "rate", Op: ">=",
+		Computed: 0.5, Expected: 0.8, PerRun: []float64{1, 0},
+	}
 )
 
 // TestFacadeSurfaceExercisesContractTypes touches the evidence/contract types a

@@ -74,6 +74,18 @@ type Output = core.Output
 // Verdict is a comparator's pass/fail result (the Comparator contract's output).
 type Verdict = core.Verdict
 
+// AggregateDetail is the structured computed-vs-expected result behind an aggregate
+// (@runs) verdict, carried on Verdict.Detail. Re-exported (feature 010) because Verdict
+// is a Comparator.Compare return value and Detail is frozen on the public surface:
+// without a facade name a comparator author could return a Verdict but never attach the
+// detail explaining it, so reports could show that a verdict landed and not why.
+//
+// PerRun is positionally aligned with the runs of the scenario; predicate macros
+// (rate/count) contribute 1.0/0.0 per run. Non-nil only for canonical aggregate
+// comparisons — every other comparator leaves Detail nil, and a nil Detail is the normal
+// case, not a degraded one.
+type AggregateDetail = core.AggregateDetail
+
 // Expectation is the comparator-specific config (= any); the second Compare arg.
 type Expectation = core.Expectation
 

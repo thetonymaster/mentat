@@ -9,6 +9,12 @@ const KindUnspecified = trace.KindUnspecified
 const StatusError = trace.StatusError
 const StatusOk = trace.StatusOk
 const StatusUnset = trace.StatusUnset
+field (AggregateDetail)[00] Expr string
+field (AggregateDetail)[01] Macro string
+field (AggregateDetail)[02] Op string
+field (AggregateDetail)[03] Computed float64
+field (AggregateDetail)[04] Expected float64
+field (AggregateDetail)[05] PerRun []float64
 field (Completeness)[00] Mode string
 field (Completeness)[01] SettleRaw string
 field (Completeness)[02] Settle time.Duration
@@ -146,6 +152,7 @@ method (TraceStore) Caps() StoreCaps
 method (TraceStore) DecodePayload(id string, payload []byte) (*trace.Trace, error)
 method (TraceStore) FetchPayload(ctx context.Context, id string) ([]byte, error)
 method (TraceStore) Query(ctx context.Context, q TraceQuery) ([]TraceRef, error)
+type AggregateDetail = core.AggregateDetail
 type Comparator = core.Comparator
 type ComparatorFactory = func(Config) (Comparator, error)
 type Completeness = config.Completeness
