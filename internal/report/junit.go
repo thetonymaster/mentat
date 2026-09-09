@@ -6,7 +6,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/result"
 )
 
 // junitReporter renders a RunReport as JUnit XML from the collector's data (rather
@@ -47,7 +47,7 @@ type junitFailure struct {
 	Body    string `xml:",chardata"`
 }
 
-func (junitReporter) Report(rep core.RunReport, w io.Writer) error {
+func (junitReporter) Report(rep result.Results, w io.Writer) error {
 	suite := junitSuite{Name: "mentat", Tests: rep.Total, Failures: rep.Failed}
 	// The interrupted marker is a suite-level property, present only when set — its
 	// absence means the run completed (mirrors the JSON omitempty marker).

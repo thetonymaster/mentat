@@ -146,7 +146,7 @@ outcome with full fidelity.
 
 ### Tests for User Story 1 (REQUIRED — Test-First) ⚠️
 
-- [ ] T020 [P] [US1] In `mentat_external_test.go`, declare a type whose method set matches `Reporter` using facade names only — **confirm it fails to compile** (acceptance 1)
+- [X] T020 [P] [US1] In `mentat_external_test.go`, declare a type whose method set matches `Reporter` using facade names only — **confirm it fails to compile** (acceptance 1)
 - [ ] T021 [P] [US1] Add `TestCustomReporter` in `mentat_run_test.go`: register a facade-only reporter via `WithReporter`, select it via `WithReports`, run a suite, assert it received the run's outcome and produced output (acceptance 2)
 - [ ] T022 [P] [US1] Add a collision test: registering a reporter under a name already taken fails loudly naming the conflict, never last-wins (acceptance 3)
 - [ ] T023 [P] [US1] Add an error-path test: a registered reporter returning an error surfaces the failure **with the reporter named** while `Results` are still returned, and the `errors.Join` composition at `run.go:471-476` still surfaces a simultaneous budget trip (acceptance 4)
@@ -160,24 +160,24 @@ outcome with full fidelity.
 > green throughout. A red golden here means the transcription is wrong — **fix the code, never
 > the golden.**
 
-- [ ] T027 [US1] Create `internal/result/result.go` and move `RunReport` (renamed `Results`), `ScenarioResult`, `RunRecord` and `Reporter` out of `internal/core/core.go:334-399` **verbatim** — field sets, declaration order and struct tags byte-identical. The package imports `internal/core` for `AggregateDetail` and `JudgeUsage`; `core` must import nothing back
-- [ ] T028 [US1] Move `Results.ExitCode()` from `run.go:231` to `internal/result/result.go` with its doc comment and the 130/1/0 contract intact
-- [ ] T029 [US1] Re-shape the seam in `internal/result/result.go` to `Report(res Results, w io.Writer) error` (FR-012 — exactly one `Reporter` interface exists after this)
-- [ ] T030 [US1] Update `internal/report/{collector,derive,ledger,json,html,junit,emit}.go` and `internal/registry/registry.go` to the moved types — **parameter and field types renamed only**; no field read changes
-- [ ] T031 [US1] Run `go test ./internal/report/ -run TestReportFormatGolden` — **MUST be GREEN**. This is the task Phase 2 exists for
-- [ ] T032 [US1] Run `make ci` — the whole module builds and tests green after a pure move, before any widening
+- [X] T027 [US1] Create `internal/result/result.go` and move `RunReport` (renamed `Results`), `ScenarioResult`, `RunRecord` and `Reporter` out of `internal/core/core.go:334-399` **verbatim** — field sets, declaration order and struct tags byte-identical. The package imports `internal/core` for `AggregateDetail` and `JudgeUsage`; `core` must import nothing back
+- [X] T028 [US1] Move `Results.ExitCode()` from `run.go:231` to `internal/result/result.go` with its doc comment and the 130/1/0 contract intact
+- [X] T029 [US1] Re-shape the seam in `internal/result/result.go` to `Report(res Results, w io.Writer) error` (FR-012 — exactly one `Reporter` interface exists after this)
+- [X] T030 [US1] Update `internal/report/{collector,derive,ledger,json,html,junit,emit}.go` and `internal/registry/registry.go` to the moved types — **parameter and field types renamed only**; no field read changes
+- [X] T031 [US1] Run `go test ./internal/report/ -run TestReportFormatGolden` — **MUST be GREEN**. This is the task Phase 2 exists for
+- [X] T032 [US1] Run `make ci` — the whole module builds and tests green after a pure move, before any widening
 
 ### Implementation — 5b: the facade
 
-- [ ] T033 [US1] In `mentat.go`, alias `Results`, `ScenarioResult`, `RunRecord` and `Reporter` to their `internal/result` declarations; delete the facade's own `Results`/`ScenarioResult` declarations and `toResults` (`run.go:483`, called at `:476` and `:478`) — the conversion no longer exists
-- [ ] T034 [US1] Add `RunIDs []string` with tag `json:"-"` to `result.ScenarioResult`, derived from `Runs` in order; add a test pinning the correspondence so the two can never disagree. This is the **only** field this feature adds to the moved types
-- [ ] T035 [US1] Rewrite the rationale comment at `mentat.go:59-62` so only the `Correlator` half of the "no concrete external demand" note survives (FR-015)
-- [ ] T036 [US1] Regenerate and hand-review the surface golden. Expect these types to change from inline declarations (`public-surface.golden:169`, `:173`) to **aliases expanded per field** — roughly twenty added lines, not two rewritten ones
-- [ ] T037 [US1] Run `make example` — SC-006 checked **here**, at the phase that reorders fields and breaks a signature, not two phases later
+- [X] T033 [US1] In `mentat.go`, alias `Results`, `ScenarioResult`, `RunRecord` and `Reporter` to their `internal/result` declarations; delete the facade's own `Results`/`ScenarioResult` declarations and `toResults` (`run.go:483`, called at `:476` and `:478`) — the conversion no longer exists
+- [X] T034 [US1] Add `RunIDs []string` with tag `json:"-"` to `result.ScenarioResult`, derived from `Runs` in order; add a test pinning the correspondence so the two can never disagree. This is the **only** field this feature adds to the moved types
+- [X] T035 [US1] Rewrite the rationale comment at `mentat.go:59-62` so only the `Correlator` half of the "no concrete external demand" note survives (FR-015)
+- [X] T036 [US1] Regenerate and hand-review the surface golden. Expect these types to change from inline declarations (`public-surface.golden:169`, `:173`) to **aliases expanded per field** — roughly twenty added lines, not two rewritten ones
+- [X] T037 [US1] Run `make example` — SC-006 checked **here**, at the phase that reorders fields and breaks a signature, not two phases later
 
 ### Implementation — 5c: the mock
 
-- [ ] T038 [US1] Resolve `MockReporter`'s home explicitly. The only `//go:generate` is `internal/core/core.go:3` (`-source=core.go`); T027 removes `Reporter` from that file, so `go generate ./...` would **delete** the mock while `internal/registry/registry_test.go:265` still uses it. Either add a `//go:generate mockgen` directive for `internal/result`, or replace the mock with a value stub — then regenerate, commit, and update `registry_test.go:265` and `internal/report/lifecycle_test.go:181`
+- [X] T038 [US1] Resolve `MockReporter`'s home explicitly. The only `//go:generate` is `internal/core/core.go:3` (`-source=core.go`); T027 removes `Reporter` from that file, so `go generate ./...` would **delete** the mock while `internal/registry/registry_test.go:265` still uses it. Either add a `//go:generate mockgen` directive for `internal/result`, or replace the mock with a value stub — then regenerate, commit, and update `registry_test.go:265` and `internal/report/lifecycle_test.go:181`
 
 ### Implementation — 5d: registration
 
@@ -228,6 +228,10 @@ confirm the check fails and names it; remove it and confirm green.
 - [ ] T054 Record the per-symbol justification for every newly public symbol per `specs/007-public-extension-api/contracts/public-surface.md` (SC-007). Under D5 these types are exposed *directly* rather than mirrored, so each needs its own justification written, not inherited
 - [ ] T055 Run every check in [quickstart.md](./quickstart.md) — all six, including `go test . -race` for SC-010 and the three documentation `grep`s
 - [ ] T056 Run `make ci` green, then `go-reviewer` in `gate` mode over the staged diff, with explicit attention to the hand-reviewed `public-surface.golden` diff
+
+### Unplanned work done during implementation
+
+- [X] T058 **Surface gate: render methods on aliased structs.** Found at T036. Aliasing `Results` moved its methods into `internal/result`, where the renderer's `FuncDecl` branch never looks — so `func (r Results) ExitCode() int`, the documented 130/1/0 exit-status contract, **silently left the golden with the gate still green**. The renderer expanded aliased *interfaces* to their method sets and aliased *structs* to their field sets only; the struct method-set case was missing, and D5 walked straight into it. Fixed by `renderStructMethods` in `surface_test.go` (the method-side complement of 009's `renderStructFields`), matching value and pointer receivers alike since both are reachable through an alias. Mutation rehearsal recorded in the function's doc comment: appending `func (r Results) XProbe() bool` now fails the gate naming `method (Results) XProbe() bool`, where before the same experiment produced no diff at all. This was a regression **introduced by this feature**, not a pre-existing accepted boundary, so it is fixed rather than documented
 
 ### Open decision raised during implementation
 

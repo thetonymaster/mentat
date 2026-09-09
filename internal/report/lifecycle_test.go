@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/registry"
+	"github.com/thetonymaster/mentat/internal/result"
 )
 
 // Feature 003 (US2): the interrupted marker must render in every emitted format,
@@ -33,7 +33,7 @@ func TestInterruptedMarkerJSON(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			rep := core.RunReport{Total: 1, Passed: 1, Interrupted: tt.interrupted}
+			rep := result.Results{Total: 1, Passed: 1, Interrupted: tt.interrupted}
 			if err := (jsonReporter{}).Report(rep, &buf); err != nil {
 				t.Fatalf("Report: %v", err)
 			}
@@ -48,10 +48,10 @@ func TestInterruptedMarkerJSON(t *testing.T) {
 }
 
 func TestInterruptedBannerHTML(t *testing.T) {
-	interrupted := core.RunReport{Total: 2, Passed: 1, Failed: 1, Interrupted: true,
-		Scenarios: []core.ScenarioResult{{Name: "a", Pass: true}, {Name: "b", Pass: false, Reasons: []string{"x"}}}}
-	clean := core.RunReport{Total: 1, Passed: 1,
-		Scenarios: []core.ScenarioResult{{Name: "a", Pass: true}}}
+	interrupted := result.Results{Total: 2, Passed: 1, Failed: 1, Interrupted: true,
+		Scenarios: []result.ScenarioResult{{Name: "a", Pass: true}, {Name: "b", Pass: false, Reasons: []string{"x"}}}}
+	clean := result.Results{Total: 1, Passed: 1,
+		Scenarios: []result.ScenarioResult{{Name: "a", Pass: true}}}
 
 	var ib, cb bytes.Buffer
 	if err := (htmlReporter{}).Report(interrupted, &ib); err != nil {
@@ -69,13 +69,13 @@ func TestInterruptedBannerHTML(t *testing.T) {
 }
 
 func TestJUnitReporterMarkerAndShape(t *testing.T) {
-	interrupted := core.RunReport{Total: 2, Passed: 1, Failed: 1, Interrupted: true,
-		Scenarios: []core.ScenarioResult{
+	interrupted := result.Results{Total: 2, Passed: 1, Failed: 1, Interrupted: true,
+		Scenarios: []result.ScenarioResult{
 			{Name: "ok", Pass: true},
 			{Name: "boom", Pass: false, Reasons: []string{"assertion failed: rate too low"}},
 		}}
-	clean := core.RunReport{Total: 1, Passed: 1,
-		Scenarios: []core.ScenarioResult{{Name: "ok", Pass: true}}}
+	clean := result.Results{Total: 1, Passed: 1,
+		Scenarios: []result.ScenarioResult{{Name: "ok", Pass: true}}}
 
 	var ib, cb bytes.Buffer
 	if err := (junitReporter{}).Report(interrupted, &ib); err != nil {
@@ -105,7 +105,7 @@ func TestJUnitReporterMarkerAndShape(t *testing.T) {
 // completeness qualifier is emitted on a PASSING testcase too. Since the <failure>
 // body is fail-only, a passing case carries the qualifier in a <system-out> element.
 func TestJUnitReporterQualifierOnPassAndFail(t *testing.T) {
-	rep := core.RunReport{Total: 3, Passed: 2, Failed: 1, Scenarios: []core.ScenarioResult{
+	rep := result.Results{Total: 3, Passed: 2, Failed: 1, Scenarios: []result.ScenarioResult{
 		{Name: "green-bounded", Pass: true, Qualifiers: []string{qualifierText}},
 		{Name: "red-bounded", Pass: false, Reasons: []string{"boom"}, Qualifiers: []string{qualifierText}},
 		{Name: "green-plain", Pass: true},
@@ -131,8 +131,8 @@ func TestJUnitReporterQualifierOnPassAndFail(t *testing.T) {
 func TestEmitReportsAllFormats(t *testing.T) {
 	RegisterBuiltins() // idempotent; ensures json/html/junit are registered
 	dir := t.TempDir()
-	rep := core.RunReport{Total: 1, Failed: 1, Interrupted: true,
-		Scenarios: []core.ScenarioResult{{Name: "b", Pass: false, Reasons: []string{"boom"}}}}
+	rep := result.Results{Total: 1, Failed: 1, Interrupted: true,
+		Scenarios: []result.ScenarioResult{{Name: "b", Pass: false, Reasons: []string{"boom"}}}}
 	targets := map[string]string{
 		"json":  filepath.Join(dir, "r.json"),
 		"html":  filepath.Join(dir, "r.html"),
@@ -151,7 +151,7 @@ func TestEmitReportsAllFormats(t *testing.T) {
 		}
 	}
 	data, _ := os.ReadFile(targets["json"])
-	var round core.RunReport
+	var round result.Results
 	if err := json.Unmarshal(data, &round); err != nil {
 		t.Fatalf("json report invalid: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestEmitReportsAllFormats(t *testing.T) {
 
 func TestEmitReportsUnknownReporterErrors(t *testing.T) {
 	dir := t.TempDir()
-	err := EmitReports(core.RunReport{}, map[string]string{"nope": filepath.Join(dir, "x")})
+	err := EmitReports(result.Results{}, map[string]string{"nope": filepath.Join(dir, "x")})
 	if err == nil || !strings.Contains(err.Error(), "nope") {
 		t.Fatalf("expected an unknown-reporter error naming %q, got %v", "nope", err)
 	}
@@ -172,7 +172,7 @@ func TestEmitReportsUnknownReporterErrors(t *testing.T) {
 // failure must leave NO final report file (only a temp, which is cleaned up).
 type failingReporter struct{}
 
-func (failingReporter) Report(_ core.RunReport, w io.Writer) error {
+func (failingReporter) Report(_ result.Results, w io.Writer) error {
 	_, _ = w.Write([]byte("partial garbage"))
 	return errors.New("boom mid-encode")
 }
@@ -181,7 +181,7 @@ func TestEmitReportsAtomicNoPartialFileOnError(t *testing.T) {
 	registry.RegisterReporter("failing-emit-test", failingReporter{})
 	dir := t.TempDir()
 	path := filepath.Join(dir, "out.xml")
-	if err := EmitReports(core.RunReport{}, map[string]string{"failing-emit-test": path}); err == nil {
+	if err := EmitReports(result.Results{}, map[string]string{"failing-emit-test": path}); err == nil {
 		t.Fatal("expected an error from the failing reporter")
 	}
 	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {

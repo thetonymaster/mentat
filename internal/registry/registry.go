@@ -6,6 +6,7 @@ import (
 
 	"github.com/thetonymaster/mentat/internal/config"
 	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/result"
 )
 
 const sealedMsg = "registry: Register called after engine build — registries are sealed at the composition root"
@@ -189,18 +190,18 @@ func (r *Registry) Store(name string) (StoreFactory, bool) {
 // sealed — registration is idempotent and never gated by a build seal.
 var (
 	reporterMu sync.RWMutex
-	reporters  = map[string]core.Reporter{}
+	reporters  = map[string]result.Reporter{}
 )
 
 // RegisterReporter registers a Reporter under the given name.
-func RegisterReporter(name string, r core.Reporter) {
+func RegisterReporter(name string, r result.Reporter) {
 	reporterMu.Lock()
 	defer reporterMu.Unlock()
 	reporters[name] = r
 }
 
 // Reporter resolves a registered Reporter by name.
-func Reporter(name string) (core.Reporter, bool) {
+func Reporter(name string) (result.Reporter, bool) {
 	reporterMu.RLock()
 	defer reporterMu.RUnlock()
 	r, ok := reporters[name]

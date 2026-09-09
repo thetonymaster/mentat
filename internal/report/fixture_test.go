@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/result"
 )
 
 // Fixtures for the report-format golden (spec 010, FR-013). They are FIXED values, not
@@ -28,9 +29,9 @@ var goldenFixtureStart = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 // fullFixture is the rich case: a completed run (Interrupted absent) carrying a suite
 // judge total (JudgeTotal present), with four scenarios that between them set and leave
 // unset every per-scenario tagged field.
-func fullFixture() core.RunReport {
-	return core.RunReport{
-		Scenarios: []core.ScenarioResult{
+func fullFixture() result.Results {
+	return result.Results{
+		Scenarios: []result.ScenarioResult{
 			// 1. Plain pass — every optional field absent. This row is what catches a
 			// dropped `omitempty` on FeatureFile, Qualifiers, DerivationNote and Judge.
 			{
@@ -68,7 +69,7 @@ func fullFixture() core.RunReport {
 				Pass:     true,
 				Cost:     0.0400,
 				Sequence: []string{"search"},
-				Runs: []core.RunRecord{
+				Runs: []result.RunRecord{
 					{RunID: "run-0001", Passed: true, LatencyMS: 1240, Cost: 0.0200},
 					{RunID: "run-0002", Passed: false, FailureKind: "budget", LatencyMS: 980, Cost: 0.0200},
 				},
@@ -91,9 +92,9 @@ func fullFixture() core.RunReport {
 // interruptedFixture is the complement: a run cut short (Interrupted PRESENT) that made no
 // judge call (JudgeTotal ABSENT). Together with fullFixture this covers both suite-level
 // tags in both states — neither report can do it alone.
-func interruptedFixture() core.RunReport {
-	return core.RunReport{
-		Scenarios: []core.ScenarioResult{
+func interruptedFixture() result.Results {
+	return result.Results{
+		Scenarios: []result.ScenarioResult{
 			{Name: "green-before-signal", Pass: true, Cost: 0.0100},
 		},
 		Total:       1,

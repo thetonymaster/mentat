@@ -8,16 +8,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/result"
 )
 
 // TestJSONReporterQualifiers pins the T018 json requirement (E1, SC-003): the
 // completeness qualifier serializes verbatim under the additive "qualifiers" key on
 // pass AND fail, and a scenario with no qualifier omits the key (omitempty).
 func TestJSONReporterQualifiers(t *testing.T) {
-	rep := core.RunReport{
+	rep := result.Results{
 		Total: 3, Passed: 2, Failed: 1,
-		Scenarios: []core.ScenarioResult{
+		Scenarios: []result.ScenarioResult{
 			{Name: "green-bounded", Pass: true, Qualifiers: []string{qualifierText}},
 			{Name: "red-bounded", Pass: false, Reasons: []string{"boom"}, Qualifiers: []string{qualifierText}},
 			{Name: "green-plain", Pass: true},
@@ -27,7 +27,7 @@ func TestJSONReporterQualifiers(t *testing.T) {
 	if err := (jsonReporter{}).Report(rep, &buf); err != nil {
 		t.Fatalf("report: %v", err)
 	}
-	var round core.RunReport
+	var round result.Results
 	if err := json.Unmarshal(buf.Bytes(), &round); err != nil {
 		t.Fatalf("not valid json: %v", err)
 	}
@@ -47,19 +47,19 @@ func TestJSONReporterQualifiers(t *testing.T) {
 
 func TestJSONReporter(t *testing.T) {
 	var buf bytes.Buffer
-	rep := core.RunReport{
+	rep := result.Results{
 		Total:     1,
 		Passed:    0,
 		Failed:    1,
 		TotalCost: 0.01,
-		Scenarios: []core.ScenarioResult{
+		Scenarios: []result.ScenarioResult{
 			{Name: "s", Pass: false, Reasons: []string{"rate = 0.50, want >= 0.80"}, Cost: 0.01},
 		},
 	}
 	if err := (jsonReporter{}).Report(rep, &buf); err != nil {
 		t.Fatalf("report: %v", err)
 	}
-	var round core.RunReport
+	var round result.Results
 	if err := json.Unmarshal(buf.Bytes(), &round); err != nil {
 		t.Fatalf("not valid json: %v", err)
 	}

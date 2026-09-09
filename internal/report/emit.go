@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/registry"
+	"github.com/thetonymaster/mentat/internal/result"
 )
 
 // EmitReports writes each requested report format atomically. targets maps a
@@ -23,7 +23,7 @@ import (
 // written (map order is otherwise nondeterministic). The collected failures are
 // returned via errors.Join — nil when none, and byte-identical to the single wrapped
 // error for a single-target caller.
-func EmitReports(rep core.RunReport, targets map[string]string) error {
+func EmitReports(rep result.Results, targets map[string]string) error {
 	names := make([]string, 0, len(targets))
 	for name := range targets {
 		names = append(names, name)
@@ -48,7 +48,7 @@ func EmitReports(rep core.RunReport, targets map[string]string) error {
 // emitAtomic renders rep through r into a temp file in path's directory, then
 // renames it to path. On any failure the temp file is removed and path is left
 // untouched, so a partial render never becomes the final artifact.
-func emitAtomic(r core.Reporter, rep core.RunReport, path string) error {
+func emitAtomic(r result.Reporter, rep result.Results, path string) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
 	if err != nil {

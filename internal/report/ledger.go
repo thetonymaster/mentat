@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/result"
 )
 
 // JudgeCost prices one judge-usage ledger row in USD, mirroring the SUT-cost rules
@@ -38,7 +39,7 @@ func JudgeCost(u core.JudgeUsage, pricing core.Pricing) (float64, error) {
 // unknown/ambiguous judge model is returned as a wrapped error naming the offending
 // scenario, so the caller emits nothing rather than a report with a fabricated $0.
 // A run with no judge usage is a no-op — Price leaves the report byte-identical.
-func Price(rep *core.RunReport, pricing core.Pricing) error {
+func Price(rep *result.Results, pricing core.Pricing) error {
 	var totalCost float64
 	for i := range rep.Scenarios {
 		j := rep.Scenarios[i].Judge
@@ -87,7 +88,7 @@ func NewBudget(maxUSD float64, pricing core.Pricing) *Budget {
 // slips through after the abort signal cannot mask the original cause — but their
 // completed cost is STILL folded into Spent(), so the accounting never underreports
 // actual usage once the budget has tripped.
-func (b *Budget) Add(sr core.ScenarioResult) error {
+func (b *Budget) Add(sr result.ScenarioResult) error {
 	if b.max <= 0 {
 		return nil // unlimited: no accounting, no cost computed (pre-US6 behaviour)
 	}

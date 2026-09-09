@@ -81,9 +81,23 @@ field (PollSpec)[02] StableFor int
 field (PollSpec)[03] SearchLimit int
 field (ResolveRequest)[00] RunID string
 field (ResolveRequest)[01] Contract CompletenessContract
+field (Results)[00] Scenarios []ScenarioResult
+field (Results)[01] Total int
+field (Results)[02] Passed int
+field (Results)[03] Failed int
+field (Results)[04] TotalCost float64
+field (Results)[05] StartedAt time.Time
+field (Results)[06] Duration time.Duration
+field (Results)[07] Interrupted bool
+field (Results)[08] JudgeTotal *core.JudgeUsage
 field (RunBudget)[00] Timeout time.Duration
 field (RunBudget)[01] Unbounded bool
 field (RunBudget)[02] KillGrace time.Duration
+field (RunRecord)[00] RunID string
+field (RunRecord)[01] Passed bool
+field (RunRecord)[02] FailureKind string
+field (RunRecord)[03] LatencyMS int64
+field (RunRecord)[04] Cost float64
 field (RunResult)[00] RunID string
 field (RunResult)[01] PrimaryTraceID string
 field (RunResult)[02] Output Output
@@ -97,6 +111,19 @@ field (RunSpec)[06] RunID string
 field (RunSpec)[07] Tags map[string]string
 field (RunSpec)[08] KillGrace time.Duration
 field (RunSpec)[09] Extract ExtractPolicy
+field (ScenarioResult)[00] Name string
+field (ScenarioResult)[01] FeatureFile string
+field (ScenarioResult)[02] Tags []string
+field (ScenarioResult)[03] Pass bool
+field (ScenarioResult)[04] Reasons []string
+field (ScenarioResult)[05] Qualifiers []string
+field (ScenarioResult)[06] Cost float64
+field (ScenarioResult)[07] Sequence []string
+field (ScenarioResult)[08] Runs []RunRecord
+field (ScenarioResult)[09] Aggregate *core.AggregateDetail
+field (ScenarioResult)[10] DerivationNote string
+field (ScenarioResult)[11] Judge *core.JudgeUsage
+field (ScenarioResult)[12] RunIDs []string
 field (Span)[00] ID string
 field (Span)[01] ParentID string
 field (Span)[02] Name string
@@ -126,7 +153,6 @@ field (Verdict)[01] Reasons []string
 field (Verdict)[02] Qualifiers []string
 field (Verdict)[03] Detail *AggregateDetail
 field (Verdict)[04] Judge *JudgeUsage
-func (r Results) ExitCode() int
 func LoadConfig(path string) (Config, error)
 func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error)
 func WithComparator(name string, f ComparatorFactory) Option
@@ -146,8 +172,15 @@ method (Correlator) Inject(ctx context.Context, spec *RunSpec) (runID string)
 method (Correlator) Resolve(ctx context.Context, store TraceStore, req ResolveRequest) (*trace.Trace, error)
 method (Correlator) ResolveComplete(ctx context.Context, store TraceStore, runID string) (*trace.Trace, error)
 method (Driver) Run(ctx context.Context, spec RunSpec) (RunResult, error)
+method (ExtractConfig) Policy() core.ExtractPolicy
 method (Judge) Judge(ctx context.Context, req JudgeRequest) (JudgeVerdict, error)
-method (Reporter) Report(rep RunReport, w io.Writer) error
+method (Reporter) Report(res Results, w io.Writer) error
+method (Results) ExitCode() int
+method (Span) Attr(k string) string
+method (Span) AttrFloat(k string) (float64, bool)
+method (Span) AttrInt(k string) (int, bool)
+method (Trace) ByOp(op string) []*Span
+method (Trace) Envelope() time.Duration
 method (TraceStore) Caps() StoreCaps
 method (TraceStore) DecodePayload(id string, payload []byte) (*trace.Trace, error)
 method (TraceStore) FetchPayload(ctx context.Context, id string) ([]byte, error)
@@ -179,13 +212,14 @@ type Option func(*runOptions)
 type Output = core.Output
 type PollSpec = config.PollSpec
 type Pricing = config.Pricing
-type Reporter = core.Reporter
+type Reporter = result.Reporter
 type ResolveRequest = core.ResolveRequest
-type Results struct { Scenarios []ScenarioResult Passed int Failed int Interrupted bool TotalCost float64 JudgeTotal *JudgeUsage }
+type Results = result.Results
 type RunBudget = config.RunBudget
+type RunRecord = result.RunRecord
 type RunResult = core.RunResult
 type RunSpec = core.RunSpec
-type ScenarioResult struct { Name string FeatureFile string Pass bool Reasons []string Cost float64 RunIDs []string DerivationNote string Judge *JudgeUsage }
+type ScenarioResult = result.ScenarioResult
 type Span = trace.Span
 type StoreCaps = core.StoreCaps
 type StoreFactory = func(Config) (TraceStore, error)

@@ -32,6 +32,7 @@ package mentat
 import (
 	"github.com/thetonymaster/mentat/internal/config"
 	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/result"
 	"github.com/thetonymaster/mentat/internal/trace"
 )
 
@@ -56,10 +57,36 @@ type Judge = core.Judge
 // no concrete external demand for one has appeared.
 type Correlator = core.Correlator
 
-// Reporter is the report-rendering seam. Exposed as a type because contracts
-// reference it; it deliberately has no registration hook yet, for the same reason
-// as Correlator.
-type Reporter = core.Reporter
+// Reporter is the report-rendering seam: a registrable adapter (WithReporter hook).
+// An implementation receives the same Results a library caller receives from Run —
+// there is no richer internal input, so a custom reporter can render everything the
+// built-in json/html/junit reporters do (feature 010).
+type Reporter = result.Reporter
+
+// --- Run result types (aliases to internal/result) ---
+//
+// These are the values a completed Run produces and a Reporter renders. They are
+// aliases rather than facade-declared structs for a structural reason (feature 010,
+// D5): this package imports internal/report, internal/engine and internal/registry,
+// so a type any of those must CONSUME cannot be declared here without an import
+// cycle. Only terminal types — produced at the facade and never passed back down —
+// could be, and a seam's parameter type is by definition not terminal.
+
+// Results is the structured outcome of a Run — the library-mode equivalent of the
+// CLI's report + exit status, and the value a Reporter renders. A red suite is
+// reflected here (Failed > 0), not as a Run error: Run returns a non-nil error only
+// for harness/composition failures. JudgeTotal is nil unless a scenario actually made
+// a judge call (no fabricated zeros).
+type Results = result.Results
+
+// ScenarioResult is one scenario's outcome. RunIDs are the injected run ids of the
+// scenario's runs (>1 for a @runs(N) scenario) and are derived from Runs; Judge is
+// this scenario's judge ledger, nil when it made no judge call.
+type ScenarioResult = result.ScenarioResult
+
+// RunRecord is one run within a scenario — one element per @runs iteration. Reached
+// through ScenarioResult.Runs, which a reporter renders as the per-run table.
+type RunRecord = result.RunRecord
 
 // --- Evidence & contract types (aliases to internal/core) ---
 

@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"io"
 	"sort"
 	"strings"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"github.com/thetonymaster/mentat/internal/config"
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/core/mocks"
+	"github.com/thetonymaster/mentat/internal/result"
 	"github.com/thetonymaster/mentat/internal/store"
 	"go.uber.org/mock/gomock"
 )
@@ -250,6 +252,17 @@ func TestJudgeRegistry(t *testing.T) {
 	}
 }
 
+// stubReporter is a trivial value stub, not a gomock mock. This test registers a value
+// and looks it up by name; it never asserts a call count or an argument, so per the
+// constitution's mocks rule ("trivial value stubs are acceptable only when no call-count
+// or argument verification is needed") a stub is the right tool. It also keeps the
+// Reporter seam mock-free after feature 010 moved the interface to internal/result — the
+// only `go:generate mockgen` directive is sourced from core.go, so a generated
+// MockReporter would need a second mocks package for a single call-free registration.
+type stubReporter struct{}
+
+func (stubReporter) Report(_ result.Results, _ io.Writer) error { return nil }
+
 // TestReporterRegistry exercises the package-global reporter seam (reporters are a
 // post-run rendering concern, not part of the per-engine registry).
 func TestReporterRegistry(t *testing.T) {
@@ -262,7 +275,7 @@ func TestReporterRegistry(t *testing.T) {
 		{name: "found", regName: "fake", lookup: "fake", wantOK: true},
 		{name: "not-found", regName: "fake", lookup: "nope", wantOK: false},
 	}
-	RegisterReporter("fake", mocks.NewMockReporter(gomock.NewController(t)))
+	RegisterReporter("fake", stubReporter{})
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, ok := Reporter(tt.lookup)

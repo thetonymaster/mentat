@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/result"
 )
 
 // The emitted report format is a compatibility promise to everyone parsing a Mentat report
@@ -51,7 +51,7 @@ import (
 //
 //	ok  github.com/thetonymaster/mentat
 //
-// The surface gate PASSES. core.ScenarioResult is reached only as the type of a field, so
+// The surface gate PASSES. result.ScenarioResult is reached only as the type of a field, so
 // its own field set is not expanded into the golden (stability.md boundary 3) — a reorder
 // there changes every user's JSON key order and produces zero surface-golden diff. The two
 // gates are complementary and neither subsumes the other.
@@ -60,7 +60,7 @@ const formatGoldenUpdateEnv = "MENTAT_UPDATE_GOLDEN"
 // reporterFor returns the built-in reporter registered under name. It resolves through the
 // package's own types rather than the registry so the golden does not depend on
 // registration order or on RegisterBuiltins having run.
-func reporterFor(t *testing.T, name string) core.Reporter {
+func reporterFor(t *testing.T, name string) result.Reporter {
 	t.Helper()
 	switch name {
 	case "json":
@@ -78,13 +78,13 @@ func reporterFor(t *testing.T, name string) core.Reporter {
 func formatGoldenCases() []struct {
 	name   string
 	format string
-	report core.RunReport
+	report result.Results
 	golden string
 } {
 	return []struct {
 		name   string
 		format string
-		report core.RunReport
+		report result.Results
 		golden string
 	}{
 		{"full/json", "json", fullFixture(), "report-full.json.golden"},

@@ -412,3 +412,53 @@ func TestDeriveDegradation(t *testing.T) {
 		})
 	}
 }
+
+// TestDeriveRunIDsMirrorRuns pins the RunIDs/Runs correspondence introduced by feature
+// 010. Collapsing the facade's Results into the report type left ScenarioResult carrying
+// BOTH the full per-run records (Runs, which reporters render) and the id-only projection
+// library callers already read (RunIDs). Two representations of one fact can drift, so
+// Derive appends to them in the same loop and this test holds them to it — positionally,
+// not just by length, since a same-length mismatch is the failure that would survive a
+// weaker check.
+//
+// RunIDs is also tagged `json:"-"`: before the collapse the reports never had a "RunIDs"
+// key, and emitting one would silently change every user's report JSON. TestReportFormatGolden
+// is what guards that half.
+func TestDeriveRunIDsMirrorRuns(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		runIDs  []string
+		wantLen int
+	}{
+		{name: "single run", runIDs: []string{"run-1"}, wantLen: 1},
+		{name: "multi run keeps order", runIDs: []string{"run-1", "run-2", "run-3"}, wantLen: 3},
+		{name: "no runs yields no ids", runIDs: nil, wantLen: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			evs := make([]core.Evidence, 0, len(tt.runIDs))
+			for _, id := range tt.runIDs {
+				evs = append(evs, core.Evidence{RunID: id})
+			}
+			sr := Derive("scenario", "features/x.feature", nil, core.Verdict{Pass: true}, evs, nil)
+
+			if len(sr.Runs) != tt.wantLen {
+				t.Fatalf("len(Runs) = %d, want %d", len(sr.Runs), tt.wantLen)
+			}
+			if len(sr.RunIDs) != len(sr.Runs) {
+				t.Fatalf("len(RunIDs) = %d, len(Runs) = %d — the projection drifted from its source",
+					len(sr.RunIDs), len(sr.Runs))
+			}
+			for i := range sr.Runs {
+				if sr.RunIDs[i] != sr.Runs[i].RunID {
+					t.Errorf("RunIDs[%d] = %q, Runs[%d].RunID = %q — positional mismatch",
+						i, sr.RunIDs[i], i, sr.Runs[i].RunID)
+				}
+			}
+		})
+	}
+}

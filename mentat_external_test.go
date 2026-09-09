@@ -7,6 +7,8 @@ package mentat_test
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"regexp"
 	"testing"
 	"time"
@@ -50,6 +52,31 @@ func (toyComparator) Compare(_ context.Context, ev mentat.Evidence, _ mentat.Exp
 	return mentat.Verdict{Pass: true}, nil
 }
 
+// toyReporter implements mentat.Reporter using only facade type names — the sixth
+// seam. Before feature 010 this type could not be DECLARED from outside the module:
+// the method's parameter was core.RunReport, which had no facade name, so an external
+// author could not write their own method set. That made Reporter the one published
+// seam an external module could not implement at all.
+type toyReporter struct{ rendered int }
+
+func (r *toyReporter) Report(res mentat.Results, w io.Writer) error {
+	r.rendered++
+	// The data a reporter author actually needs — suite rollups, timing, and the
+	// per-scenario detail the built-in reporters render.
+	_, err := fmt.Fprintf(w, "%d/%d passed in %s (cost $%.4f)\n",
+		res.Passed, res.Total, res.Duration, res.TotalCost)
+	if err != nil {
+		return err
+	}
+	for _, s := range res.Scenarios {
+		if _, err := fmt.Fprintf(w, "  %s pass=%v tags=%v seq=%v runs=%d\n",
+			s.Name, s.Pass, s.Tags, s.Sequence, len(s.Runs)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // toyJudge implements mentat.Judge using only facade type names.
 type toyJudge struct{}
 
@@ -67,6 +94,7 @@ var (
 	_ mentat.TraceStore = toyStore{}
 	_ mentat.Comparator = toyComparator{}
 	_ mentat.Judge      = toyJudge{}
+	_ mentat.Reporter   = &toyReporter{}
 )
 
 // Nameability proof (feature 009 US3, contracts/facade-nameability.md).

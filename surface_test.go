@@ -480,6 +480,14 @@ func (c *surfaceCtx) renderGenDecl(t *testing.T, d *ast.GenDecl) []string {
 						// Target.Completeness reached users with zero golden diff.
 						if st := c.lookupStruct(t, pkg.Name, sel.Sel.Name); st != nil {
 							out = append(out, c.renderStructFields(t, s.Name.Name, st)...)
+							// …and its EXPORTED METHOD SET (feature 010 F1). A method on a
+							// LOCALLY-declared type is caught by the FuncDecl branch above, but
+							// once that type becomes an alias its methods live in the aliased
+							// package and that branch never sees them. Feature 010 hit this
+							// exactly: moving Results to internal/result silently dropped
+							// `func (r Results) ExitCode() int` — the documented 130/1/0
+							// exit-status contract — from the golden with the gate still green.
+							out = append(out, c.renderStructMethods(t, pkg.Name, s.Name.Name, sel.Sel.Name)...)
 						}
 					}
 				}
@@ -597,6 +605,87 @@ func (c *surfaceCtx) indexStructs(t *testing.T, dir string) map[string]*ast.Stru
 		}
 	}
 	return out
+}
+
+// renderStructMethods renders the EXPORTED methods declared on a re-exported struct's
+// target type, alias-named so the line reads as the caller writes it:
+//
+//	method (Results) ExitCode() int
+//
+// This is the method-side complement of renderStructFields. Without it a struct's
+// behaviour contract is frozen only while the type is declared IN the facade: aliasing
+// it moves the methods into another package, where the FuncDecl branch of renderGenDecl's
+// caller never looks, and every method line silently leaves the golden.
+//
+// Rules mirror the field side: exported methods only, receiver type matched by name
+// (pointer or value receiver alike, since both are reachable through the alias),
+// bodies stripped, emitted in declaration order.
+//
+// Mutation rehearsal (010, observed 2026-09-09) — same discipline as the 009 field-side
+// rehearsal. Appending a probe method to internal/result:
+//
+//	func (r Results) XProbe() bool { return r.Failed == 0 }
+//
+// gives:
+//
+//	--- FAIL: TestPublicSurfaceGolden
+//	      symbols present now but NOT in golden (added/changed):
+//	            - method (Results) XProbe() bool
+//
+// and removing it returns the gate to green. Before this function existed the same
+// experiment produced no diff at all.
+func (c *surfaceCtx) renderStructMethods(t *testing.T, pkg, alias, target string) []string {
+	t.Helper()
+	dir, ok := c.imports[pkg]
+	if !ok {
+		return nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read aliased package dir %q: %v", dir, err)
+	}
+	var out []string
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(c.fset, filepath.Join(dir, name), nil, 0)
+		if err != nil {
+			t.Fatalf("parse aliased source %s: %v", filepath.Join(dir, name), err)
+		}
+		for _, d := range f.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok || fd.Recv == nil || len(fd.Recv.List) == 0 || !fd.Name.IsExported() {
+				continue
+			}
+			if surfaceReceiverTypeName(fd.Recv.List[0].Type) != target {
+				continue
+			}
+			// Reuse the interface-method line shape so a method reads identically
+			// whether it arrived via an interface alias or a struct alias.
+			stripped := *fd
+			stripped.Body = nil
+			stripped.Recv = nil
+			stripped.Doc = nil
+			sig := strings.TrimPrefix(surfacePrint(t, c.fset, &stripped), "func "+fd.Name.Name)
+			out = append(out, "method ("+alias+") "+fd.Name.Name+sig)
+		}
+	}
+	return out
+}
+
+// surfaceReceiverTypeName reduces a receiver expression to its bare type name, so a
+// value receiver (Results) and a pointer receiver (*Results) both match the aliased
+// target — a caller reaches both through the alias, so both are public surface.
+func surfaceReceiverTypeName(expr ast.Expr) string {
+	if star, ok := expr.(*ast.StarExpr); ok {
+		expr = star.X
+	}
+	if id, ok := expr.(*ast.Ident); ok {
+		return id.Name
+	}
+	return ""
 }
 
 // renderStructFields renders each EXPORTED field of a re-exported struct as a

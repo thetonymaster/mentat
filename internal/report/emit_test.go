@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/result"
 )
 
 // TestEmitReportsAttemptsEveryTargetOnFailure proves EmitReports does not abandon a
@@ -22,7 +22,7 @@ import (
 func TestEmitReportsAttemptsEveryTargetOnFailure(t *testing.T) {
 	t.Parallel()
 	RegisterBuiltins() // idempotent; ensures html/json/junit are registered
-	rep := core.RunReport{Total: 1, Passed: 1, Scenarios: []core.ScenarioResult{{Name: "ok", Pass: true}}}
+	rep := result.Results{Total: 1, Passed: 1, Scenarios: []result.ScenarioResult{{Name: "ok", Pass: true}}}
 
 	tests := []struct {
 		name string
