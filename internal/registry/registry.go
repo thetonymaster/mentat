@@ -187,9 +187,10 @@ func (r *Registry) Store(name string) (StoreFactory, bool) {
 // --- Reporters: per-engine, like every other seam -----------------------------
 //
 // Until feature 010 reporters lived in a package-GLOBAL map under their own mutex,
-// never sealed. The justification was that "cmd/mentat calls report.EmitReports AFTER
-// Run returns Results (not the Engine), so reporters cannot be per-engine" — a call
-// path that stopped existing at the 007 recompose, which moved emission inside Run.
+// never sealed. The justification was that emission happened in the CLI after Run had
+// returned — holding results, not an Engine, and so having no registry to consult. That
+// call path stopped existing at the 007 recompose, which moved emission inside Run,
+// where the engine is still in scope; the reason went stale and the global outlived it.
 //
 // The global had to go before WithReporter could exist: a per-run registration option
 // writing into shared state is exactly the reentrancy defect T010/T011 closed for the

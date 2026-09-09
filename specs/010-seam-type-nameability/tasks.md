@@ -205,14 +205,14 @@ confirm the check fails and names it; remove it and confirm green.
 
 ### Tests for User Story 4 (REQUIRED — Test-First) ⚠️
 
-- [ ] T044 [US4] Extend the nameability sweep in `surface_test.go` to walk **seam method parameter and result types** in addition to data reachability from `Config`/`Results`, per [nameability-v2](./contracts/facade-nameability-v2.md); confirm zero unnameable types (acceptance 1)
-- [ ] T045 [US4] Assert the failure message names **both** the offending type and the reaching position — `method (Reporter) Report(rep RunReport, …)`, `field (Verdict) Detail *AggregateDetail`. Naming only the type does not satisfy the contract (acceptance 2, SC-004)
-- [ ] T046 [US4] Falsification rehearsal recorded in `surface_test.go`: add a seam method with an unnameable parameter → confirm RED naming type and position; name it on the facade → confirm GREEN; revert (acceptance 3)
+- [X] T044 [US4] Extend the nameability sweep in `surface_test.go` to walk **seam method parameter and result types** in addition to data reachability from `Config`/`Results`, per [nameability-v2](./contracts/facade-nameability-v2.md); confirm zero unnameable types (acceptance 1)
+- [X] T045 [US4] Assert the failure message names **both** the offending type and the reaching position — `method (Reporter) Report(rep RunReport, …)`, `field (Verdict) Detail *AggregateDetail`. Naming only the type does not satisfy the contract (acceptance 2, SC-004)
+- [X] T046 [US4] Falsification rehearsal recorded in `surface_test.go`: add a seam method with an unnameable parameter → confirm RED naming type and position; name it on the facade → confirm GREEN; revert (acceptance 3)
 
 ### Implementation for User Story 4
 
-- [ ] T047 [US4] Extend the compile-level witness in `mentat_external_test.go` to declare a type satisfying **each of the six** seams, so the sixth is proven by compilation (FR-008). The example module is **not** extended — it carries a compile-only obligation (SC-006)
-- [ ] T048 [US4] Update `specs/009-extension-surface-integrity/contracts/facade-nameability.md` to point at the v2 contract as its successor, replacing the "deferred to spec 010" section with the resolution
+- [X] T047 [US4] Extend the compile-level witness in `mentat_external_test.go` to declare a type satisfying **each of the six** seams, so the sixth is proven by compilation (FR-008). The example module is **not** extended — it carries a compile-only obligation (SC-006)
+- [X] T048 [US4] Update `specs/009-extension-surface-integrity/contracts/facade-nameability.md` to point at the v2 contract as its successor, replacing the "deferred to spec 010" section with the resolution
 
 **Checkpoint**: The defect class is closed, not just its four instances.
 
@@ -220,13 +220,13 @@ confirm the check fails and names it; remove it and confirm green.
 
 ## Phase 7: Polish & Cross-Cutting Concerns
 
-- [ ] T049 **Delete** stability boundary 4 from `docs/extending/stability.md:122-137` — the gap no longer exists, so it is removed rather than reworded (FR-010, SC-005)
-- [ ] T050 [P] Update `docs/extending/new-seam.md` for the reporter registration model — per-engine and sealed like the other five — and add the rule D5 discovered: a seam's parameter types cannot be declared at the facade, because root imports the packages that consume them
-- [ ] T051 [P] Correct the stale "the CLI emits reports after `Run` returns" claim at `internal/engine/build.go:53-55` (FR-015). The identical claim in `registry.go` is deleted wholesale by T039 — do not edit it separately
-- [ ] T052 Add the `CHANGELOG` entry: **breaking** — `Reporter.Report` now takes `Results`; `RunReport` is retired. **Additive** — three new aliases, `RunRecord`, `WithReporter`, and `Results`/`ScenarioResult` gain fields (FR-009)
-- [ ] T053 Write the migration note: implementers of `Reporter` take `Results`; `RunReport` no longer exists; **unkeyed composite literals** of `Results`/`ScenarioResult` will fail to compile, and field order changed, so an unkeyed literal that still compiles would mean something different. Keyed literals are unaffected
-- [ ] T054 Record the per-symbol justification for every newly public symbol per `specs/007-public-extension-api/contracts/public-surface.md` (SC-007). Under D5 these types are exposed *directly* rather than mirrored, so each needs its own justification written, not inherited
-- [ ] T055 Run every check in [quickstart.md](./quickstart.md) — all six, including `go test . -race` for SC-010 and the three documentation `grep`s
+- [X] T049 **Delete** stability boundary 4 from `docs/extending/stability.md:122-137` — the gap no longer exists, so it is removed rather than reworded (FR-010, SC-005)
+- [X] T050 [P] Update `docs/extending/new-seam.md` for the reporter registration model — per-engine and sealed like the other five — and add the rule D5 discovered: a seam's parameter types cannot be declared at the facade, because root imports the packages that consume them
+- [X] T051 [P] Correct the stale "the CLI emits reports after `Run` returns" claim at `internal/engine/build.go:53-55` (FR-015). The identical claim in `registry.go` is deleted wholesale by T039 — do not edit it separately
+- [X] T052 Add the `CHANGELOG` entry: **breaking** — `Reporter.Report` now takes `Results`; `RunReport` is retired. **Additive** — three new aliases, `RunRecord`, `WithReporter`, and `Results`/`ScenarioResult` gain fields (FR-009)
+- [X] T053 Write the migration note: implementers of `Reporter` take `Results`; `RunReport` no longer exists; **unkeyed composite literals** of `Results`/`ScenarioResult` will fail to compile, and field order changed, so an unkeyed literal that still compiles would mean something different. Keyed literals are unaffected
+- [X] T054 Record the per-symbol justification for every newly public symbol per `specs/007-public-extension-api/contracts/public-surface.md` (SC-007). Under D5 these types are exposed *directly* rather than mirrored, so each needs its own justification written, not inherited
+- [X] T055 Run every check in [quickstart.md](./quickstart.md) — all six, including `go test . -race` for SC-010 and the three documentation `grep`s
 - [ ] T056 Run `make ci` green, then `go-reviewer` in `gate` mode over the staged diff, with explicit attention to the hand-reviewed `public-surface.golden` diff
 
 ### Unplanned work done during implementation

@@ -77,6 +77,32 @@ func (r *toyReporter) Report(res mentat.Results, w io.Writer) error {
 	return nil
 }
 
+// toyCorrelator implements mentat.Correlator using only facade type names. Correlator
+// has no registration hook (no concrete external demand has appeared), but it IS on the
+// published surface, so it must be implementable from outside — a seam nobody can write
+// is not a seam. Asserting it here is what makes "6 of 6" a checked fact (010 SC-001)
+// rather than five plus an assumption.
+type toyCorrelator struct{}
+
+func (toyCorrelator) Inject(_ context.Context, spec *mentat.RunSpec) string {
+	if spec.RunID == "" {
+		spec.RunID = "toy-run"
+	}
+	return spec.RunID
+}
+
+func (toyCorrelator) Resolve(_ context.Context, _ mentat.TraceStore, req mentat.ResolveRequest) (*mentat.Trace, error) {
+	// A correlator author reads the completeness contract off the request.
+	_ = req.Contract.Kind
+	_ = req.Contract.Mode
+	_ = req.Contract.Settle
+	return &mentat.Trace{RunID: req.RunID}, nil
+}
+
+func (toyCorrelator) ResolveComplete(_ context.Context, _ mentat.TraceStore, runID string) (*mentat.Trace, error) {
+	return &mentat.Trace{RunID: runID}, nil
+}
+
 // toyJudge implements mentat.Judge using only facade type names.
 type toyJudge struct{}
 
@@ -95,6 +121,7 @@ var (
 	_ mentat.Comparator = toyComparator{}
 	_ mentat.Judge      = toyJudge{}
 	_ mentat.Reporter   = &toyReporter{}
+	_ mentat.Correlator = toyCorrelator{}
 )
 
 // Nameability proof (feature 009 US3, contracts/facade-nameability.md).

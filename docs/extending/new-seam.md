@@ -38,7 +38,7 @@ subset of the other.
 | Matcher | yes — `Registry.RegisterMatcher` (`registry.go:139`) | instance | sealed | none — **internal-only**: no facade alias and no `With*` option; the only registration path is `engine.WithExtraMatcher` (`internal/engine/options.go:110`), an internal hook |
 | Aggregate comparator | yes — `Registry.RegisterAggregateComparator` (`registry.go:126`) | instance | sealed | none — **internal-only** (see the exclusion below) |
 | Correlator | no — an `engine.Build` parameter, never a registry entry | — | — | types-only (`mentat.Correlator`); no registration hook until three real external demands exist (the 007 rule) |
-| Reporter | the `registry` *package*, yes — but **not** the per-engine `*Registry`: `registry.RegisterReporter` is a package-level function (`registry.go:189`) | instance | **never sealed** — package-global under its own `reporterMu` (`registry.go:177-201`) | types-only (`mentat.Reporter`) |
+| Reporter | yes — `Registry.RegisterReporter` | instance | sealed | `WithReporter` |
 
 "Sealed" means `engine.Build` calls `reg.Seal()` once wiring completes, after which
 any `Register*` panics loudly (FR-009). Registration is only representable inside
@@ -87,15 +87,36 @@ concurrent runs cannot race a shared map. This is the 007 reentrancy fix (US2,
 T010/T011), and it is why `Registry` is a type with methods rather than a package of
 globals.
 
-**Reporters are the sole exception**, and the reason is structural rather than
-stylistic: reporters are a *post-run rendering* concern. `cmd/mentat` calls
-`report.EmitReports` **after** `Run` returns `Results` — it holds results, not an
-`Engine`, and therefore has no registry to consult. So reporters stay package-global
-under their own `reporterMu` and are never sealed; registration is idempotent and not
-gated by a build seal (`registry.go:177-182`). If your new seam is consumed *after*
-the engine has been discarded, you have found a second legitimate instance of this
-exception — say so explicitly in review. If it is consumed *during* a run, it belongs
-in the per-engine registry, no exceptions.
+**There are no exceptions.** Reporters used to be one, and the story is worth keeping
+because it shows how an exception outlives its reason. They were package-global under
+their own `reporterMu` and never sealed, justified by: *reporters are a post-run
+rendering concern; `cmd/mentat` calls `report.EmitReports` after `Run` returns, so it
+holds results, not an `Engine`, and has no registry to consult.*
+
+That was true when written. The 007 recompose then moved emission **inside** `Run`
+(`run.go`), where the engine is still in scope — and the justification quietly became
+false while the global stayed. It went unnoticed until feature 010 needed a per-run
+`WithReporter` and found that registering into shared state is exactly the reentrancy
+defect T010/T011 had closed for every other seam: two concurrent `Run`s would race the
+same map, then silently use each other's reporters, with no seal to catch it.
+
+Reporters are now per-engine and sealed like everything else. If you believe your new
+seam needs to be global, the lesson is not that there is a category of seam that does —
+it is that a structural exception must be re-checked whenever the structure moves. If it
+is consumed *during* a run, it belongs in the per-engine registry, no exceptions.
+
+### A seam's parameter types cannot be declared at the facade
+
+Discovered in feature 010 (D5) and non-obvious enough to be worth a checklist line.
+The `mentat` package imports `internal/report`, `internal/engine` and
+`internal/registry`. Any type those packages must **consume** therefore cannot be
+declared in `mentat` — it is an import cycle. That is why every public type on the
+facade is an *alias* to an internal declaration.
+
+Facade-declared structs are legal only for **terminal** types: produced at the facade
+and never passed back down. `Results` was one, until it became a seam parameter and
+stopped being one. When you add a seam, declare its parameter and result types in an
+internal package and alias them upward.
 
 ### Collision check before construction
 

@@ -89,8 +89,9 @@ It runs under plain `go test` (part of the standard gate), so:
 
 ### What the gate does not catch
 
-Four boundaries, stated here so they are not tribal knowledge. All four are known
-and accepted; none is a TODO.
+Three boundaries, stated here so they are not tribal knowledge. All three are known
+and accepted; none is a TODO. A fourth was closed by feature 010 and is kept below as a
+struck-through entry so the numbering stays stable.
 
 1. **Aliases of map, func, and `any` types stay single-line.** Only *struct* and
    *interface* aliases are expanded. A declaration like `type ComparatorFactory =
@@ -119,22 +120,31 @@ and accepted; none is a TODO.
    mechanical fix, when one of these matters, is to re-export it from the facade —
    the alias line brings its field set into the golden with it.
 
-4. **Types reachable through *seam* signatures are not guaranteed nameable.** The
-   nameability sweep that feature 009 froze walks outward from `Config` and
-   `Results` (see
-   [`facade-nameability.md`](../../specs/009-extension-surface-integrity/contracts/facade-nameability.md));
-   it does not walk seam-interface parameter and result types. Four types are
-   therefore frozen in the golden but cannot be named from outside the module:
-   `AggregateDetail`, `ExtractPolicy`, `HTTPSpec`, and `RunReport`. The practical
-   consequence is sharpest for `RunReport`: **`Reporter` is an aliased seam
-   interface that an external module cannot implement**, because it cannot write
-   the type of its own method parameter. Likewise a Comparator author cannot
-   construct a `Verdict` with `Detail` set, and a Driver author cannot build a
-   `RunSpec` with `Extract` or `HTTP` set.
+4. ~~**Types reachable through *seam* signatures are not guaranteed nameable.**~~
+   **CLOSED by feature 010.** The nameability sweep now walks seam method parameter
+   and result types as well as data reachability from `Config` and `Results`, and it is
+   MECHANICAL rather than a hand-check: `TestFacadeNameabilitySweep` fails on any type
+   reachable from the public surface that the facade cannot name, reporting both the
+   offending type and the position that reaches it. See
+   [`facade-nameability-v2.md`](../../specs/010-seam-type-nameability/contracts/facade-nameability-v2.md).
 
-   This is a verified, deliberately-deferred gap, not an oversight: closing it
-   means widening the public surface, which is a one-way door and gets its own
-   spec rather than riding along in 009. Recorded as input to spec 010.
+   The four types this boundary named are resolved: `AggregateDetail`, `ExtractPolicy`
+   and `HTTPSpec` are now aliased on the facade; `RunReport` left the surface entirely
+   when the `Reporter` seam was re-shaped to render `Results`. `Reporter` is
+   implementable — and, via `WithReporter`, registrable — from outside the module.
+
+   Kept as a numbered entry rather than deleted outright so the numbering of boundaries
+   1–3 stays stable for anything that cites them.
+
+### What the gate still does not catch, beyond the three above
+
+Nothing new was opened by 010, but one adjacent gap is worth naming so it is not
+rediscovered as a surprise: the extraction-**mode constants** (`ExtractWhole`,
+`ExtractMarker`, `ExtractPattern`) are not on the facade, so an external driver author
+constructing an `ExtractPolicy` writes `Mode: "pattern"` as a string literal and a typo
+fails at run time rather than compile time. `FailureKind*` is exported, which is a
+precedent for exporting them; doing so is a further surface widening and has not been
+decided.
 
 > Every symbol on the surface earns its place: the manifest rule is that a symbol
 > appears in the contract *with a justification, or it does not get exported*. See

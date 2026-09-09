@@ -862,3 +862,269 @@ func surfaceIndent(syms []string) string {
 	}
 	return b.String()
 }
+
+// --- Feature 010 US4: mechanical nameability sweep ---------------------------
+
+// TestFacadeNameabilitySweep is the root-cause fix for stability boundary 4.
+//
+// Feature 009 verified nameability BY HAND (its T018 sweep) and froze the result only in
+// the hand-written composite literals of mentat_external_test.go. That is a gate a human
+// has to remember to run, and it walked outward from Config and Results only — never
+// through seam signatures. Four types were consequently frozen on the public surface while
+// being unwritable from outside the module, and Reporter was unimplementable because of it.
+//
+// This test replaces the human. It walks the reachable set mechanically and fails on any
+// member the facade cannot name, reporting BOTH the offending type and the position that
+// reaches it — a message naming only the type would send the author source-spelunking.
+//
+// Reachable set (contracts/facade-nameability-v2.md):
+//
+//  1. data reachability   — exported fields, transitively, from every facade struct alias
+//  2. seam reachability   — every parameter and result type of every facade interface
+//     alias's method set, transitively by rule 1
+//
+// Terminals are types with no local source: stdlib (io.Writer, context.Context, time.Time,
+// *regexp.Regexp) is nameable by its own import and is not the facade's to re-export.
+// c.imports holds only module-internal packages, which is exactly that distinction.
+//
+// # Mutation rehearsal (010 T046, observed 2026-09-09)
+//
+// The rehearsal is recorded at length because the FIRST attempt at it found a bug in this
+// very test. A probe type reachable only through a seam signature was added:
+//
+//	type ResolveRequest struct { …; Probe ProbeSpec }
+//	type ProbeSpec struct{ Note string }   // no facade alias
+//
+// and the sweep reported ZERO offenders. The cause: `Probe ProbeSpec` inside
+// internal/core is a bare *ast.Ident, not a `core.ProbeSpec` SelectorExpr, and the walker
+// collected only SelectorExprs — so every same-package hop was invisible. That blind spot
+// would have missed the original 010 gaps too (`Verdict.Detail *AggregateDetail` is bare
+// in core.go). surfaceNamedRefs now qualifies bare exported identifiers with the package
+// they were declared in.
+//
+// With that fixed, the same probe gives:
+//
+//	--- FAIL: TestFacadeNameabilitySweep
+//	    1 type(s) are reachable from the public surface but have NO facade name…
+//	        - core.ProbeSpec — reached by field (ResolveRequest) Probe
+//
+// naming the offending type AND the position that reaches it, and reverting returns the
+// sweep to green. ResolveRequest is reachable only through Correlator.Resolve — never from
+// Config or Results — so this is precisely the class the 009 hand-sweep could not see.
+//
+// Two earlier rehearsal attempts are worth recording as negative results: deleting the
+// `RunSpec` alias, and adding a method to a seam interface, both fail to COMPILE before
+// this test can run — existing tests reference mentat.RunSpec, and the real correlator
+// stops satisfying an extended interface. The compile-level witness in
+// mentat_external_test.go is doing real work; this sweep covers what it cannot, namely a
+// type nobody happened to write a literal for.
+func TestFacadeNameabilitySweep(t *testing.T) {
+	c, aliases := surfaceAliases(t)
+
+	// nameable keys the facade's alias TARGETS as "pkg.Name" — what an internal type must
+	// match to be writable from outside.
+	nameable := map[string]bool{}
+	for _, a := range aliases {
+		nameable[a.pkg+"."+a.target] = true
+	}
+
+	type reach struct{ typ, via string }
+	var queue []reach
+	seen := map[string]bool{}
+
+	// Seed with every alias target, and record how each is reached.
+	for _, a := range aliases {
+		key := a.pkg + "." + a.target
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		queue = append(queue, reach{typ: key, via: "alias " + a.name})
+	}
+
+	var offenders []string
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		pkg, name, ok := strings.Cut(cur.typ, ".")
+		if !ok {
+			continue
+		}
+		// A struct contributes its exported field types; an interface contributes its
+		// method parameter and result types. Everything else is a leaf.
+		var refs []reach
+		if st := c.lookupStruct(t, pkg, name); st != nil && st.Fields != nil {
+			for _, f := range st.Fields.List {
+				if len(f.Names) > 0 && !f.Names[0].IsExported() {
+					continue
+				}
+				fieldName := "<embedded>"
+				if len(f.Names) > 0 {
+					fieldName = f.Names[0].Name
+				}
+				for _, ref := range surfaceNamedRefs(f.Type, pkg) {
+					refs = append(refs, reach{typ: ref, via: "field (" + name + ") " + fieldName})
+				}
+			}
+		}
+		if iface := c.lookupInterface(t, pkg, name); iface != nil && iface.Methods != nil {
+			for _, m := range iface.Methods.List {
+				fn, isFunc := m.Type.(*ast.FuncType)
+				if !isFunc || len(m.Names) == 0 {
+					continue
+				}
+				for _, ref := range surfaceFuncRefs(fn, pkg) {
+					refs = append(refs, reach{typ: ref, via: "method (" + name + ") " + m.Names[0].Name})
+				}
+			}
+		}
+		for _, r := range refs {
+			refPkg, _, _ := strings.Cut(r.typ, ".")
+			if _, local := c.imports[refPkg]; !local {
+				continue // stdlib or third-party: a terminal, not ours to name
+			}
+			if !nameable[r.typ] {
+				offenders = append(offenders, fmt.Sprintf("%s — reached by %s", r.typ, r.via))
+			}
+			if !seen[r.typ] {
+				seen[r.typ] = true
+				queue = append(queue, r)
+			}
+		}
+	}
+
+	if len(offenders) > 0 {
+		sort.Strings(offenders)
+		t.Fatalf("%d type(s) are reachable from the public surface but have NO facade name, "+
+			"so an external module cannot write them:\n%s\n"+
+			"Fix by adding `type X = %s` to mentat.go (with a justification), or by removing the "+
+			"reaching position from the surface. See contracts/facade-nameability-v2.md.",
+			len(offenders), surfaceIndent(offenders), "<pkg>.<Type>")
+	}
+}
+
+// surfaceAlias is one `type Name = pkg.Target` declaration on the facade.
+type surfaceAlias struct{ name, pkg, target string }
+
+// surfaceAliases parses the facade package and returns its context plus every type-alias
+// declaration whose target is a module-internal package.
+func surfaceAliases(t *testing.T) (*surfaceCtx, []surfaceAlias) {
+	t.Helper()
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read package dir: %v", err)
+	}
+	c := &surfaceCtx{
+		fset:      token.NewFileSet(),
+		modPath:   surfaceModulePath(t),
+		imports:   map[string]string{},
+		ifaces:    map[string]map[string]*ast.InterfaceType{},
+		structs:   map[string]map[string]*ast.StructType{},
+		typeSpecs: map[string][]*ast.TypeSpec{},
+	}
+	var files []*ast.File
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(c.fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		c.addImports(f)
+		files = append(files, f)
+	}
+	var out []surfaceAlias
+	for _, f := range files {
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				ts, ok := spec.(*ast.TypeSpec)
+				if !ok || !ts.Name.IsExported() || !ts.Assign.IsValid() {
+					continue
+				}
+				sel, ok := ts.Type.(*ast.SelectorExpr)
+				if !ok {
+					continue
+				}
+				pkg, ok := sel.X.(*ast.Ident)
+				if !ok {
+					continue
+				}
+				if _, local := c.imports[pkg.Name]; !local {
+					continue
+				}
+				out = append(out, surfaceAlias{name: ts.Name.Name, pkg: pkg.Name, target: sel.Sel.Name})
+			}
+		}
+	}
+	return c, out
+}
+
+// surfaceNamedRefs reduces a type expression to the named types it references, qualified
+// as "pkg.Type", unwrapping pointers, slices, arrays, maps, channels and func types.
+//
+// self is the package the expression was DECLARED in, and it is load-bearing: a type
+// written `*AggregateDetail` inside internal/core is a bare *ast.Ident, not a
+// SelectorExpr, because it is a same-package reference. An earlier version of this
+// function collected only SelectorExprs on the theory that bare identifiers were
+// "covered by that package's own walk" — there is no such walk, so every same-package
+// hop was invisible and the sweep reported zero offenders while being blind to the exact
+// gaps feature 010 exists to close. The mutation rehearsal below is what caught it.
+//
+// Unexported identifiers are skipped (not public surface) and so are the predeclared
+// types, which are conveniently all lowercase — string, int, error, any and friends never
+// pass IsExported.
+func surfaceNamedRefs(expr ast.Expr, self string) []string {
+	var out []string
+	var walk func(ast.Expr)
+	walk = func(e ast.Expr) {
+		switch v := e.(type) {
+		case *ast.StarExpr:
+			walk(v.X)
+		case *ast.ArrayType:
+			walk(v.Elt)
+		case *ast.Ellipsis:
+			walk(v.Elt)
+		case *ast.MapType:
+			walk(v.Key)
+			walk(v.Value)
+		case *ast.ChanType:
+			walk(v.Value)
+		case *ast.SelectorExpr:
+			if id, ok := v.X.(*ast.Ident); ok {
+				out = append(out, id.Name+"."+v.Sel.Name)
+			}
+		case *ast.Ident:
+			if v.IsExported() {
+				out = append(out, self+"."+v.Name)
+			}
+		case *ast.FuncType:
+			out = append(out, surfaceFuncRefs(v, self)...)
+		}
+	}
+	walk(expr)
+	return out
+}
+
+// surfaceFuncRefs returns the named types in a function signature's parameters AND
+// results. This is the half feature 009's sweep never walked — and the half that left
+// Reporter unimplementable from outside the module.
+func surfaceFuncRefs(fn *ast.FuncType, self string) []string {
+	var out []string
+	if fn.Params != nil {
+		for _, p := range fn.Params.List {
+			out = append(out, surfaceNamedRefs(p.Type, self)...)
+		}
+	}
+	if fn.Results != nil {
+		for _, r := range fn.Results.List {
+			out = append(out, surfaceNamedRefs(r.Type, self)...)
+		}
+	}
+	return out
+}
