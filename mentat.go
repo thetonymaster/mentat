@@ -137,11 +137,10 @@ type HTTPSpec = core.HTTPSpec
 // author building a RunSpec by hand wants this type; a user editing a config file is
 // writing the other one.
 //
-// Mode takes the extraction-mode values documented on core.ExtractAnswer ("whole",
-// "marker", "pattern"); the named constants are not part of the public surface, so an
-// external caller writes the string. Pattern is a precompiled *regexp.Regexp and must
-// carry at least one capture group in pattern mode — an unresolvable extraction is a
-// hard, descriptive error, never an empty-string success.
+// Mode takes one of ExtractWhole, ExtractMarker or ExtractPattern (also re-exported, so
+// a caller never writes the mode as a string literal). Pattern is a precompiled
+// *regexp.Regexp and must carry at least one capture group in pattern mode — an
+// unresolvable extraction is a hard, descriptive error, never an empty-string success.
 type ExtractPolicy = core.ExtractPolicy
 
 // RunResult is the driver output (the Driver.Run return value).
@@ -237,6 +236,31 @@ const FailureKindDriver = core.FailureKindDriver
 
 // FailureKindResolve is Evidence.FailureKind when trace resolution failed.
 const FailureKindResolve = core.FailureKindResolve
+
+// --- Extraction-mode constants (from internal/core) ---
+//
+// The three values ExtractPolicy.Mode accepts. Re-exported (feature 010) for the same
+// reason as the FailureKind constants above: naming ExtractPolicy makes the struct
+// writable, but Mode is a plain string, so without these a driver author writes
+// `Mode: "pattern"` as a literal and a typo becomes a run-time extraction error instead
+// of a compile error. A published field whose legal values are unnameable is only half
+// published.
+
+// ExtractWhole takes the trimmed full stdout. It is the default behaviour and never
+// fails. Note it is NOT the empty string: ExtractPolicy's zero value (Mode == "") also
+// behaves as whole-stdout extraction, so a caller can still distinguish "unset" from
+// "explicitly whole".
+const ExtractWhole = core.ExtractWhole
+
+// ExtractMarker takes the text after the LAST occurrence of ExtractPolicy.Marker,
+// trimmed. Marker must be non-empty in this mode; an unresolvable marker is a hard,
+// descriptive error, never an empty-string success.
+const ExtractMarker = core.ExtractMarker
+
+// ExtractPattern takes the first capture group of the first ExtractPolicy.Pattern match.
+// The pattern must carry at least one capture group; a pattern that matches but captures
+// nothing is a hard error.
+const ExtractPattern = core.ExtractPattern
 
 // --- Canonical span status vocabulary (from internal/trace) ---
 

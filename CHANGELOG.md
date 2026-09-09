@@ -19,6 +19,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   were frozen on the public surface but had no facade name, so an external module could
   not write them — a driver author could not populate `RunSpec.Extract` or `RunSpec.HTTP`,
   and a comparator author could not attach `Verdict.Detail`.
+- **`ExtractWhole`, `ExtractMarker`, `ExtractPattern` on the facade.** The legal values of
+  `ExtractPolicy.Mode`. Naming the struct was not enough on its own: `Mode` is a plain
+  string, so without these a driver author writes `Mode: "pattern"` as a literal and a
+  typo becomes a run-time extraction error rather than a compile error.
 - **`Results` carries the full run outcome.** `Total`, `StartedAt` and `Duration` at the
   suite level; `Tags`, `Qualifiers`, `Sequence`, `Runs` and `Aggregate` per scenario. The
   facade's result types were previously lossy against what the built-in reporters saw.

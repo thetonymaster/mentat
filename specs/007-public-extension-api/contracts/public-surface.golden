@@ -1,3 +1,6 @@
+const ExtractMarker = core.ExtractMarker
+const ExtractPattern = core.ExtractPattern
+const ExtractWhole = core.ExtractWhole
 const FailureKindDriver = core.FailureKindDriver
 const FailureKindResolve = core.FailureKindResolve
 const KindClient = trace.KindClient

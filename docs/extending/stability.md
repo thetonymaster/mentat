@@ -136,16 +136,6 @@ struck-through entry so the numbering stays stable.
    Kept as a numbered entry rather than deleted outright so the numbering of boundaries
    1–3 stays stable for anything that cites them.
 
-### What the gate still does not catch, beyond the three above
-
-Nothing new was opened by 010, but one adjacent gap is worth naming so it is not
-rediscovered as a surprise: the extraction-**mode constants** (`ExtractWhole`,
-`ExtractMarker`, `ExtractPattern`) are not on the facade, so an external driver author
-constructing an `ExtractPolicy` writes `Mode: "pattern"` as a string literal and a typo
-fails at run time rather than compile time. `FailureKind*` is exported, which is a
-precedent for exporting them; doing so is a further surface widening and has not been
-decided.
-
 > Every symbol on the surface earns its place: the manifest rule is that a symbol
 > appears in the contract *with a justification, or it does not get exported*. See
 > [`contracts/public-surface.md`](../../specs/007-public-extension-api/contracts/public-surface.md)

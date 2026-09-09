@@ -244,10 +244,10 @@ var (
 		RunID:     "run-1",
 		Tags:      map[string]string{"test.run.id": "run-1"},
 		KillGrace: 10 * time.Second,
-		Extract:   mentat.ExtractPolicy{Mode: "pattern", Marker: "ANSWER:", Pattern: regexp.MustCompile(`ANSWER:\s*(.*)`)},
+		Extract:   mentat.ExtractPolicy{Mode: mentat.ExtractPattern, Marker: "ANSWER:", Pattern: regexp.MustCompile(`ANSWER:\s*(.*)`)},
 	}
 	_ = mentat.HTTPSpec{URL: "http://localhost:8080/ask", Method: "POST", Headers: map[string]string{"content-type": "application/json"}}
-	_ = mentat.ExtractPolicy{Mode: "pattern", Marker: "ANSWER:", Pattern: regexp.MustCompile(`ANSWER:\s*(.*)`)}
+	_ = mentat.ExtractPolicy{Mode: mentat.ExtractPattern, Marker: "ANSWER:", Pattern: regexp.MustCompile(`ANSWER:\s*(.*)`)}
 
 	// A comparator author attaching the structured detail behind an aggregate
 	// verdict, so a report can show WHY the verdict landed and not merely that it
@@ -270,7 +270,40 @@ var (
 		Expr: "rate(r, pass) >= 0.80", Macro: "rate", Op: ">=",
 		Computed: 0.5, Expected: 0.8, PerRun: []float64{1, 0},
 	}
+
+	// Every extraction mode is nameable, so a driver author never writes the mode as a
+	// string literal. Naming a type is not enough on its own: ExtractPolicy.Mode is a
+	// plain string, so without these an author writes Mode: "pattern" and a typo becomes
+	// a run-time extraction error instead of a compile error. Same reasoning that already
+	// exports the FailureKind constants.
+	_ = mentat.ExtractPolicy{Mode: mentat.ExtractWhole}
+	_ = mentat.ExtractPolicy{Mode: mentat.ExtractMarker, Marker: "ANSWER:"}
 )
+
+// TestExtractModeConstantsAreDistinct proves the three published modes are distinct,
+// non-empty values an external author can branch on — not three names for one string.
+// The zero value of ExtractPolicy.Mode is "" and behaves as ExtractWhole, so ExtractWhole
+// is deliberately NOT the empty string: a caller can tell "unset" from "explicitly whole".
+func TestExtractModeConstantsAreDistinct(t *testing.T) {
+	t.Parallel()
+
+	modes := map[string]string{
+		"whole":   mentat.ExtractWhole,
+		"marker":  mentat.ExtractMarker,
+		"pattern": mentat.ExtractPattern,
+	}
+	seen := map[string]string{}
+	for name, val := range modes {
+		if val == "" {
+			t.Errorf("%s mode constant is the empty string; the zero value already means "+
+				"'unset', so a mode must be distinguishable from it", name)
+		}
+		if prior, dup := seen[val]; dup {
+			t.Errorf("%s and %s are both %q; the modes must be distinct", name, prior, val)
+		}
+		seen[val] = name
+	}
+}
 
 // TestFacadeSurfaceExercisesContractTypes touches the evidence/contract types a
 // store, comparator, and judge author reads or constructs through the facade —
