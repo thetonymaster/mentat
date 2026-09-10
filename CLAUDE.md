@@ -116,24 +116,41 @@ from Tempo, and run **comparators** that assert how it behaved and what it produ
 - `/coverage` — run `go test` with coverage and enforce the 80% floor.
 
 <!-- SPECKIT START -->
-Features 001–009 are shipped (through `specs/009-extension-surface-integrity`,
-merged 2026-07-18, all 34 tasks complete). The in-flight feature is
-**010-seam-type-nameability** (specified and planned 2026-09-09): spec at
-`specs/010-seam-type-nameability/spec.md`, current plan at
-`specs/010-seam-type-nameability/plan.md`, with research, data-model, contracts/
-and quickstart alongside, and `tasks.md` complete (59/59). Read the spec's **Decisions** section (D1–D5) before touching anything. **D5 is the
-one to read first**: the result types (`Results`, `ScenarioResult`, `RunRecord`,
-`Reporter`) move to a new leaf package `internal/result` and are aliased on the
-facade. A seam's parameter types *cannot* be declared at the facade — root imports
-`internal/report`, `internal/engine` and `internal/registry`, so anything they
-consume must live beneath them. Only terminal types may be facade-declared.
-Execution order is *not* story priority order — the report-format golden (FR-013)
-lands green before anything moves, Phase 5's step 5a is a **pure move** with that
-golden green across it, and the US4 gate can only go green last (plan.md, Phase 2).
-For additional
-context about technologies used, project structure, shell commands, and other
-important information, read `specs/` as history — each feature dir carries its
-`spec.md`, `plan.md`, `tasks.md`, and `contracts/`. When work is in flight, the
+Features 001–010 are shipped, most recently **010-seam-type-nameability**
+(`specs/010-seam-type-nameability`, merged 2026-09-09 as `1206a56`, all 59 tasks
+complete).
+
+The in-flight feature is **011-comparator-gherkin-invocation** (specified
+2026-09-10, not yet planned): spec at
+`specs/011-comparator-gherkin-invocation/spec.md`. Read its **Decisions** section
+(D1–D5) first — D1 in particular, which narrows the feature to one generic step row
+plus an optional `ExpectationParser` seam, and defers comparator-contributed Gherkin
+phrases to 012. Two findings there contradict how 009 framed this work:
+`type Expectation = any` is *not* the blocker (six comparators already build typed
+expectations from feature-file text), and no new engine plumbing is needed
+(`Engine.Comparator(name)` already exists).
+
+**Roadmap, renumbered by 011's D1:** 012 is comparator-contributed Gherkin phrases
+(Option B, a superset of 011 — nothing 011 builds is discarded); CLI/`mentatctl` UX
+moves from 012 to **013**. The 009 roadmap line
+(`specs/009-extension-surface-integrity/spec.md:143`) still shows the old numbering
+and should be corrected when 012 is specified.
+
+Two standing rules 010 established — read these before touching the facade:
+
+- **Only terminal types may be facade-declared.** Root imports `internal/report`,
+  `internal/engine` and `internal/registry`, so any type those packages *consume*
+  must live beneath them and be aliased on the facade, never declared there. This
+  is why the result types (`Results`, `ScenarioResult`, `RunRecord`, `Reporter`)
+  live in the leaf package `internal/result`. See `specs/010-.../spec.md` D5.
+- **The reachable set includes seam signatures.** `TestFacadeNameabilitySweep`
+  (`surface_test.go`) walks parameter and result types of every published seam, not
+  just fields reachable from `Config`/`Results`. `docs/extending/stability.md`
+  boundary 4 is closed; boundaries 1–3 remain accepted gaps.
+
+For additional context about technologies used, project structure, shell commands,
+and other important information, read `specs/` as history — each feature dir carries
+its `spec.md`, `plan.md`, `tasks.md`, and `contracts/`. When work is in flight, the
 current plan is the `plan.md` of the highest-numbered spec dir whose `tasks.md`
 still has unchecked tasks.
 <!-- SPECKIT END -->
