@@ -797,6 +797,32 @@ func (c *surfaceCtx) structInDir(t *testing.T, dir, name string) *ast.StructType
 	return c.structs[dir][name]
 }
 
+// typeParamsInDir returns the names of dir.name's generic type PARAMETERS — {"T"} for
+// `type Box[T any] struct{ Item T }`.
+//
+// A type parameter is a placeholder the caller supplies, not a type anyone can name,
+// so it must never be reported as unnameable. Without this filter the generic
+// traversal reports `internal/core.T — reached by field (Box) Item` alongside the real
+// offenders, and a gate that emits noise is a gate that gets suppressed.
+func (c *surfaceCtx) typeParamsInDir(t *testing.T, dir, name string) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	if dir == "" {
+		return out
+	}
+	for _, ts := range c.exportedTypeSpecs(t, dir) {
+		if ts.Name.Name != name || ts.TypeParams == nil {
+			continue
+		}
+		for _, f := range ts.TypeParams.List {
+			for _, n := range f.Names {
+				out[n.Name] = true
+			}
+		}
+	}
+	return out
+}
+
 // indexStructs indexes dir's exported `type X struct { … }` declarations by name.
 func (c *surfaceCtx) indexStructs(t *testing.T, dir string) map[string]*ast.StructType {
 	t.Helper()
@@ -1202,6 +1228,34 @@ func surfaceIndent(syms []string) string {
 // That is the gate's stated contract, not a defect: it verifies that everything PUBLISHED is
 // nameable. It cannot tell you that you forgot to publish something. mentat_external_test.go
 // is what covers that direction, by failing to compile.
+//
+// # Two blind spots closed (CodeRabbit pass 4 on PR #38; observed 2026-09-10)
+//
+// Both were found by review rather than by the gate, and both were LATENT — no live instance
+// existed on the surface — so each was proven by planting a probe and watching the sweep
+// report ZERO offenders before the fix.
+//
+//  1. GENERICS. surfaceNamedRefs' type switch had no *ast.IndexExpr case, so a field written
+//     `XProbe XBox[XProbeSpec]` on the facade-aliased ResolveRequest fell through the switch
+//     entirely and contributed nothing. Sweep: PASS, with two unnameable types on the
+//     surface. With IndexExpr/IndexListExpr added it reports both XBox and XProbeSpec.
+//
+//     The first version of that fix ALSO reported `internal/core.T — reached by field (XBox)
+//     Item`: the generic type PARAMETER, which is a placeholder no facade could name. A gate
+//     that emits noise is a gate that gets suppressed, so typeParamsInDir now filters those.
+//
+//  2. UNEXPORTED LOCAL TYPES. `case *ast.Ident: if v.IsExported()` skipped them silently, so
+//     `XProbe xHiddenSpec` — a type an external module cannot even SPELL — was invisible.
+//     Sweep: PASS. Inverting it needs care, because IsExported was doing double duty: it also
+//     filtered Go's predeclared identifiers, which are unexported idents too. Collecting
+//     those would key every `Name string` field as "internal/core.string". surfacePredeclared
+//     is that discriminator.
+//
+// One assertion in TestSurfaceNamedRefsQualifiesBareIdents was inverted as part of (2). It
+// read "unexported ident is not surface", want: nil — which encoded the blind spot rather
+// than a contract. Noted explicitly because editing a gate's own assertions is normally the
+// wrong move; the justification is that the row asserted the absence of a check, not the
+// presence of a guarantee, and the predeclared rows beside it are what bound the change.
 func TestFacadeNameabilitySweep(t *testing.T) {
 	c, aliases := surfaceAliases(t)
 
@@ -1302,7 +1356,13 @@ func TestFacadeNameabilitySweep(t *testing.T) {
 				}
 			}
 		}
+		// A generic type's own type PARAMETERS are not types the facade could name, so
+		// they are dropped before the offender check rather than reported as gaps.
+		typeParams := c.typeParamsInDir(t, dir, name)
 		for _, r := range refs {
+			if d, n, cut := surfaceCutDirType(r.typ); cut && d == dir && typeParams[n] {
+				continue
+			}
 			// surfaceNamedRefs only emits module-internal refs now — a qualifier that
 			// resolved to nothing local was dropped at the source, so there is no
 			// stdlib filtering left to do here.
@@ -1406,6 +1466,19 @@ func surfaceAliases(t *testing.T) (*surfaceCtx, []surfaceAlias) {
 // Unexported identifiers are skipped (not public surface) and so are the predeclared
 // types, which are conveniently all lowercase — string, int, error, any and friends never
 // pass IsExported.
+// surfacePredeclared is Go's set of predeclared type and constant identifiers. They
+// parse as unexported *ast.Idents but are universally nameable, so they terminate the
+// walk rather than being reported as unnameable local types.
+var surfacePredeclared = map[string]bool{
+	"bool": true, "byte": true, "complex64": true, "complex128": true,
+	"error": true, "float32": true, "float64": true, "int": true,
+	"int8": true, "int16": true, "int32": true, "int64": true,
+	"rune": true, "string": true, "uint": true, "uint8": true,
+	"uint16": true, "uint32": true, "uint64": true, "uintptr": true,
+	"any": true, "comparable": true,
+	"true": true, "false": true, "iota": true, "nil": true,
+}
+
 func surfaceNamedRefs(expr ast.Expr, self string, resolve func(string) (string, bool)) []string {
 	var out []string
 	var walk func(ast.Expr)
@@ -1422,6 +1495,18 @@ func surfaceNamedRefs(expr ast.Expr, self string, resolve func(string) (string, 
 			walk(v.Value)
 		case *ast.ChanType:
 			walk(v.Value)
+		case *ast.IndexExpr:
+			// A generic instantiation with ONE type argument: Box[Payload]. Both the
+			// generic type and its argument are reachable and both must be nameable —
+			// an external module writing this field needs to spell both.
+			walk(v.X)
+			walk(v.Index)
+		case *ast.IndexListExpr:
+			// Two or more type arguments: Pair[K, V].
+			walk(v.X)
+			for _, idx := range v.Indices {
+				walk(idx)
+			}
 		case *ast.SelectorExpr:
 			id, ok := v.X.(*ast.Ident)
 			if !ok {
@@ -1435,7 +1520,14 @@ func surfaceNamedRefs(expr ast.Expr, self string, resolve func(string) (string, 
 				out = append(out, dir+"."+v.Sel.Name)
 			}
 		case *ast.Ident:
-			if v.IsExported() {
+			// An UNEXPORTED local type in a published position is the strictest
+			// nameability failure there is: an external module cannot even spell it, so
+			// it can never construct the surrounding value. Reporting it requires care,
+			// because IsExported() was doing double duty here — it also filtered out
+			// Go's PREDECLARED identifiers (string, int, error, any, …), which are
+			// unexported idents too. Collecting those would key every `Name string`
+			// field as "internal/core.string" and bury the gate in noise.
+			if v.IsExported() || !surfacePredeclared[v.Name] {
 				out = append(out, self+"."+v.Name)
 			}
 		case *ast.FuncType:
@@ -1492,7 +1584,20 @@ func TestSurfaceNamedRefsQualifiesBareIdents(t *testing.T) {
 		{name: "selector resolves through the DECLARING package's imports", expr: "*trace.Trace", want: []string{"internal/trace.Trace"}},
 		{name: "a qualifier the declaring package does not import is stdlib and is dropped", expr: "time.Duration", want: nil},
 		{name: "predeclared types are not references", expr: "string", want: nil},
-		{name: "unexported ident is not surface", expr: "compiled", want: nil},
+		{name: "predeclared any is not a reference", expr: "any", want: nil},
+		// This row previously asserted want: nil — "an unexported ident is not
+		// surface". That encoded the blind spot rather than a contract: an unexported
+		// local type in a published position is the STRICTEST nameability failure
+		// there is, because an external module cannot even spell it. The row is
+		// inverted deliberately, and the two predeclared rows above are what keep the
+		// change from over-reaching (IsExported was filtering both classes at once).
+		{name: "unexported local ident IS an unnameable reference", expr: "compiled", want: []string{"internal/core.compiled"}},
+		// Generic instantiations: both the generic type and its type ARGUMENTS are
+		// reachable, and an external module must be able to spell each. The type
+		// PARAMETER of a generic declaration is filtered separately, at the sweep, by
+		// typeParamsInDir — it is a placeholder, not a type.
+		{name: "generic instantiation contributes type and argument", expr: "Box[Payload]", want: []string{"internal/core.Box", "internal/core.Payload"}},
+		{name: "multi-argument generic contributes all arguments", expr: "Pair[Kind, Detail]", want: []string{"internal/core.Pair", "internal/core.Kind", "internal/core.Detail"}},
 		{name: "map contributes key and value", expr: "map[Kind]Detail", want: []string{"internal/core.Kind", "internal/core.Detail"}},
 		{name: "func type contributes params and results", expr: "func(Evidence) (Verdict, error)", want: []string{"internal/core.Evidence", "internal/core.Verdict"}},
 	}
