@@ -1327,6 +1327,13 @@ func surfaceIndent(syms []string) string {
 //     Each method is now filtered by its own receiver's names. Cross-checked: swapping
 //     m.RecvParams back to declParams makes that offender disappear while everything else
 //     stays green, so the distinction is what catches it.
+//
+//  6. TYPE ARGUMENTS were matched only as a DIRECT selector, so `Box[*core.Thing]`,
+//     `Box[[]core.Thing]` and `Box[core.Pair[string, core.Thing]]` slipped past and never
+//     entered the queue. Reduced with surfaceNamedRefs now — the same traversal every
+//     other position uses. Any position that unwraps type expressions by hand drifts from
+//     the ones that do not; there is one traversal, and (6) is the second time that
+//     lesson arrived. Covered by TestSurfaceAliasArgsTraversesNestedArguments.
 func TestFacadeNameabilitySweep(t *testing.T) {
 	c, aliases := surfaceAliases(t)
 
@@ -1506,6 +1513,35 @@ type surfaceAlias struct {
 	args              []string
 }
 
+// surfaceAliasFacadeSelf marks a bare identifier written at the FACADE. A bare
+// exported ident there names a facade-declared type, which is nameable by construction,
+// so those refs are dropped rather than reported.
+const surfaceAliasFacadeSelf = "<facade>"
+
+// surfaceAliasArgs reduces a generic alias's type ARGUMENTS to canonical "dir.Type"
+// keys, dropping anything nameable by construction (predeclared, facade-declared).
+//
+// It delegates to surfaceNamedRefs rather than matching *ast.SelectorExpr directly. An
+// earlier version did the latter and silently skipped every argument that was not a
+// bare selector — `Box[*core.Thing]`, `Box[[]core.Thing]`, `Box[core.Pair[string,
+// core.Thing]]` — so those types never entered the reachability queue at all. Any
+// position that unwraps type expressions by hand drifts from every other position that
+// does; there is one traversal, and this is it.
+func surfaceAliasArgs(targs []ast.Expr, resolve func(string) (string, bool)) []string {
+	var args []string
+	for _, a := range targs {
+		for _, ref := range surfaceNamedRefs(a, surfaceAliasFacadeSelf, resolve) {
+			// A bare ident at the facade names a facade-DECLARED type, which is
+			// nameable by definition — that is what declaring it there means.
+			if strings.HasPrefix(ref, surfaceAliasFacadeSelf+".") {
+				continue
+			}
+			args = append(args, ref)
+		}
+	}
+	return args
+}
+
 // surfaceAliasBase unwraps a generic instantiation to the alias's base target and its
 // type arguments: `core.Box[int]` → (core.Box, [int]); `core.Pair[K, V]` → (core.Pair,
 // [K, V]); a plain `core.Thing` → (core.Thing, nil).
@@ -1581,24 +1617,10 @@ func surfaceAliases(t *testing.T) (*surfaceCtx, []surfaceAlias) {
 				if _, local := c.imports[pkg.Name]; !local {
 					continue
 				}
-				var args []string
-				for _, a := range targs {
-					as, isSel := a.(*ast.SelectorExpr)
-					if !isSel {
-						// A predeclared arg (int) or a facade-declared one is nameable
-						// by construction; only a module-internal target can be a gap.
-						continue
-					}
-					apkg, isIdent := as.X.(*ast.Ident)
-					if !isIdent {
-						continue
-					}
-					dir, local := c.imports[apkg.Name]
-					if !local {
-						continue
-					}
-					args = append(args, dir+"."+as.Sel.Name)
-				}
+				args := surfaceAliasArgs(targs, func(q string) (string, bool) {
+					d, ok := c.imports[q]
+					return d, ok
+				})
 				out = append(out, surfaceAlias{name: ts.Name.Name, pkg: pkg.Name, target: sel.Sel.Name, args: args})
 			}
 		}
@@ -1833,4 +1855,59 @@ func surfaceCutDirType(key string) (dir, name string, ok bool) {
 		return "", "", false
 	}
 	return key[:i], key[i+1:], true
+}
+
+// TestSurfaceAliasArgsTraversesNestedArguments pins the fix for the second CodeRabbit
+// finding on PR #39: a generic alias's type ARGUMENTS were matched only as a direct
+// *ast.SelectorExpr, so `core.Box[*core.Thing]`, `core.Box[[]core.Thing]` and a nested
+// instantiation all slipped past and never entered the reachability queue.
+//
+// Arguments are reduced with the same traversal every other position uses, so pointers,
+// slices, maps, channels, func types and nested generics unwrap identically. Anything
+// nameable by construction — predeclared types, and bare idents naming a
+// facade-DECLARED type — is dropped rather than reported.
+func TestSurfaceAliasArgsTraversesNestedArguments(t *testing.T) {
+	t.Parallel()
+
+	resolve := func(q string) (string, bool) {
+		d, ok := map[string]string{"core": "internal/core", "trace": "internal/trace"}[q]
+		return d, ok
+	}
+
+	tests := []struct {
+		name string
+		expr string // the full alias target, e.g. core.Box[...]
+		want []string
+	}{
+		{name: "direct selector", expr: "core.Box[core.Thing]", want: []string{"internal/core.Thing"}},
+		{name: "pointer argument", expr: "core.Box[*core.Thing]", want: []string{"internal/core.Thing"}},
+		{name: "slice argument", expr: "core.Box[[]core.Thing]", want: []string{"internal/core.Thing"}},
+		{name: "map argument contributes key and value", expr: "core.Box[map[core.Kind]core.Thing]", want: []string{"internal/core.Kind", "internal/core.Thing"}},
+		{name: "nested instantiation contributes base and inner argument", expr: "core.Box[core.Pair[string, core.Thing]]", want: []string{"internal/core.Pair", "internal/core.Thing"}},
+		{name: "multiple arguments", expr: "core.Pair[core.Kind, *core.Thing]", want: []string{"internal/core.Kind", "internal/core.Thing"}},
+		{name: "cross-package argument resolves through its own qualifier", expr: "core.Box[*trace.Trace]", want: []string{"internal/trace.Trace"}},
+		{name: "predeclared argument is nameable by construction", expr: "core.Box[int]", want: nil},
+		{name: "stdlib argument is not the facade's to re-export", expr: "core.Box[time.Duration]", want: nil},
+		{name: "non-generic alias has no arguments", expr: "core.Thing", want: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			e, err := parser.ParseExpr(tt.expr)
+			if err != nil {
+				t.Fatalf("parse %q: %v", tt.expr, err)
+			}
+			_, targs := surfaceAliasBase(e)
+			got := surfaceAliasArgs(targs, resolve)
+			if len(got) != len(tt.want) {
+				t.Fatalf("surfaceAliasArgs(%q) = %v, want %v", tt.expr, got, tt.want)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Errorf("surfaceAliasArgs(%q)[%d] = %q, want %q", tt.expr, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
 }
