@@ -631,6 +631,18 @@ func (w *world) comparatorSatisfiedByDoc(name string, doc *godog.DocString) erro
 	if err != nil {
 		return fmt.Errorf("comparator %q: parsing expectation: %w", name, err)
 	}
+	// A parser that claims success while returning nil is refused rather than trusted.
+	// Forwarding the nil would let a comparator that tolerates nil return a passing
+	// verdict for a step that asserted nothing (Constitution IV). This checks for nil
+	// only — it never inspects the value's shape, which would require knowing the
+	// expectation type and is exactly the coupling this seam removes. A zero-valued
+	// but non-nil expectation is legitimate and passes through.
+	//
+	// It catches an UNTYPED nil only. A typed nil pointer is a non-nil interface and
+	// reaches Compare, where it is the comparator's own type assertion and its own bug.
+	if exp == nil {
+		return fmt.Errorf("comparator %q: ParseExpectation returned a nil expectation with no error", name)
+	}
 	return w.checkExp(name, exp, true)
 }
 

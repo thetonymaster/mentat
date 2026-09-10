@@ -40,8 +40,28 @@ type revenueShape struct {
 	comparedAs []core.Expectation
 	// parseErr, when set, makes ParseExpectation fail instead of parsing.
 	parseErr error
+	// parseNil, when set, makes ParseExpectation claim success while returning a nil
+	// expectation — a buggy comparator, and the case CodeRabbit flagged on PR #39.
+	parseNil bool
 	// fail, when set, makes Compare return a failing verdict.
 	fail bool
+}
+
+// nilTolerantComparator returns a PASSING verdict for a nil expectation, and pairs
+// with a parser that returns (nil, nil). Both halves are the same author's bug, but
+// between them they would produce a green step that asserted nothing, so the step
+// itself has to refuse the nil.
+type nilTolerantComparator struct{ compared int }
+
+func (c *nilTolerantComparator) Name() string { return "nil-tolerant" }
+
+func (c *nilTolerantComparator) ParseExpectation(string) (core.Expectation, error) {
+	return nil, nil
+}
+
+func (c *nilTolerantComparator) Compare(context.Context, core.Evidence, core.Expectation) (core.Verdict, error) {
+	c.compared++
+	return core.Verdict{Pass: true}, nil
 }
 
 func (c *revenueShape) Name() string { return "revenue-shape" }
@@ -50,6 +70,9 @@ func (c *revenueShape) ParseExpectation(text string) (core.Expectation, error) {
 	c.parsedText = append(c.parsedText, text)
 	if c.parseErr != nil {
 		return nil, c.parseErr
+	}
+	if c.parseNil {
+		return nil, nil
 	}
 	var exp revenueShapeExpectation
 	if err := json.Unmarshal([]byte(text), &exp); err != nil {
@@ -348,6 +371,55 @@ func TestCustomComparatorParseError(t *testing.T) {
 	if len(cmp.comparedAs) != 0 {
 		t.Fatalf("Compare was called %d time(s) despite a parse error", len(cmp.comparedAs))
 	}
+}
+
+// TestCustomComparatorRejectsNilExpectation closes the hole CodeRabbit found on PR
+// #39: a parser that claims success while returning a nil expectation.
+//
+// The three failure modes in spec D5 all end in an error, and the spec states that
+// none of them may produce a nil expectation or a passing step. A SUCCESSFUL parse
+// returning nil was the fourth case nobody enumerated: the step forwarded nil to
+// Compare, and a comparator that tolerates nil then returned a passing verdict — a
+// green step that asserted nothing, which is exactly the silent success Constitution
+// IV exists to prevent.
+//
+// The step refuses the nil rather than trusting the parser's claim. Note the limit of
+// what this can catch: only an UNTYPED nil. A typed nil pointer — `var e *myExp;
+// return e, nil` — is a non-nil interface and reaches Compare, where the comparator's
+// own type assertion succeeds and it dereferences its own nil. That is genuinely the
+// comparator's bug and not something the step can see without knowing the type.
+func TestCustomComparatorRejectsNilExpectation(t *testing.T) {
+	t.Run("nil expectation from a tolerant comparator does not pass", func(t *testing.T) {
+		cmp := &nilTolerantComparator{}
+		eng := customComparatorEngine(t, withComparator("nil-tolerant", cmp))
+		w := &world{eng: eng, ctx: context.Background(), target: "bot"}
+
+		err := w.comparatorSatisfiedByDoc("nil-tolerant", &godog.DocString{Content: `{}`})
+		if err == nil {
+			t.Fatal("a nil expectation must not produce a passing step")
+		}
+		if !strings.Contains(err.Error(), "nil-tolerant") {
+			t.Errorf("error %q must name the comparator", err)
+		}
+		if cmp.compared != 0 {
+			t.Errorf("Compare was called %d time(s); the nil must be refused before Compare", cmp.compared)
+		}
+	})
+
+	t.Run("the refusal is not a blanket rejection of falsy expectations", func(t *testing.T) {
+		// A zero-valued but non-nil expectation is legitimate and must still run: the
+		// guard rejects nil, not emptiness.
+		cmp := &revenueShape{}
+		eng := customComparatorEngine(t, withComparator("revenue-shape", cmp))
+		w := &world{eng: eng, ctx: context.Background(), target: "bot"}
+
+		if err := w.comparatorSatisfiedByDoc("revenue-shape", &godog.DocString{Content: `{}`}); err != nil {
+			t.Fatalf("a zero-valued expectation is valid and must reach Compare: %v", err)
+		}
+		if len(cmp.comparedAs) != 1 {
+			t.Fatalf("Compare called %d time(s), want 1", len(cmp.comparedAs))
+		}
+	})
 }
 
 // sensitivityEngine builds an engine with a single request-scoped target under the

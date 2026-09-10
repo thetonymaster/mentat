@@ -154,6 +154,17 @@ struck-through entry so the numbering stays stable.
      nameability failure there is — and was skipped silently. Now reported. Go's
      predeclared identifiers (`string`, `int`, `error`, `any`, …) are unexported idents
      too, and remain excluded.
+   - **Instantiated aliases.** `type PublicBox = core.Box[int]` was dropped from the
+     seed set entirely — not merely unnameable but unseeded, so everything reachable
+     through it went unwalked. Now unwrapped, with the instantiation's type *arguments*
+     checked in their own right: a caller writes `mentat.PublicBox` and never spells the
+     argument, yet lands in fields typed by it.
+   - **Generic receivers and renamed receiver parameters.** Methods on a generic type
+     matched no target and were never collected. Go also lets a receiver rename its type
+     parameters (`type Box[t any]` with `func (b Box[x]) …`), scoped to the method, so
+     each method's references are filtered by its own receiver's names rather than the
+     declaration's — otherwise a package-level type colliding with a declaration
+     parameter name is wrongly ignored.
 
 > Every symbol on the surface earns its place: the manifest rule is that a symbol
 > appears in the contract *with a justification, or it does not get exported*. See
