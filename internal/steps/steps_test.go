@@ -485,6 +485,64 @@ func TestSchemaStep(t *testing.T) {
 	})
 }
 
+// TestDocstringHandlersWithArgsRejectNilDocstring covers the two docstring handlers
+// that HAD a nil guard but no test for it. They are the ones taking capture arguments
+// alongside the docstring, which is why they were missed: the family's other tests are
+// all one-argument calls.
+//
+// An unguarded handler and an untested guard fail the same way in review — nobody
+// looks — and that is how responseBodyJSONContains kept its panic through ten features.
+func TestDocstringHandlersWithArgsRejectNilDocstring(t *testing.T) {
+	tests := []struct {
+		name         string
+		call         func(w *world) error
+		wantContains string
+	}{
+		{
+			name:         "result of tool",
+			call:         func(w *world) error { return w.resultToolDoc("last", "search", "contains", nil) },
+			wantContains: "search",
+		},
+		{
+			name:         "attribute of span",
+			call:         func(w *world) error { return w.resultAttrDoc("http.method", "last", "name=fetch", "contains", nil) },
+			wantContains: "http.method",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.call(&world{})
+			if err == nil {
+				t.Fatal("want error for nil docstring, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantContains) {
+				t.Errorf("error %q must name the offending value %q", err, tt.wantContains)
+			}
+		})
+	}
+}
+
+// TestResponseBodyJSONContainsDocNil closes the one gap in the docstring-handler
+// family: `the response body json-contains:` dereferenced doc.Content directly, so a
+// malformed step with no docstring PANICKED where its eight siblings return a
+// descriptive error. A panic in library code is banned except for caller-unreachable
+// invariants, and a malformed feature file is reachable by definition.
+//
+// Found while planning feature 011 and deliberately left out of that branch's diff —
+// it belongs to the Result grammar, not to custom-comparator invocation.
+func TestResponseBodyJSONContainsDocNil(t *testing.T) {
+	w := &world{}
+	err := w.responseBodyJSONContains(nil)
+	if err == nil {
+		t.Fatal("want error for nil docstring, got nil")
+	}
+	// The message must name the step, as every sibling's does: the author's only clue
+	// is which line of the .feature file to look at.
+	if !strings.Contains(err.Error(), "json-contains") {
+		t.Errorf("error %q must name the step", err)
+	}
+}
+
 // TestRegexStep exercises the `the result matches regex` grammar end-to-end
 // through a godog suite: a matching pattern passes the suite; a non-matching one
 // fails it and surfaces the result-comparator's regex reason. buildEng's `svc`

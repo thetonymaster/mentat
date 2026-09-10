@@ -65,8 +65,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   in-process and returns structured `Results`/`ScenarioResult`, and `LoadConfig` reads the
   `mentat.yaml` surface. `docs/extending/` documents each seam and the pre-1.0 stability
   policy; `examples/kafkaecho` is a standalone module proving the surface suffices.
-  (Registering a custom *comparator* composes today, but invoking one from a `.feature`
-  step needs new Gherkin grammar and is deferred to a future spec.)
+  (Registering a custom *comparator* composed but could not yet be invoked from a
+  `.feature` step; that grammar landed in feature 011, above.)
+
+### Fixed
+
+- **`the response body json-contains:` panicked on a missing docstring.** It
+  dereferenced the docstring directly, so a malformed step crashed the run where its
+  eight sibling docstring handlers return a descriptive error naming the step. All nine
+  handlers now guard it, and all nine have a test for that guard — two of them had the
+  guard but no test, which is the same failure in review as having no guard at all.
 
 ### Changed
 

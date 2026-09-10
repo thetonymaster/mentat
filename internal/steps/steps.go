@@ -541,6 +541,9 @@ func (w *world) serviceNeverCalled(name string) error {
 }
 
 func (w *world) responseBodyJSONContains(doc *godog.DocString) error {
+	if doc == nil {
+		return fmt.Errorf("the response body json-contains: expected a docstring JSON subset, got none")
+	}
 	return w.check("result", comparator.ResultExpectation{Matcher: "json-subset", Want: doc.Content})
 }
 
