@@ -139,9 +139,15 @@ responsibility: grammar rows in `metadata.go`, handlers in `steps.go`, accessors
 Recorded because ordering carries real information here, exactly as it did in 010.
 
 **5a — the seam and its gate, first.** `core.ExpectationParser`, the facade alias, the
-regenerated golden, and the **recorded falsification rehearsal** (remove the alias → the sweep
-fails naming the type and the reaching method → restore → green). This lands before any
+regenerated golden, and the **recorded falsification rehearsal**. This lands before any
 handler exists, so the two-line golden diff is attributable to nothing else.
+
+The rehearsal plants an unaliased probe type reached through the new seam's method set and
+observes `internal/core.XProbeSpec — reached by method (ExpectationParser) XProbe`, then
+reverts. It is **not** "delete the alias and watch it fail": the sweep seeds only from facade
+alias targets (`surface_test.go:1191-1198`), so an unaliased interface is never walked and
+reports zero offenders — it leaves the gate rather than tripping it. See
+[contracts/expectation-parser-seam.md](./contracts/expectation-parser-seam.md#falsification).
 
 **5b — `Engine.Comparators()`** belongs with the error paths, *not* with the seam. It exists
 only to serve FR-007's "list the registered names", so it lands when that error does.

@@ -38,15 +38,36 @@ method (ExpectationParser) ParseExpectation(text string) (Expectation, error)
 type ExpectationParser = core.ExpectationParser
 ```
 
-**Then prove the gate is real** (SC-006). Temporarily delete the facade alias from
-`mentat.go` and re-run the sweep:
+**Then prove the gate is real** (SC-006) — by planting a probe, **not** by deleting the alias.
 
-```bash
-go test ./... -run TestFacadeNameabilitySweep
+Deleting the alias does *not* fail the sweep: it seeds only from facade alias targets
+(`surface_test.go:1191-1198`), so an unaliased interface is never walked and reports zero
+offenders. It vanishes from the gate rather than tripping it.
+
+Temporarily add to `internal/core`, with the alias left in place:
+
+```go
+type XProbeSpec struct{ Note string }   // deliberately no facade alias
+
+type ExpectationParser interface {
+	ParseExpectation(text string) (Expectation, error)
+	XProbe() XProbeSpec                 // temporary
+}
 ```
 
-**Expected**: FAILS, naming `ExpectationParser` **and** the seam method that reaches it.
-Restore the alias; green again. A gate not observed failing has not been tested.
+```bash
+go test . -run TestFacadeNameabilitySweep
+```
+
+**Expected**: FAILS with
+
+```text
+internal/core.XProbeSpec — reached by method (ExpectationParser) XProbe
+```
+
+Revert both edits; green again. A gate not observed failing has not been tested — and per
+010's recorded rehearsal (`surface_test.go:1141`), a probe that *fails* to go red has
+historically meant a bug in the gate rather than a healthy surface.
 
 ---
 

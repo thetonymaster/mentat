@@ -123,7 +123,8 @@ complete).
 The in-flight feature is **011-comparator-gherkin-invocation** (specified and
 planned 2026-09-10): spec at `specs/011-comparator-gherkin-invocation/spec.md`,
 current plan at `specs/011-comparator-gherkin-invocation/plan.md`, with research,
-data-model, contracts/ and quickstart alongside. `tasks.md` is not yet generated.
+data-model, contracts/ and quickstart alongside, and `tasks.md` generated (33
+tasks, 0 done). Implementation has not started.
 
 Read the spec's **Decisions** (D1–D5) first — D1 in particular, which narrows the
 feature to one generic step row plus an optional `ExpectationParser` seam and defers

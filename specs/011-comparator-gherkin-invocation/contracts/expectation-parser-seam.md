@@ -95,9 +95,41 @@ live test that the gate catches a new unnameable seam type without anyone rememb
 ## Falsification
 
 Prove the gate works by breaking it, in the test file's own record — the mutation-rehearsal
-discipline 009 established and 010 repeated:
+discipline 009 established and 010 repeated (`surface_test.go:66,78,96,116,826,1141`).
 
-1. Remove `type ExpectationParser = core.ExpectationParser` from the facade → the sweep fails,
-   naming the type **and** the seam method that reaches it.
-2. Restore it → green.
-3. Recorded in the test file, not only in this contract.
+**Removing the facade alias is NOT the rehearsal.** `TestFacadeNameabilitySweep` seeds its
+walk exclusively from the facade's alias targets (`surface_test.go:1191-1198`), so an
+interface with no alias is never queued, never walked, and produces **zero** offenders. It
+disappears from the gate rather than failing it. This is a property of the gate's stated
+contract — it verifies that everything *published* is nameable; it cannot tell you that you
+forgot to publish something — and it is why the rehearsal below plants a probe instead.
+
+The rehearsal, with the alias in place, temporarily adds an unaliased probe type reached
+**through the new seam's method set**:
+
+```go
+// internal/core, temporarily
+type XProbeSpec struct{ Note string }   // deliberately no facade alias
+
+type ExpectationParser interface {
+	ParseExpectation(text string) (Expectation, error)
+	XProbe() XProbeSpec                 // temporary second method
+}
+```
+
+Expected failure, naming both the type and the reaching position (FR-007's obligation):
+
+```text
+internal/core.XProbeSpec — reached by method (ExpectationParser) XProbe
+```
+
+Then revert both edits and confirm green. The transcript is recorded as a comment in
+`surface_test.go` alongside the existing rehearsals, not only in this contract.
+
+**Why this specific shape.** It proves the *interface-method* branch of the sweep
+(`surface_test.go:1252-1271`) walks the new seam. 010's own rehearsal is the cautionary
+precedent: its first attempt planted a probe reachable only through a seam signature and the
+sweep reported **zero** offenders, because a bare identifier inside `internal/core` is an
+`*ast.Ident` rather than a `SelectorExpr` and the walker skipped it. A rehearsal that does
+not go red has not tested anything — and the reason it fails to go red can be a bug in the
+gate itself.
