@@ -1334,6 +1334,19 @@ func surfaceIndent(syms []string) string {
 //     other position uses. Any position that unwraps type expressions by hand drifts from
 //     the ones that do not; there is one traversal, and (6) is the second time that
 //     lesson arrived. Covered by TestSurfaceAliasArgsTraversesNestedArguments.
+//
+//  7. FACADE-LOCAL arguments were dropped wholesale. (6) discarded every ref that
+//     resolved to the facade itself, justified by "a bare ident at the facade names a
+//     facade-declared type, which is nameable by definition" — true only for an
+//     EXPORTED ident. `core.Box[hidden]`, with an unexported facade-local type, is the
+//     strictest gap there is and was silently discarded by the very filter meant to
+//     remove noise. Now dropped only when exported, or when it is one of a parameterized
+//     alias's own type parameters (`type Public[T any] = core.Box[T]`, legal since Go
+//     1.24) — those are placeholders whatever their case.
+//
+//     Facade refs are reported but never QUEUED: the sentinel is not a directory, and
+//     walking it tries to read one. Nothing is lost, since the only facade refs that
+//     survive the filter are types an external module can neither spell nor construct.
 func TestFacadeNameabilitySweep(t *testing.T) {
 	c, aliases := surfaceAliases(t)
 
@@ -1374,6 +1387,13 @@ func TestFacadeNameabilitySweep(t *testing.T) {
 		for _, arg := range a.args {
 			if !nameable[arg] {
 				offenders = append(offenders, fmt.Sprintf("%s — reached by type argument of alias %s", arg, a.name))
+			}
+			// A facade-local argument is REPORTED but never queued: the sentinel is not
+			// a directory, so walking it would try to read one. Nothing is lost —
+			// the only facade refs that survive surfaceAliasArgs are unexported types,
+			// which an external module can neither spell nor construct.
+			if strings.HasPrefix(arg, surfaceAliasFacadeSelf+".") {
+				continue
 			}
 			if !seen[arg] {
 				seen[arg] = true
@@ -1527,13 +1547,29 @@ const surfaceAliasFacadeSelf = "<facade>"
 // core.Thing]]` — so those types never entered the reachability queue at all. Any
 // position that unwraps type expressions by hand drifts from every other position that
 // does; there is one traversal, and this is it.
-func surfaceAliasArgs(targs []ast.Expr, resolve func(string) (string, bool)) []string {
+func surfaceAliasArgs(targs []ast.Expr, aliasParams map[string]bool, resolve func(string) (string, bool)) []string {
 	var args []string
 	for _, a := range targs {
 		for _, ref := range surfaceNamedRefs(a, surfaceAliasFacadeSelf, resolve) {
-			// A bare ident at the facade names a facade-DECLARED type, which is
-			// nameable by definition — that is what declaring it there means.
-			if strings.HasPrefix(ref, surfaceAliasFacadeSelf+".") {
+			name, isFacade := strings.CutPrefix(ref, surfaceAliasFacadeSelf+".")
+			if !isFacade {
+				args = append(args, ref)
+				continue
+			}
+			// A bare ident written at the facade is dropped in exactly two cases, and
+			// an earlier version dropped ALL of them on reasoning that only holds for
+			// the first:
+			//
+			//   - EXPORTED: it names a facade-declared type, and declaring it there is
+			//     what makes it nameable.
+			//   - the alias declaration's OWN type parameter: a parameterized alias
+			//     (`type Public[T any] = core.Box[T]`, legal since Go 1.24) passes its
+			//     placeholders through as arguments, whatever their case.
+			//
+			// Anything else is an UNEXPORTED facade-local type an external module
+			// cannot spell — the strictest gap there is, and precisely what the blanket
+			// drop was hiding.
+			if aliasParams[name] || token.IsExported(name) {
 				continue
 			}
 			args = append(args, ref)
@@ -1617,7 +1653,15 @@ func surfaceAliases(t *testing.T) (*surfaceCtx, []surfaceAlias) {
 				if _, local := c.imports[pkg.Name]; !local {
 					continue
 				}
-				args := surfaceAliasArgs(targs, func(q string) (string, bool) {
+				aliasParams := map[string]bool{}
+				if ts.TypeParams != nil {
+					for _, f := range ts.TypeParams.List {
+						for _, n := range f.Names {
+							aliasParams[n.Name] = true
+						}
+					}
+				}
+				args := surfaceAliasArgs(targs, aliasParams, func(q string) (string, bool) {
 					d, ok := c.imports[q]
 					return d, ok
 				})
@@ -1875,9 +1919,10 @@ func TestSurfaceAliasArgsTraversesNestedArguments(t *testing.T) {
 	}
 
 	tests := []struct {
-		name string
-		expr string // the full alias target, e.g. core.Box[...]
-		want []string
+		name        string
+		expr        string          // the full alias target, e.g. core.Box[...]
+		aliasParams map[string]bool // the ALIAS declaration's own type parameters
+		want        []string
 	}{
 		{name: "direct selector", expr: "core.Box[core.Thing]", want: []string{"internal/core.Thing"}},
 		{name: "pointer argument", expr: "core.Box[*core.Thing]", want: []string{"internal/core.Thing"}},
@@ -1889,6 +1934,19 @@ func TestSurfaceAliasArgsTraversesNestedArguments(t *testing.T) {
 		{name: "predeclared argument is nameable by construction", expr: "core.Box[int]", want: nil},
 		{name: "stdlib argument is not the facade's to re-export", expr: "core.Box[time.Duration]", want: nil},
 		{name: "non-generic alias has no arguments", expr: "core.Thing", want: nil},
+		// A bare EXPORTED ident at the facade names a facade-declared type, which is
+		// nameable because declaring it there is what makes it nameable.
+		{name: "exported facade argument is nameable by construction", expr: "core.Box[Verdict]", want: nil},
+		// An UNEXPORTED one is the opposite: an external module cannot spell it at all,
+		// so discarding it hid the strictest kind of gap. The earlier blanket drop of
+		// every <facade>.* ref was justified by reasoning that only holds for exported
+		// idents.
+		{name: "unexported facade argument is NOT nameable", expr: "core.Box[hidden]", want: []string{"<facade>.hidden"}},
+		// A parameterized alias (`type Public[T any] = core.Box[T]`, legal since Go
+		// 1.24) passes its OWN type parameters through as arguments. Those are
+		// placeholders, not types, whatever their case.
+		{name: "alias type parameter is not a reference", expr: "core.Box[T]", aliasParams: map[string]bool{"T": true}, want: nil},
+		{name: "lowercase alias type parameter is not a reference either", expr: "core.Box[t]", aliasParams: map[string]bool{"t": true}, want: nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1899,7 +1957,7 @@ func TestSurfaceAliasArgsTraversesNestedArguments(t *testing.T) {
 				t.Fatalf("parse %q: %v", tt.expr, err)
 			}
 			_, targs := surfaceAliasBase(e)
-			got := surfaceAliasArgs(targs, resolve)
+			got := surfaceAliasArgs(targs, tt.aliasParams, resolve)
 			if len(got) != len(tt.want) {
 				t.Fatalf("surfaceAliasArgs(%q) = %v, want %v", tt.expr, got, tt.want)
 			}
