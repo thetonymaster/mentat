@@ -703,6 +703,15 @@ func (c *surfaceCtx) lookupInterface(t *testing.T, pkg, name string) *ast.Interf
 	if !ok {
 		return nil
 	}
+	return c.ifaceInDir(t, dir, name)
+}
+
+// ifaceInDir is the dir-keyed form, for the sweep. See structInDir.
+func (c *surfaceCtx) ifaceInDir(t *testing.T, dir, name string) *ast.InterfaceType {
+	t.Helper()
+	if dir == "" {
+		return nil
+	}
 	if c.ifaces[dir] == nil {
 		c.ifaces[dir] = c.indexInterfaces(t, dir)
 	}
@@ -770,6 +779,16 @@ func (c *surfaceCtx) lookupStruct(t *testing.T, pkg, name string) *ast.StructTyp
 	t.Helper()
 	dir, ok := c.imports[pkg]
 	if !ok {
+		return nil
+	}
+	return c.structInDir(t, dir, name)
+}
+
+// structInDir is the dir-keyed form. The nameability sweep works in canonical
+// module-relative dirs rather than a package's local import name, so it uses this.
+func (c *surfaceCtx) structInDir(t *testing.T, dir, name string) *ast.StructType {
+	t.Helper()
+	if dir == "" {
 		return nil
 	}
 	if c.structs[dir] == nil {
@@ -1155,9 +1174,13 @@ func TestFacadeNameabilitySweep(t *testing.T) {
 
 	// nameable keys the facade's alias TARGETS as "pkg.Name" — what an internal type must
 	// match to be writable from outside.
+	// Everything below is keyed on the CANONICAL module-relative dir, never on a
+	// package's local import name: an alias target, a field's type and a method
+	// signature's type are each written in a different package's namespace, and only the
+	// dir means the same thing in all of them.
 	nameable := map[string]bool{}
 	for _, a := range aliases {
-		nameable[a.pkg+"."+a.target] = true
+		nameable[c.imports[a.pkg]+"."+a.target] = true
 	}
 
 	type reach struct{ typ, via string }
@@ -1166,7 +1189,7 @@ func TestFacadeNameabilitySweep(t *testing.T) {
 
 	// Seed with every alias target, and record how each is reached.
 	for _, a := range aliases {
-		key := a.pkg + "." + a.target
+		key := c.imports[a.pkg] + "." + a.target
 		if seen[key] {
 			continue
 		}
@@ -1178,14 +1201,19 @@ func TestFacadeNameabilitySweep(t *testing.T) {
 	for len(queue) > 0 {
 		cur := queue[0]
 		queue = queue[1:]
-		pkg, name, ok := strings.Cut(cur.typ, ".")
+		dir, name, ok := surfaceCutDirType(cur.typ)
 		if !ok {
 			continue
+		}
+		// Every type in this package's source resolves through ITS OWN imports.
+		resolve := func(q string) (string, bool) {
+			d, ok := c.importsOf(t, dir)[q]
+			return d, ok
 		}
 		// A struct contributes its exported field types; an interface contributes its
 		// method parameter and result types. Everything else is a leaf.
 		var refs []reach
-		if st := c.lookupStruct(t, pkg, name); st != nil && st.Fields != nil {
+		if st := c.structInDir(t, dir, name); st != nil && st.Fields != nil {
 			for _, f := range st.Fields.List {
 				// EVERY name in a multi-name declaration, filtered individually — the
 				// same discipline renderStructFields already uses. Testing only
@@ -1204,7 +1232,7 @@ func TestFacadeNameabilitySweep(t *testing.T) {
 					vias = append(vias, "field ("+name+") <embedded>")
 				}
 				for _, via := range vias {
-					for _, ref := range surfaceNamedRefs(f.Type, pkg) {
+					for _, ref := range surfaceNamedRefs(f.Type, dir, resolve) {
 						refs = append(refs, reach{typ: ref, via: via})
 					}
 				}
@@ -1215,25 +1243,16 @@ func TestFacadeNameabilitySweep(t *testing.T) {
 			// result type there is exactly as public as a field's — and was exactly as
 			// unswept until now. This gap was introduced by this feature: adding
 			// renderStructMethods created a surface position the sweep did not walk.
-			if dir, ok := c.imports[pkg]; ok {
-				// Called for its collision check as much as its result: the sweep
-				// resolves qualifiers in the FACADE's namespace, so it shares
-				// normalizeTypes' assumption that a local import name means the same
-				// thing in every package. importsOf fails loudly if any directory
-				// binds one name to two packages, so that assumption cannot break
-				// silently here either.
-				c.importsOf(t, dir)
-				for _, m := range c.structMethodSigs(t, dir, name) {
-					for _, ref := range surfaceFuncRefs(m.Sig, pkg) {
-						refs = append(refs, reach{typ: ref, via: "method (" + name + ") " + m.Name})
-					}
+			for _, m := range c.structMethodSigs(t, dir, name) {
+				for _, ref := range surfaceFuncRefs(m.Sig, dir, resolve) {
+					refs = append(refs, reach{typ: ref, via: "method (" + name + ") " + m.Name})
 				}
 			}
 		}
-		if iface := c.lookupInterface(t, pkg, name); iface != nil && iface.Methods != nil {
+		if iface := c.ifaceInDir(t, dir, name); iface != nil && iface.Methods != nil {
 			for _, m := range iface.Methods.List {
 				if fn, isFunc := m.Type.(*ast.FuncType); isFunc && len(m.Names) > 0 {
-					for _, ref := range surfaceFuncRefs(fn, pkg) {
+					for _, ref := range surfaceFuncRefs(fn, dir, resolve) {
 						refs = append(refs, reach{typ: ref, via: "method (" + name + ") " + m.Names[0].Name})
 					}
 					continue
@@ -1245,16 +1264,15 @@ func TestFacadeNameabilitySweep(t *testing.T) {
 				// so the BFS traverses it with the same rules — which also handles an
 				// embed of an embed without recursing here. Embeds of stdlib interfaces
 				// (io.Writer) resolve to no local package and terminate naturally.
-				for _, ref := range surfaceNamedRefs(m.Type, pkg) {
+				for _, ref := range surfaceNamedRefs(m.Type, dir, resolve) {
 					refs = append(refs, reach{typ: ref, via: "embedded interface in " + name})
 				}
 			}
 		}
 		for _, r := range refs {
-			refPkg, _, _ := strings.Cut(r.typ, ".")
-			if _, local := c.imports[refPkg]; !local {
-				continue // stdlib or third-party: a terminal, not ours to name
-			}
+			// surfaceNamedRefs only emits module-internal refs now — a qualifier that
+			// resolved to nothing local was dropped at the source, so there is no
+			// stdlib filtering left to do here.
 			if !nameable[r.typ] {
 				offenders = append(offenders, fmt.Sprintf("%s — reached by %s", r.typ, r.via))
 			}
@@ -1269,9 +1287,11 @@ func TestFacadeNameabilitySweep(t *testing.T) {
 		sort.Strings(offenders)
 		t.Fatalf("%d type(s) are reachable from the public surface but have NO facade name, "+
 			"so an external module cannot write them:\n%s\n"+
-			"Fix by adding `type X = %s` to mentat.go (with a justification), or by removing the "+
-			"reaching position from the surface. See contracts/facade-nameability-v2.md.",
-			len(offenders), surfaceIndent(offenders), "<pkg>.<Type>")
+			"Each is shown as <module-relative-dir>.<Type>. Fix by adding an alias to "+
+			"mentat.go with a justification — e.g. a type in internal/core becomes "+
+			"`type X = core.X` — or by removing the position that reaches it from the "+
+			"surface. See contracts/facade-nameability-v2.md.",
+			len(offenders), surfaceIndent(offenders))
 	}
 }
 
@@ -1353,7 +1373,7 @@ func surfaceAliases(t *testing.T) (*surfaceCtx, []surfaceAlias) {
 // Unexported identifiers are skipped (not public surface) and so are the predeclared
 // types, which are conveniently all lowercase — string, int, error, any and friends never
 // pass IsExported.
-func surfaceNamedRefs(expr ast.Expr, self string) []string {
+func surfaceNamedRefs(expr ast.Expr, self string, resolve func(string) (string, bool)) []string {
 	var out []string
 	var walk func(ast.Expr)
 	walk = func(e ast.Expr) {
@@ -1370,15 +1390,23 @@ func surfaceNamedRefs(expr ast.Expr, self string) []string {
 		case *ast.ChanType:
 			walk(v.Value)
 		case *ast.SelectorExpr:
-			if id, ok := v.X.(*ast.Ident); ok {
-				out = append(out, id.Name+"."+v.Sel.Name)
+			id, ok := v.X.(*ast.Ident)
+			if !ok {
+				return
+			}
+			// Resolve the qualifier in the namespace of the package this expression was
+			// WRITTEN IN. `core.X` inside internal/result means whatever internal/result
+			// imports as `core` — not whatever the facade does. Anything that resolves
+			// to nothing module-internal is stdlib and terminates here.
+			if dir, local := resolve(id.Name); local {
+				out = append(out, dir+"."+v.Sel.Name)
 			}
 		case *ast.Ident:
 			if v.IsExported() {
 				out = append(out, self+"."+v.Name)
 			}
 		case *ast.FuncType:
-			out = append(out, surfaceFuncRefs(v, self)...)
+			out = append(out, surfaceFuncRefs(v, self, resolve)...)
 		}
 	}
 	walk(expr)
@@ -1388,16 +1416,16 @@ func surfaceNamedRefs(expr ast.Expr, self string) []string {
 // surfaceFuncRefs returns the named types in a function signature's parameters AND
 // results. This is the half feature 009's sweep never walked — and the half that left
 // Reporter unimplementable from outside the module.
-func surfaceFuncRefs(fn *ast.FuncType, self string) []string {
+func surfaceFuncRefs(fn *ast.FuncType, self string, resolve func(string) (string, bool)) []string {
 	var out []string
 	if fn.Params != nil {
 		for _, p := range fn.Params.List {
-			out = append(out, surfaceNamedRefs(p.Type, self)...)
+			out = append(out, surfaceNamedRefs(p.Type, self, resolve)...)
 		}
 	}
 	if fn.Results != nil {
 		for _, r := range fn.Results.List {
-			out = append(out, surfaceNamedRefs(r.Type, self)...)
+			out = append(out, surfaceNamedRefs(r.Type, self, resolve)...)
 		}
 	}
 	return out
@@ -1405,7 +1433,13 @@ func surfaceFuncRefs(fn *ast.FuncType, self string) []string {
 
 // --- T059 / gate-audit follow-ups: unit-test the normalization primitives ----------
 
-// TestSurfaceNamedRefsQualifiesBareIdents is the regression test for the bug the 010
+// TestSurfaceNamedRefsQualifiesBareIdents pins the canonical key contract: every
+// reference comes back as "module-relative-dir.TypeName", with bare identifiers taking
+// the DECLARING package's dir and qualifiers resolved through that package's OWN import
+// table. Local import names are never a key, because `core` means whatever the package
+// doing the writing says it means.
+//
+// It is also the regression test for the bug the 010
 // nameability rehearsal caught: the first version of surfaceNamedRefs collected only
 // qualified selectors, so a same-package reference — which is how internal/core writes
 // `Detail *AggregateDetail` — was invisible, and the sweep reported zero offenders while
@@ -1419,14 +1453,15 @@ func TestSurfaceNamedRefsQualifiesBareIdents(t *testing.T) {
 		expr string // a type expression as written inside package "core"
 		want []string
 	}{
-		{name: "bare exported ident is qualified with its own package", expr: "AggregateDetail", want: []string{"core.AggregateDetail"}},
-		{name: "pointer to bare ident", expr: "*AggregateDetail", want: []string{"core.AggregateDetail"}},
-		{name: "slice of bare ident", expr: "[]RunRecord", want: []string{"core.RunRecord"}},
-		{name: "already-qualified selector is kept", expr: "*trace.Trace", want: []string{"trace.Trace"}},
+		{name: "bare exported ident takes its own package's dir", expr: "AggregateDetail", want: []string{"internal/core.AggregateDetail"}},
+		{name: "pointer to bare ident", expr: "*AggregateDetail", want: []string{"internal/core.AggregateDetail"}},
+		{name: "slice of bare ident", expr: "[]RunRecord", want: []string{"internal/core.RunRecord"}},
+		{name: "selector resolves through the DECLARING package's imports", expr: "*trace.Trace", want: []string{"internal/trace.Trace"}},
+		{name: "a qualifier the declaring package does not import is stdlib and is dropped", expr: "time.Duration", want: nil},
 		{name: "predeclared types are not references", expr: "string", want: nil},
 		{name: "unexported ident is not surface", expr: "compiled", want: nil},
-		{name: "map contributes key and value", expr: "map[Kind]Detail", want: []string{"core.Kind", "core.Detail"}},
-		{name: "func type contributes params and results", expr: "func(Evidence) (Verdict, error)", want: []string{"core.Evidence", "core.Verdict"}},
+		{name: "map contributes key and value", expr: "map[Kind]Detail", want: []string{"internal/core.Kind", "internal/core.Detail"}},
+		{name: "func type contributes params and results", expr: "func(Evidence) (Verdict, error)", want: []string{"internal/core.Evidence", "internal/core.Verdict"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1436,7 +1471,12 @@ func TestSurfaceNamedRefsQualifiesBareIdents(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse %q: %v", tt.expr, err)
 			}
-			got := surfaceNamedRefs(expr, "core")
+			// Stands in for internal/core's own import table.
+			resolve := func(q string) (string, bool) {
+				d, ok := map[string]string{"trace": "internal/trace"}[q]
+				return d, ok
+			}
+			got := surfaceNamedRefs(expr, "internal/core", resolve)
 			if len(got) != len(tt.want) {
 				t.Fatalf("surfaceNamedRefs(%q) = %v, want %v", tt.expr, got, tt.want)
 			}
@@ -1489,4 +1529,14 @@ func TestNormalizeTypesResolvesInDeclaringPackage(t *testing.T) {
 			}
 		})
 	}
+}
+
+// surfaceCutDirType splits a canonical "some/dir.TypeName" key. The dir may itself
+// contain dots in principle, so the split is on the LAST dot, not the first.
+func surfaceCutDirType(key string) (dir, name string, ok bool) {
+	i := strings.LastIndex(key, ".")
+	if i < 0 {
+		return "", "", false
+	}
+	return key[:i], key[i+1:], true
 }

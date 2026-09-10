@@ -124,8 +124,8 @@ go test . -run TestFacadeNameabilitySweep
 
 **Expected**: FAIL, naming **both** the offending type and the reaching position:
 
-```
-- core.Pricing — reached by method (Results) XProbe
+```text
+- internal/core.Pricing — reached by method (Results) XProbe
 ```
 
 A failure that names only the type does not satisfy the contract — the author would have
