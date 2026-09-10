@@ -141,11 +141,11 @@ Constitution V.
 suite drives a prebuilt `cmd/mentat` binary that structurally cannot contain a Go-registered
 comparator, and sits behind `//go:build e2e` which `make ci` never compiles.
 
-- [ ] T025 [US4] Write `TestCustomComparatorGoesRed` in `internal/steps/steps_test.go` following `TestFeatureGoesRedOnBadScenario` (`:103`): register a comparator that returns a failing verdict, run an inline feature naming it, assert `suite.Run() != 0` AND that the output contains the comparator's own reasons — status alone is not sufficient
-- [ ] T026 [P] [US4] Write `TestCustomComparatorParseError` in `internal/steps/steps_test.go`: register a comparator whose `ParseExpectation` returns an error, assert the suite fails loudly rather than skipping the assertion, and that the output names the comparator and carries the wrapped cause
-- [ ] T027 [US4] Falsification A — temporarily make the handler ignore a failing verdict (treat `!v.Pass` as success) and confirm **T025 goes red while T026 stays green**, then revert. The cross-check is the point: it proves T025 tests the verdict guard specifically
-- [ ] T028 [US4] Falsification B — temporarily make the handler swallow the `ParseExpectation` error (return nil) and confirm **T026 goes red while T025 stays green**, then revert. Two guards need two mutations; one mutation covering both would leave the other test red for its original reason and prove nothing
-- [ ] T029 [US4] Record both falsification transcripts as comments in `internal/steps/steps_test.go`
+- [X] T025 [US4] Write `TestCustomComparatorGoesRed` in `internal/steps/steps_test.go` following `TestFeatureGoesRedOnBadScenario` (`:103`): register a comparator that returns a failing verdict, run an inline feature naming it, assert `suite.Run() != 0` AND that the output contains the comparator's own reasons — status alone is not sufficient
+- [X] T026 [P] [US4] Write `TestCustomComparatorParseError` in `internal/steps/steps_test.go`: register a comparator whose `ParseExpectation` returns an error, assert the suite fails loudly rather than skipping the assertion, and that the output names the comparator and carries the wrapped cause
+- [X] T027 [US4] Falsification A — temporarily make the handler ignore a failing verdict (treat `!v.Pass` as success) and confirm **T025 goes red while T026 stays green**, then revert. The cross-check is the point: it proves T025 tests the verdict guard specifically
+- [X] T028 [US4] Falsification B — temporarily make the handler swallow the `ParseExpectation` error (return nil) and confirm **T026 goes red while T025 stays green**, then revert. Two guards need two mutations; one mutation covering both would leave the other test red for its original reason and prove nothing
+- [X] T029 [US4] Record both falsification transcripts as comments in `internal/steps/steps_test.go`
 
 **Checkpoint**: all four stories complete, and each red-proof is itself proven to fail when its
 guard is removed.

@@ -273,6 +273,78 @@ func TestCustomComparatorPatternRejectsEmbeddedQuote(t *testing.T) {
 	}
 }
 
+// customComparatorFeature is the inline feature both red proofs drive: identical
+// except for how the registered comparator is rigged to misbehave.
+const customComparatorFeature = `Feature: red proof
+  Scenario: a custom comparator is not satisfied
+    Given the agent target "bot"
+    When I run scenario "happy"
+    Then the "revenue-shape" comparator is satisfied by:
+      """
+      {"min": 4, "currency": "USD"}
+      """
+`
+
+// TestCustomComparatorGoesRed is the L3 obligation for US4 (Constitution V): a test
+// framework that cannot be SHOWN to fail correctly is unfalsifiable.
+//
+// A registered custom comparator returning a failing verdict must fail the suite AND
+// surface the comparator's own reasons. Status alone is insufficient — a suite that
+// exits non-zero while swallowing the reason tells the author nothing.
+//
+// This lives in internal/steps rather than e2e/ deliberately (research R6): the e2e
+// suite drives a prebuilt cmd/mentat binary, which structurally cannot contain a
+// Go-registered comparator, and sits behind //go:build e2e, which `make ci` never
+// compiles.
+//
+// Falsified by T027 — see the rehearsal transcript at the foot of this file.
+func TestCustomComparatorGoesRed(t *testing.T) {
+	cmp := &revenueShape{fail: true}
+	eng := customComparatorEngine(t, withComparator("revenue-shape", cmp))
+
+	status, out := runInlineFeature(eng, "red-proof", customComparatorFeature)
+	if status == 0 {
+		t.Fatalf("expected RED: a failing custom verdict must fail the suite\n%s", out)
+	}
+	if !strings.Contains(out, "revenue below the 4 USD floor") {
+		t.Fatalf("output must carry the comparator's OWN reason, got:\n%s", out)
+	}
+	if !strings.Contains(out, "revenue-shape") {
+		t.Fatalf("output must name the comparator, got:\n%s", out)
+	}
+	// The comparator really ran — the failure is a verdict, not a lookup error.
+	if len(cmp.comparedAs) != 1 {
+		t.Fatalf("Compare called %d time(s), want 1: the suite failed before reaching the comparator", len(cmp.comparedAs))
+	}
+}
+
+// TestCustomComparatorParseError is the other half of US4: a parser that errors must
+// fail the run LOUDLY rather than skip the assertion. A skipped assertion is the
+// silent-fallback failure Constitution IV exists to prevent, and it is indistinguishable
+// from success in a report.
+//
+// Falsified by T028 — see the rehearsal transcript at the foot of this file.
+func TestCustomComparatorParseError(t *testing.T) {
+	cmp := &revenueShape{parseErr: errors.New("detonated")}
+	eng := customComparatorEngine(t, withComparator("revenue-shape", cmp))
+
+	status, out := runInlineFeature(eng, "red-proof", customComparatorFeature)
+	if status == 0 {
+		t.Fatalf("expected RED: a parser error must fail the suite, not skip the assertion\n%s", out)
+	}
+	if !strings.Contains(out, "revenue-shape") {
+		t.Fatalf("output must name the comparator, got:\n%s", out)
+	}
+	if !strings.Contains(out, "detonated") {
+		t.Fatalf("output must carry the wrapped cause, got:\n%s", out)
+	}
+	// The parse failed, so Compare must never have been reached — a parse failure is
+	// not an assertion failure, and must not be converted into one.
+	if len(cmp.comparedAs) != 0 {
+		t.Fatalf("Compare was called %d time(s) despite a parse error", len(cmp.comparedAs))
+	}
+}
+
 // sensitivityEngine builds an engine with a single request-scoped target under the
 // given completeness mode ("settle" → bounded, "strict" → not), plus c registered as
 // "revenue-shape".
@@ -410,3 +482,43 @@ func TestCustomComparatorFromGherkin(t *testing.T) {
 		t.Fatalf("Compare received %#v, want %#v", got, want)
 	}
 }
+
+// --- Mutation rehearsals (011 T013, T020, T027, T028; observed 2026-09-10) ---------
+//
+// Recorded because a red proof nobody watched go red proves nothing, and because two
+// of these caught mistakes in the rehearsal itself rather than in the code.
+//
+// # T027 / T028 — the two red proofs are independently specific
+//
+// Two guards need two mutations. One mutation covering both would leave the other test
+// red for its original reason and demonstrate nothing about either.
+//
+//	A. handler swallows the verdict:   `_ = w.checkExp(name, exp, true); return nil`
+//	   -> TestCustomComparatorGoesRed     FAIL
+//	      TestCustomComparatorParseError  PASS   <- the cross-check
+//
+//	B. handler swallows the parse error: `if err != nil { return nil }`
+//	   -> TestCustomComparatorGoesRed     PASS   <- the cross-check
+//	      TestCustomComparatorParseError  FAIL
+//
+// # T020 — routing through checkExp is load-bearing (FR-006)
+//
+// Replacing the checkExp call with a direct w.eng.Compare reddens BOTH
+// TestCustomComparatorRejectedInMultirunScenario and the bounded row of
+// TestCustomComparatorIsCompletenessSensitive — the single-run guard and qualifier
+// recording (and judge accounting with it) are all things checkExp does and Compare
+// does not.
+//
+// The first attempt at this rehearsal did not go red, and the bug was in the
+// rehearsal: a `perl -0p` substitution with no /g replaced the FIRST match in the
+// file, which is checkSensitive (:247), not this handler. Every completeness-sensitive
+// built-in got the mutation while the handler under test kept routing through checkExp
+// and passing. Recorded because "the mutation didn't fire" and "the guard is real" look
+// identical from the test output alone.
+//
+// # T013 — the sensitivity literal is pinned, not decorative
+//
+// Flipping `sensitive` from true to false in the handler reddens the BOUNDED row of
+// TestCustomComparatorIsCompletenessSensitive and leaves the strict row green. Without
+// that test the literal could have been flipped with every other gate in this feature
+// staying green, converting a conservative caveat into an unsound green.
