@@ -121,8 +121,7 @@ merged 2026-07-18, all 34 tasks complete). The in-flight feature is
 **010-seam-type-nameability** (specified and planned 2026-09-09): spec at
 `specs/010-seam-type-nameability/spec.md`, current plan at
 `specs/010-seam-type-nameability/plan.md`, with research, data-model, contracts/
-and quickstart alongside. **No `tasks.md` yet** — run `/speckit-tasks` next.
-Read the spec's **Decisions** section (D1–D5) before touching anything. **D5 is the
+and quickstart alongside, and `tasks.md` complete (59/59). Read the spec's **Decisions** section (D1–D5) before touching anything. **D5 is the
 one to read first**: the result types (`Results`, `ScenarioResult`, `RunRecord`,
 `Reporter`) move to a new leaf package `internal/result` and are aliased on the
 facade. A seam's parameter types *cannot* be declared at the facade — root imports

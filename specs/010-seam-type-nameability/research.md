@@ -116,7 +116,7 @@ struct, not an alias**, on the grounds that a mirror is the device `ScenarioResu
 uses and keeps `core` types off the surface.
 
 That reasoning was correct about the device and wrong about where it can be applied — see
-[R8](#r8). The decision is replaced by D5:
+[R8](#r8--can-the-seam-types-be-facade-declared-at-all-no--this-is-why-d5-exists). The decision is replaced by D5:
 
 | Type | Home | Facade |
 |---|---|---|

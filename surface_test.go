@@ -430,6 +430,19 @@ func (c *surfaceCtx) importsOf(t *testing.T, dir string) map[string]string {
 			if imp.Name != nil {
 				local = imp.Name.Name
 			}
+			// Go imports are FILE-scoped, so two files in one package may legally bind
+			// the same local name to different packages. This map is dir-scoped, which
+			// is right for every package in this module today but would silently
+			// mis-resolve such a collision — and a normalizer that silently resolves to
+			// the wrong package is the failure mode this whole feature is about. Detect
+			// it and fail loudly rather than pick a winner; if it ever fires, resolve
+			// per-file with the concrete case in hand.
+			if prior, dup := m[local]; dup && prior != d {
+				t.Fatalf("package %q binds the import name %q to two different packages "+
+					"(%q in one file, %q in another). Imports are file-scoped, but the "+
+					"surface renderer resolves qualifiers per DIRECTORY, so it cannot tell "+
+					"these apart. Resolve per-file before proceeding.", dir, local, prior, d)
+			}
 			m[local] = d
 		}
 	}
@@ -1130,26 +1143,46 @@ func TestFacadeNameabilitySweep(t *testing.T) {
 		var refs []reach
 		if st := c.lookupStruct(t, pkg, name); st != nil && st.Fields != nil {
 			for _, f := range st.Fields.List {
-				if len(f.Names) > 0 && !f.Names[0].IsExported() {
-					continue
+				// EVERY name in a multi-name declaration, filtered individually — the
+				// same discipline renderStructFields already uses. Testing only
+				// f.Names[0] means `private, Public HiddenType` is skipped whole: the
+				// renderer would still freeze Public in the golden while the sweep never
+				// checked HiddenType, so the two halves of the gate would disagree and
+				// recreate the frozen-but-unwritable asymmetry this feature exists to
+				// remove. No such declaration exists today; the gate is for tomorrow's.
+				var vias []string
+				for _, n := range f.Names {
+					if n.IsExported() {
+						vias = append(vias, "field ("+name+") "+n.Name)
+					}
 				}
-				fieldName := "<embedded>"
-				if len(f.Names) > 0 {
-					fieldName = f.Names[0].Name
+				if len(f.Names) == 0 {
+					vias = append(vias, "field ("+name+") <embedded>")
 				}
-				for _, ref := range surfaceNamedRefs(f.Type, pkg) {
-					refs = append(refs, reach{typ: ref, via: "field (" + name + ") " + fieldName})
+				for _, via := range vias {
+					for _, ref := range surfaceNamedRefs(f.Type, pkg) {
+						refs = append(refs, reach{typ: ref, via: via})
+					}
 				}
 			}
 		}
 		if iface := c.lookupInterface(t, pkg, name); iface != nil && iface.Methods != nil {
 			for _, m := range iface.Methods.List {
-				fn, isFunc := m.Type.(*ast.FuncType)
-				if !isFunc || len(m.Names) == 0 {
+				if fn, isFunc := m.Type.(*ast.FuncType); isFunc && len(m.Names) > 0 {
+					for _, ref := range surfaceFuncRefs(fn, pkg) {
+						refs = append(refs, reach{typ: ref, via: "method (" + name + ") " + m.Names[0].Name})
+					}
 					continue
 				}
-				for _, ref := range surfaceFuncRefs(fn, pkg) {
-					refs = append(refs, reach{typ: ref, via: "method (" + name + ") " + m.Names[0].Name})
+				// An EMBEDDED interface contributes its methods to the published seam's
+				// method set, so the types in those signatures are just as reachable as
+				// the ones declared inline. Skipping non-func fields made anything
+				// reachable only through an embed invisible. Queued as a reachable type
+				// so the BFS traverses it with the same rules — which also handles an
+				// embed of an embed without recursing here. Embeds of stdlib interfaces
+				// (io.Writer) resolve to no local package and terminate naturally.
+				for _, ref := range surfaceNamedRefs(m.Type, pkg) {
+					refs = append(refs, reach{typ: ref, via: "embedded interface in " + name})
 				}
 			}
 		}

@@ -507,9 +507,12 @@ satisfied the bare capability, and the reasoning must not be lost.
 
 ## Assumptions
 
-- **Naming via facade aliases is the intended mechanism** for the three closed types, as
-  stated in the feature description. The `Reporter` case is settled differently and
-  deliberately — see D2/D3 — so no alias is involved there at all.
+- **Naming via facade aliases is the mechanism throughout** — for the three closed types
+  as stated in the feature description, and, after D5, for the result types and the
+  `Reporter` seam as well. An earlier version of this bullet said the `Reporter` case
+  involved "no alias at all"; that was the D2/D3 facade-declared model, which is an import
+  cycle. **Everything public is an alias.** Declaring a seam's parameter types at the
+  facade is the one thing this feature proves you cannot do.
 - **The three closed types are safe to expose now.** `AggregateDetail`, `HTTPSpec` and
   `ExtractPolicy` reference only builtins and a standard-library pointer; exposing them
   adds no further internal type to the surface. Verified while writing this spec.
@@ -534,9 +537,12 @@ satisfied the bare capability, and the reasoning must not be lost.
 - Touches the golden surface record owned by feature 007 and the stability policy
   documentation; both must move in the same change.
 - The `Reporter` resolution interacts with a standing feature-007 design decision
-  (`run.go:243-246`). D2 upholds that decision rather than revisiting it — the facade
-  keeps owning its result types — but the decision is load-bearing here and must not be
-  changed independently.
+  (`run.go:243-246`), which kept the facade's result types separate so internal report
+  records would not leak. D5 supersedes the *mechanism*: the types are unified in
+  `internal/result` and aliased, so what a reporter renders is exactly what a `Run` caller
+  receives. The 007 concern — that the surface should not silently acquire internal types
+  — is honoured by every newly public type carrying its SC-007 justification, not by
+  keeping two structs.
 - D4 depends on the registry reentrancy property established by 007 (T010/T011) and
   extends it to a seam that predates it. Moving reporters off the package-global map at
   `registry.go:192` touches `report.RegisterBuiltins` (`engine/build.go:56`) and the

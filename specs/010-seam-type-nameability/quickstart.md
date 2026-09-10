@@ -52,7 +52,7 @@ go test ./internal/report/ -run TestReportFormatGolden -v
 Prove it can fail — this is the check, not a formality:
 
 ```bash
-# temporarily change one json tag on a facade mirror, then:
+# temporarily change one json tag on internal/result's ScenarioResult, then:
 go test ./internal/report/ -run TestReportFormatGolden
 # EXPECT: FAIL, naming the format whose bytes moved. Revert.
 ```
@@ -110,7 +110,7 @@ fields; new `RunRecord` and `WithReporter` declarations. Nothing else.
 # On a scratch branch, add a method to a published seam whose parameter type
 # has no facade name, e.g.:
 #   Report(res Results, w io.Writer) error
-#   Summarize(rep core.RunReport) string      // deliberately unnameable
+#   Summarize(p core.Pricing) string          // deliberately unnameable
 go test . -run TestFacadeNameability
 ```
 
