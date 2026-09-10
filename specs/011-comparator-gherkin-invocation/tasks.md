@@ -1,5 +1,4 @@
 ---
-
 description: "Task list for 011 — custom-comparator Gherkin invocation"
 ---
 
@@ -15,6 +14,13 @@ test task below MUST be written and observed FAILING before its implementation. 
 not optional.
 
 **Organization**: Grouped by user story so each is independently implementable and testable.
+
+**Revised 2026-09-10** after `/speckit-analyze`. Four HIGH findings folded in: the `stepDefs`
+group count was wrong (`Extend` is the **seventh** group, not the sixth), the nil-docstring
+guard was unspecified (now T010/T015), SC-001 had **zero** coverage (now T030), and FR-010's
+soundness literal was never asserted (now T013). Two Principle-V process defects also fixed:
+a test row that could never have been observed failing, and one mutation asked to falsify two
+independent guards.
 
 ## Format: `[ID] [P?] [Story] Description`
 
@@ -71,9 +77,10 @@ assert the suite passes and the verdict is recorded. Hermetic — gomock store, 
 
 ### Implementation for User Story 1
 
-- [ ] T010 [US1] Add the `comparatorSatisfiedByDoc(name string, doc *godog.DocString) error` handler to `internal/steps/steps.go`, following the captures-first/docstring-last convention of `resultMeansDoc` (`:510`); resolve via `w.eng.Comparator(name)`, type-assert `core.ExpectationParser`, call `ParseExpectation(doc.Content)` unmodified, and route the result through `w.checkExp(name, exp, true)` (`:254`)
-- [ ] T011 [US1] Add exactly ONE row to `stepDefs` in `internal/steps/metadata.go` in a new sixth group `Extend`, with pattern `^the "([^"]+)" comparator is satisfied by:$`, a non-blank summary and a valid example, bound to the T010 handler (depends on T010)
+- [ ] T010 [US1] Add the `comparatorSatisfiedByDoc(name string, doc *godog.DocString) error` handler to `internal/steps/steps.go`, following the captures-first/docstring-last convention of `resultMeansDoc` (`:510`). It MUST open with a `doc == nil` guard returning a descriptive error naming the step (FR-017), as seven of the eight existing docstring handlers do (`:169, 434, 475, 511, 548, 559, 570`); then resolve via `w.eng.Comparator(name)`, type-assert `core.ExpectationParser`, call `ParseExpectation(doc.Content)` unmodified, and route the result through `w.checkExp(name, exp, true)` (`:254`)
+- [ ] T011 [US1] Add exactly ONE row to `stepDefs` in `internal/steps/metadata.go` in a new **seventh** group `Extend` — appended after the existing six (`Drive`, `Sequence`, `Budgets`, `Result`, `Aggregate / CEL`, `Shape`) — with pattern `^the "([^"]+)" comparator is satisfied by:$`, a non-blank summary and a valid example, bound to the T010 handler (depends on T010)
 - [ ] T012 [US1] Verify T009 passes, and assert within it that the comparator received the expectation its own `ParseExpectation` produced, and that qualifiers and judge usage were recorded on the world exactly as for a built-in step
+- [ ] T013 [US1] Assert FR-010's sensitivity actually reaches the engine (SC-011), modelled on `internal/steps/qualifier_test.go`: against a **bounded** (request-scoped, non-strict) target the custom comparator's verdict carries the completeness qualifier; against a **strict** target it does not. Without this, `sensitive=true` is an untested literal that could be flipped to `false` with every gate staying green
 
 **Checkpoint**: US1 is fully functional. This is the MVP — the capability exists end to end.
 
@@ -81,25 +88,30 @@ assert the suite passes and the verdict is recorded. Hermetic — gomock store, 
 
 ## Phase 4: User Story 2 — Every failure names what went wrong (Priority: P2)
 
-**Goal**: The three D5 failure modes each produce a loud, specific error. No nil expectation,
-no zero-value success, no silently skipped assertion.
+**Goal**: Every failure mode produces a loud, specific error. No nil expectation, no
+zero-value success, no silently skipped assertion, no panic.
 
-**Independent Test**: table-driven test over the three modes, asserting on error text.
+**Independent Test**: table-driven tests over the failure modes, asserting on error text.
 
 ### Tests for User Story 2 (REQUIRED — Test-First) ⚠️
 
-- [ ] T013 [US2] Write `TestCustomComparatorErrors` in `internal/steps/steps_test.go` as a table with one row per D5 mode — unregistered name, registered-without-`ExpectationParser`, and parser-returns-error — asserting the error contains the offending comparator name, and for the unknown-name row at least one registered name; observe it FAIL
-- [ ] T014 [P] [US2] Write `TestEngineComparatorsListsRegisteredNames` in `internal/engine/engine_test.go` asserting `Engine.Comparators()` returns the sorted registered names including one added via `WithExtraComparator`; observe it FAIL (method does not exist)
+> All four table rows are written **before** T018 implements them. An earlier revision added
+> the embedded-quote row after implementation, where it could never have been observed
+> failing — a Principle V violation caught by `/speckit-analyze`.
+
+- [ ] T014 [US2] Write `TestCustomComparatorErrors` in `internal/steps/steps_test.go` as a table with FOUR rows written up front: (a) unregistered name → error contains the name **and** at least one registered name; (b) registered but not an `ExpectationParser` → error names the comparator and states it cannot be driven from Gherkin; (c) `ParseExpectation` returns an error → `%w`-wrapped and named by comparator; (d) a name containing an embedded quote → the error echoes the **truncated capture verbatim** so the truncation is visible to the author (spec Edge Cases). Observe all four FAIL
+- [ ] T015 [P] [US2] Write `TestCustomComparatorDocNil` in `internal/steps/steps_test.go` as a direct handler call mirroring `TestResultMeansDocNil` (`w := &world{}; w.comparatorSatisfiedByDoc("x", nil)`), asserting a descriptive error rather than a panic (FR-017); observe it FAIL
+- [ ] T016 [P] [US2] Write `TestEngineComparatorsListsRegisteredNames` in `internal/engine/engine_test.go` asserting `Engine.Comparators()` returns the sorted registered names including one added via `WithExtraComparator`; observe it FAIL (method does not exist)
 
 ### Implementation for User Story 2
 
-- [ ] T015 [US2] Add `func (e *Engine) Comparators() []string { return e.reg.Comparators() }` to `internal/engine/engine.go`, mirroring `Reporters()` (`:218`) over the existing `Registry.Comparators()` (`registry.go:125`)
-- [ ] T016 [US2] Implement the three error branches in the `comparatorSatisfiedByDoc` handler in `internal/steps/steps.go`: unknown name → error naming the captured name verbatim plus `w.eng.Comparators()`; not an `ExpectationParser` → error naming the comparator and stating it cannot be driven from Gherkin; parse error → `%w`-wrapped and named by comparator
-- [ ] T017 [US2] Add a table row to T013 covering a comparator name containing an embedded quote, asserting the error echoes the truncated capture verbatim so the truncation is visible to the author (spec Edge Cases)
-- [ ] T018 [US2] Verify T013 and T014 pass, and that no branch returns a nil or zero-value expectation
+- [ ] T017 [US2] Add `func (e *Engine) Comparators() []string { return e.reg.Comparators() }` to `internal/engine/engine.go`, mirroring `Reporters()` (`:218`) over the existing `Registry.Comparators()` (`registry.go:125`)
+- [ ] T018 [US2] Implement the nil guard and the three error branches in `comparatorSatisfiedByDoc` in `internal/steps/steps.go` so T014, T015 and T016 all pass
+- [ ] T019 [US2] Verify T014–T016 pass and confirm by inspection that no branch returns a nil or zero-value expectation, a skipped assertion, or a passing step (Constitution IV)
+- [ ] T020 [US2] Extend `TestSingleRunStepRejectedInMultirunScenario` (`internal/steps/steps_test.go:912`) with the new phrase under `@runs(2)`, proving the step inherits the single-run guard (`steps.go:256`) rather than bypassing it — the spec Edge Case that had no coverage
 
 **Checkpoint**: US1 and US2 both work independently; the seam is usable rather than a guessing
-game.
+game, and cannot panic.
 
 ---
 
@@ -111,10 +123,10 @@ and the `stepDefs` drift invariant is preserved rather than relaxed.
 **Independent Test**: run the five drift tests and `mentat steps`; confirm the committed
 `docs/steps.md` matches.
 
-- [ ] T019 [US3] Regenerate `docs/steps.md` from `stepDefs` so the committed reference carries the new row
-- [ ] T020 [US3] Run `go test ./internal/steps/ -run 'TestStepDocs|TestStepMetadata|TestNoDirectStepRegistration' -v` and confirm all five drift tests pass with their assertions **UNMODIFIED** — needing to edit one means the design drifted into Option B and the plan is wrong, not the test (FR-012, SC-003)
-- [ ] T021 [P] [US3] Run `go run ./cmd/mentat steps` and confirm the `Extend` group lists the new phrase with a non-blank summary and a valid example
-- [ ] T022 [US3] Document the seam in `docs/extending/comparator.md`: the `ExpectationParser` interface, a complete worked comparator implementing it, and the feature-file snippet that drives it (FR-014)
+- [ ] T021 [US3] Regenerate `docs/steps.md` from `stepDefs` so the committed reference carries the new row
+- [ ] T022 [US3] Run `go test ./internal/steps/ -run 'TestStepDocs|TestStepMetadata|TestNoDirectStepRegistration' -v` and confirm all five drift tests pass with their assertions **UNMODIFIED** — needing to edit one means the design drifted into Option B and the plan is wrong, not the test (FR-012, SC-003)
+- [ ] T023 [P] [US3] Run `go run ./cmd/mentat steps` and confirm the `Extend` group lists the new phrase with a non-blank summary and a valid example
+- [ ] T024 [US3] Document the seam in `docs/extending/comparator.md`: the `ExpectationParser` interface, a complete worked comparator implementing it, and the feature-file snippet that drives it (FR-014)
 
 **Checkpoint**: all three stories functional; the step is discoverable and documented.
 
@@ -125,30 +137,31 @@ and the `stepDefs` drift invariant is preserved rather than relaxed.
 **Goal**: The framework is shown to FAIL correctly on a bad custom comparator. Mandatory by
 Constitution V.
 
-**Independent Test**: in-process godog suites asserting non-zero status and the right reason.
-
 **Placement note**: `internal/steps`, NOT `e2e/` — per [research R6](./research.md), the e2e
 suite drives a prebuilt `cmd/mentat` binary that structurally cannot contain a Go-registered
 comparator, and sits behind `//go:build e2e` which `make ci` never compiles.
 
-- [ ] T023 [US4] Write `TestCustomComparatorGoesRed` in `internal/steps/steps_test.go` following `TestFeatureGoesRedOnBadScenario` (`:103`): register a comparator that returns a failing verdict, run an inline feature naming it, assert `suite.Run() != 0` AND that the output contains the comparator's own reasons — status alone is not sufficient
-- [ ] T024 [P] [US4] Write `TestCustomComparatorParseError` in `internal/steps/steps_test.go`: register a comparator whose `ParseExpectation` returns an error, assert the suite fails loudly rather than skipping the assertion, and that the output names the comparator and carries the wrapped cause
-- [ ] T025 [US4] Falsify T023 and T024: temporarily make the handler swallow the comparator error (return nil), confirm BOTH tests go red, then revert — a red-proof that does not itself fail when the guard is removed proves nothing
-- [ ] T026 [US4] Record the T025 falsification as a comment in `internal/steps/steps_test.go`
+- [ ] T025 [US4] Write `TestCustomComparatorGoesRed` in `internal/steps/steps_test.go` following `TestFeatureGoesRedOnBadScenario` (`:103`): register a comparator that returns a failing verdict, run an inline feature naming it, assert `suite.Run() != 0` AND that the output contains the comparator's own reasons — status alone is not sufficient
+- [ ] T026 [P] [US4] Write `TestCustomComparatorParseError` in `internal/steps/steps_test.go`: register a comparator whose `ParseExpectation` returns an error, assert the suite fails loudly rather than skipping the assertion, and that the output names the comparator and carries the wrapped cause
+- [ ] T027 [US4] Falsification A — temporarily make the handler ignore a failing verdict (treat `!v.Pass` as success) and confirm **T025 goes red while T026 stays green**, then revert. The cross-check is the point: it proves T025 tests the verdict guard specifically
+- [ ] T028 [US4] Falsification B — temporarily make the handler swallow the `ParseExpectation` error (return nil) and confirm **T026 goes red while T025 stays green**, then revert. Two guards need two mutations; one mutation covering both would leave the other test red for its original reason and prove nothing
+- [ ] T029 [US4] Record both falsification transcripts as comments in `internal/steps/steps_test.go`
 
-**Checkpoint**: all four stories complete and independently verified.
+**Checkpoint**: all four stories complete, and each red-proof is itself proven to fail when its
+guard is removed.
 
 ---
 
-## Phase 7: Polish & Cross-Cutting Concerns
+## Phase 7: Cross-Cutting Proof & Polish
 
-- [ ] T027 [P] Add `CHANGELOG.md` entries under Added for the `ExpectationParser` seam and the new step, with NO breaking-change entry — nothing existing changes shape (FR-016)
-- [ ] T028 [P] Verify the coverage floor with `go test ./... -coverprofile=cover.out && go tool cover -func=cover.out`, checking `internal/steps` and `internal/engine` specifically, and confirming the four error paths from Phase 4 are covered rather than riding the package total (SC-009)
-- [ ] T029 Run `make ci` and confirm green
-- [ ] T030 Run `go vet -tags e2e ./...` and confirm the e2e package still compiles (SC-010) — `make ci` has no e2e target, and this is the hole that left e2e unbuildable for six commits during 010
-- [ ] T031 [P] Confirm `examples/kafkaecho` still builds untouched, comparing against the T002 baseline (SC-008)
-- [ ] T032 Verify the two plan invariants held: the public-surface golden changed exactly ONCE (in T005) by exactly TWO lines, and no drift-test assertion was edited anywhere in the branch — check with `git diff main -- specs/007-public-extension-api/contracts/public-surface.golden internal/steps/metadata_test.go internal/steps/docs_test.go`
-- [ ] T033 Walk [quickstart.md](./quickstart.md) end to end and confirm every "Done when" box
+- [ ] T030 Prove SC-001 through the **facade** (FR-018), modelled on `TestGoldenHermeticStdout` (`mentat_golden_test.go:65`) which already runs `mentat.Run` hermetically with a facade-registered store: add a root-package test importing **only** `github.com/thetonymaster/mentat` that registers a comparator via `mentat.WithComparator` (the real external path, `run.go:352`) and drives it with the new phrase. Every other test in this feature uses `engine.WithExtraComparator`, an internal package no external module can reach — without this task the feature's headline claim is unverified
+- [ ] T031 [P] Add `CHANGELOG.md` entries under Added for the `ExpectationParser` seam and the new step, with NO breaking-change entry — nothing existing changes shape (FR-016)
+- [ ] T032 [P] Verify the coverage floor with `go test ./... -coverprofile=cover.out && go tool cover -func=cover.out`, checking `internal/steps` and `internal/engine` specifically, and confirming the five error paths from Phase 4 are covered rather than riding the package total (SC-009)
+- [ ] T033 Run `make ci` and confirm green
+- [ ] T034 Run `go vet -tags e2e ./...` and confirm the e2e package still compiles (SC-010) — `make ci` has no e2e target, and this is the hole that left e2e unbuildable for six commits during 010
+- [ ] T035 [P] Confirm `examples/kafkaecho` still builds untouched, comparing against the T002 baseline (SC-008)
+- [ ] T036 Verify the two plan invariants held: the public-surface golden changed exactly ONCE (in T005) by exactly TWO lines, and no drift-test assertion was edited anywhere in the branch — check with `git diff main -- specs/007-public-extension-api/contracts/public-surface.golden internal/steps/metadata_test.go internal/steps/docs_test.go`
+- [ ] T037 Walk [quickstart.md](./quickstart.md) end to end and confirm every "Done when" box
 
 ---
 
@@ -162,7 +175,7 @@ comparator, and sits behind `//go:build e2e` which `make ci` never compiles.
 - **US2 (Phase 4)**: depends on US1 — extends the same handler
 - **US3 (Phase 5)**: depends on US1 (the row must exist before docs can render it)
 - **US4 (Phase 6)**: depends on US1 and US2 — needs both the happy path and the error paths
-- **Polish (Phase 7)**: depends on all stories
+- **Phase 7**: T030 depends on US1; the rest depend on all stories
 
 ### Why the stories are not fully independent here
 
@@ -173,7 +186,8 @@ sequential by nature. Splitting them further would create false parallelism.
 
 ### Within each story
 
-- Tests written and observed FAILING before implementation (Constitution V)
+- Tests written and observed FAILING before implementation (Constitution V) — including every
+  table row, not just the first
 - Handler before the metadata row (the row references the handler)
 - Error paths after the happy path
 - Story complete before the next priority
@@ -183,19 +197,20 @@ sequential by nature. Splitting them further would create false parallelism.
 Genuinely limited — most tasks touch `internal/steps/steps.go` or `steps_test.go`.
 
 - T002 runs alongside T001
-- T014 (`internal/engine/engine_test.go`) runs alongside T013 (`internal/steps/steps_test.go`)
-- T021 (`mentat steps` check) runs alongside T019/T020
-- T024 runs alongside T023 — different test functions, no shared state
-- T027, T028, T031 are independent of each other in Phase 7
+- T015 and T016 run alongside T014 — T016 is a different package, T015 a different test function
+- T023 runs alongside T021/T022
+- T026 runs alongside T025 — different test functions, no shared state
+- T031, T032, T035 are independent of each other in Phase 7
 
 ---
 
-## Parallel Example: Phase 4
+## Parallel Example: Phase 4 tests
 
 ```bash
-# Different packages, no shared state:
-Task: "T013 TestCustomComparatorErrors in internal/steps/steps_test.go"
-Task: "T014 TestEngineComparatorsListsRegisteredNames in internal/engine/engine_test.go"
+# Different packages / different test functions, no shared state:
+Task: "T014 TestCustomComparatorErrors in internal/steps/steps_test.go"
+Task: "T015 TestCustomComparatorDocNil in internal/steps/steps_test.go"
+Task: "T016 TestEngineComparatorsListsRegisteredNames in internal/engine/engine_test.go"
 ```
 
 ---
@@ -215,10 +230,10 @@ At that point the capability exists. Everything after is hardening it.
 
 1. Setup + Foundational → the seam is public and gated
 2. US1 → the capability works (**MVP**)
-3. US2 → it fails usefully
+3. US2 → it fails usefully and cannot panic
 4. US3 → it is discoverable and documented
-5. US4 → it is proven to go red
-6. Polish → gates, coverage, changelog
+5. US4 → it is proven to go red, and the proofs are themselves falsified
+6. Phase 7 → the facade path is proven, then gates, coverage, changelog
 
 ### Two invariants to watch throughout
 
@@ -230,10 +245,22 @@ At that point the capability exists. Everything after is hardening it.
 
 ---
 
+## Out of scope, found while planning
+
+`responseBodyJSONContains` (`internal/steps/steps.go:543`) is the one docstring handler of
+eight with **no** `doc == nil` guard — it dereferences `doc.Content` directly and will panic
+where its seven siblings return a descriptive error (Constitution IV). It is a one-line fix in
+the shape of `responseBodyMatchesSchema` immediately below it (`:547-550`), but it belongs to
+the `Result` grammar, not this feature. Recorded, not fixed — widening 011 would blur what this
+branch's diff is accountable for.
+
+---
+
 ## Notes
 
 - `[P]` = different files, no dependency on an incomplete task
 - Verify tests fail before implementing — a test that never failed proves nothing
 - Commit after each task or logical group; stage files individually (`git add .` is forbidden)
 - Conventional Commits; no AI attribution
-- Routing: **go-test-writer** owns T009–T026 (behaviour change, TDD); **go-coder** owns T003–T005 and T019 (mechanical); **go-reviewer** `gate` before commit
+- Routing: **go-test-writer** owns T009–T030 (behaviour change, TDD); **go-coder** owns
+  T003–T005 and T021 (mechanical); **go-reviewer** `gate` before commit

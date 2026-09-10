@@ -19,7 +19,7 @@ Then the "revenue-shape" comparator is satisfied by:
 pattern: `^the "([^"]+)" comparator is satisfied by:$`
 ```
 
-**One row, one group.** `stepDefs` gains exactly one entry (SC-002), in a new sixth group
+**One row, one group.** `stepDefs` gains exactly one entry (SC-002), in a new **seventh** group
 `Extend`. The grammar is deliberately plain rather than natural: Option B (012) is where
 ergonomics get solved, and this phrase should read as obviously generic so nobody mistakes it
 for the final syntax.

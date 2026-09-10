@@ -27,8 +27,8 @@ The first thing to check, because it is the one 010 built machinery to enforce a
 new seam since that machinery landed.
 
 ```bash
-go test ./... -run TestFacadeNameabilitySweep -v
-go test ./... -run TestPublicSurfaceGolden
+go test . -run TestFacadeNameabilitySweep -v
+go test . -run TestPublicSurfaceGolden
 ```
 
 **Expected**: both pass. The golden gains exactly two lines and no more:
@@ -207,7 +207,7 @@ Check them specifically rather than trusting the package total.
 
 ## Done when
 
-- [ ] Sweep and golden pass; sweep observed **failing** with the alias removed
+- [ ] Sweep and golden pass; sweep observed **failing** with the `XProbe` probe planted — **not** by removing the alias, which reports zero offenders rather than failing
 - [ ] Exactly one `stepDefs` row added; drift tests pass unmodified; `docs/steps.md` regenerated
 - [ ] A custom comparator runs from a feature file and its verdict lands like any other
 - [ ] Red proven for both a failing verdict and a parser error

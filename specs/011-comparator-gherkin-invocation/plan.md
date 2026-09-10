@@ -38,7 +38,7 @@ touches disk or network.
 
 **Testing**: `go test`, table-driven; uber gomock for the store seam; **in-process godog
 suites** for the grammar and red-on-bad proofs, following
-`internal/steps/steps_test.go:58,103` and its three siblings.
+`internal/steps/steps_test.go:58,103` and its four siblings.
 
 **Target Platform**: Go library (the framework) plus its `cmd/mentat` CLI consumer;
 darwin/linux.
@@ -85,7 +85,7 @@ is omitted because there are no violations to justify.
 
 ```text
 specs/011-comparator-gherkin-invocation/
-├── spec.md                             # D1–D5, FR-001..016, SC-001..010
+├── spec.md                             # D1–D5, FR-001..018, SC-001..011
 ├── plan.md                             # This file
 ├── research.md                         # R1–R8 (Phase 0)
 ├── data-model.md                       # Phase 1
@@ -113,7 +113,7 @@ internal/steps/
 └── steps_test.go              # + green, red, parse-error and error-table tests (in-process godog)
 
 mentat.go                      # + type ExpectationParser = core.ExpectationParser
-surface_test.go                # falsification rehearsal recorded (alias removed → sweep fails)
+surface_test.go                # falsification rehearsal recorded (XProbe planted → sweep fails)
 
 specs/007-public-extension-api/contracts/
 └── public-surface.golden      # + exactly 2 lines

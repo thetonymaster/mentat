@@ -58,7 +58,8 @@ It also makes the seam trivially testable: text in, value out, no I/O, no fixtur
 | Guarantee | Detail |
 |---|---|
 | Text is verbatim | `doc.Content` is passed exactly as godog produced it. Mentat does **not** trim, dedent, or normalize — whitespace may be significant to the comparator's format. |
-| Text may be empty | An empty docstring is passed through. Whether that is valid is the comparator's decision, not the step's. Mentat MUST NOT pre-validate emptiness. |
+| Text may be empty | An **empty** docstring is passed through. Whether that is valid is the comparator's decision, not the step's. Mentat MUST NOT pre-validate emptiness. |
+| A **nil** docstring never reaches the parser | Distinct from empty. A nil docstring is a malformed step, rejected by the handler with a descriptive error before `doc.Content` is touched (FR-017) — dereferencing it would panic, which Constitution IV forbids. Seven of the eight existing docstring handlers guard this already (`steps.go:169, 434, 475, 511, 548, 559, 570`). |
 | The returned value goes straight to `Compare` | Mentat does not inspect, copy, or re-shape it. It is handed to `Engine.Compare` as the `Expectation`. |
 | Errors are surfaced, never swallowed | A returned error is wrapped with `%w` and named by comparator (FR-009). It is never converted into a failing verdict, because a parse failure is not an assertion failure. |
 
@@ -117,7 +118,7 @@ type ExpectationParser interface {
 }
 ```
 
-Expected failure, naming both the type and the reaching position (FR-007's obligation):
+Expected failure, naming both the type and the reaching position (SC-006):
 
 ```text
 internal/core.XProbeSpec — reached by method (ExpectationParser) XProbe

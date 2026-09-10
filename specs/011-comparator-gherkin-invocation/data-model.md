@@ -55,7 +55,7 @@ pulls in nothing further.
 
 ## 2. The `stepDefs` row — the only grammar change
 
-One row appended to `internal/steps/metadata.go`, in a new sixth group:
+One row appended to `internal/steps/metadata.go`, in a new **seventh** group:
 
 ```go
 {
@@ -68,21 +68,26 @@ One row appended to `internal/steps/metadata.go`, in a new sixth group:
 ```
 
 **Group `Extend` is new** ([research R3](./research.md)). The step belongs to none of the
-five existing groups — it is not about driving, sequence, budgets, results or shape, but about
-reaching outside the built-in grammar. Appending one row in a new group satisfies
-`docs_test.go`'s contiguity invariant trivially.
+**six** existing groups — it is not about driving, sequence, budgets, results, aggregates or
+shape, but about reaching outside the built-in grammar. Appending one row in a new group
+satisfies `docs_test.go`'s contiguity invariant trivially.
 
 **Pattern collision: none.** Verified exhaustively over all 39 registered patterns — every
 existing `^the …` pattern requires a literal keyword (`agent`, `service`, `tool`, `services`,
 `result`, `response`, `run`, `runs`) where this one has a quote
 ([research R1](./research.md)).
 
-**Handler signature** follows the six existing docstring handlers — captures first, docstring
-last ([research R2](./research.md)):
+**Handler signature** follows the eight existing docstring handlers — captures first,
+docstring last ([research R2](./research.md)):
 
 ```go
 func (w *world) comparatorSatisfiedByDoc(name string, doc *godog.DocString) error
 ```
+
+**It opens with a nil guard**, as seven of those eight do (`steps.go:169, 434, 475, 511, 548,
+559, 570`). `doc.Content` on a nil docstring panics, and Constitution IV forbids `panic` in
+library code. A nil docstring is a malformed step Mentat rejects itself; an *empty* one is
+content the comparator judges.
 
 ---
 
@@ -110,6 +115,10 @@ already exists (`engine.go:200`) and `world.eng` is a concrete `*engine.Engine`
                        ┌─────────────────────────────────────────┐
   Gherkin phrase ──────▶│ comparatorSatisfiedByDoc(name, doc)     │
   + docstring           └───────────────┬─────────────────────────┘
+                                        │
+                        0. doc == nil?
+                                        │
+                              nil ──────┴──▶ error: step expected a docstring, got none  [FR-017]
                                         │
                         1. w.eng.Comparator(name)
                                         │

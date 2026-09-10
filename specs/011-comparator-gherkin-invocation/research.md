@@ -45,8 +45,8 @@ where pass/fail is the *outcome* rather than the invocation).
 
 **Decision**: `func (w *world) comparatorSatisfiedByDoc(name string, doc *godog.DocString) error`
 
-**Finding**: Six handlers already take a docstring, and the established convention is that
-regex captures come first and the docstring last —
+**Finding**: **Eight** handlers already take a docstring, and the established convention is
+that regex captures come first and the docstring last —
 `func (w *world) resultMeansDoc(doc *godog.DocString) error` (`steps.go:510`),
 `func (w *world) resultToolDoc(slot, tool, verb string, doc *godog.DocString) error`
 (`steps.go:433`), `runSatisfiesDoc` (`:558`), `runsSatisfiesDoc` (`:569`),
@@ -57,23 +57,57 @@ into `comparator.CELExpectation{Expr: doc.Content}`. This feature does the same 
 not** trim or normalize, since whitespace may be significant to a comparator's private
 format (spec Edge Cases).
 
+### A nil docstring is a real case, and the repo already guards it
+
+**Seven of the eight** docstring handlers open with an explicit nil guard —
+`steps.go:169, 434, 475, 511, 548, 559, 570` — each returning a descriptive error naming the
+step and what it expected. Four have dedicated tests (`TestResultMeansDocNil`,
+`TestRunSatisfiesDocNil`, `TestRunsSatisfiesDocNil`, `TestSendRequestBodyDocNil`), so this is
+a reachable path the repo has already decided how to handle, not a theoretical one.
+
+**The new handler MUST carry the same guard.** `doc.Content` on a nil `*godog.DocString`
+panics, and Constitution IV forbids `panic` in library code. This is distinct from the
+contract's "Mentat MUST NOT pre-validate emptiness": an *empty* docstring is content the
+comparator gets to judge; a *nil* docstring is a malformed step Mentat must reject itself.
+
+**Pre-existing defect found while establishing this** (out of scope, recorded not fixed):
+`responseBodyJSONContains` (`steps.go:543`) is the eighth handler and has **no** nil guard —
+it dereferences `doc.Content` directly and will panic where its seven siblings return an
+error. It is a one-line fix in the same shape as `responseBodyMatchesSchema` immediately below
+it (`:547-550`), but it belongs to the `Result` grammar, not to this feature. Widening 011 to
+fix it would blur what this branch's diff is accountable for.
+
 ---
 
 ## R3 — Where the new row goes in `stepDefs`
 
-**Decision**: a new group, `Extend`, appended after the existing five.
+**Decision**: a new group, `Extend`, appended after the existing six.
 
-**Finding**: `stepDefs` currently holds 35 rows across five groups — `Drive` (5),
-`Sequence` (5), `Budgets` (4), `Result` (12), `Shape` (9). `docs_test.go` enforces that rows
-sharing a group are **contiguous**, and `metadata_test.go` enforces that no group, summary or
-example is blank.
+**Finding**: `stepDefs` currently holds **39 rows across six groups** — `Drive` (5),
+`Sequence` (5), `Budgets` (4), `Result` (12), `Aggregate / CEL` (4), `Shape` (9).
+`docs_test.go` enforces that rows sharing a group are **contiguous**, and `metadata_test.go`
+enforces that no group, summary or example is blank.
 
-**Rationale**: the new step belongs to none of the five — it is not about driving, sequence,
-budgets, results or shape; it is about reaching *outside* the built-in grammar. A sixth group
-keeps the contiguity invariant trivially satisfied (one row, appended at the end) and gives
-`mentat steps` and `docs/steps.md` a section that reads as what it is: the extension escape
-hatch. Folding it into `Result` would misfile it and force a decision about where inside a
-12-row block it lands.
+> **Corrected 2026-09-10.** An earlier revision of this section claimed "35 rows across five
+> groups", omitting `Aggregate / CEL`. That was a measurement error, not a reading of the
+> file: the group tally came from a grep whose literal spacing missed that one group, and it
+> was written down without reconciling it against the 39 patterns counted in R1 **in the same
+> session**. Two numbers that had to agree, didn't, and the contradiction went unexamined.
+> The row and pattern counts are now both verified at 39 by field count
+> (`grep -cE 'group:[[:space:]]+"'` and the `pattern:` equivalent). Recorded rather than
+> silently amended, because a research document that opens with "nothing here is inferred"
+> earns that claim only by owning the one place it failed.
+
+**Consequence**: `Extend` is the **seventh** group, not the sixth. The design is unaffected —
+appending one row at the end satisfies contiguity trivially either way — but every downstream
+document that said "sixth" was wrong and is corrected.
+
+**Rationale**: the new step belongs to none of the six — it is not about driving, sequence,
+budgets, results, aggregates or shape; it is about reaching *outside* the built-in grammar. A
+seventh group keeps the contiguity invariant trivially satisfied (one row, appended at the
+end) and gives `mentat steps` and `docs/steps.md` a section that reads as what it is: the
+extension escape hatch. Folding it into `Result` would misfile it and force a decision about
+where inside a 12-row block it lands.
 
 ---
 
@@ -194,7 +228,7 @@ two types this interface sits beside, and `core` imports nothing that would cycl
 |---|---|---|
 | L3 proof goes in `e2e/` (FR-015) | `e2e/` execs a prebuilt `cmd/mentat` binary that cannot contain a Go-registered comparator; `internal/steps` has five in-process precedents | **Placement moved**; obligation unchanged, and the proof now runs under `make ci` |
 | Engine plumbing might be needed | `Engine.Comparator(name)` exists; `world.eng` is concrete | Only `Engine.Comparators()` is added, mirroring `Reporters()` |
-| Group placement unstated | Five groups exist, contiguity enforced | New `Extend` group, appended |
+| Group placement unstated | **Six** groups exist across 39 rows, contiguity enforced | New `Extend` group appended **seventh** |
 | Golden effect unstated | Interface aliases render as alias + method lines in facade names | Exactly 2 lines, predictable |
 
 No `NEEDS CLARIFICATION` items remain.

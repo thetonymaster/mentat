@@ -76,12 +76,47 @@ Recorded here because they contradict the framing the feature was deferred under
    feature adds is `Engine.Comparators() []string` (FR-011), mirroring the existing
    `Reporters()`.
 
-### One risk carried forward from 010
+### One risk carried forward from 010 — ~~and where the L3 proof lands~~ *(superseded)*
 
-FR-015's L3 obligation lands in `e2e/`, behind `//go:build e2e`, which `make ci` does not
-compile. During 010 that left the e2e package unbuildable for six commits without any gate
-going red. SC-010 makes `go vet -tags e2e ./...` an explicit success criterion so the same
-hole cannot swallow this feature's red-on-bad proof.
+> **Superseded 2026-09-10 by [research R6](../research.md).** This note originally said
+> FR-015's L3 obligation lands in `e2e/`, behind `//go:build e2e`. It does not, and it cannot:
+> `e2e/main_test.go:29` builds `mentatBin` from `./cmd/mentat` and drives that prebuilt
+> binary, so a comparator registered in Go via `WithComparator` is structurally unreachable
+> there. The proof moved to `internal/steps` as an in-process godog suite. FR-015 was amended
+> in place with the correction recorded. Struck through rather than deleted so the checklist
+> and the spec cannot silently disagree about which one was right.
+
+The underlying risk still stands and still needs SC-010: `make ci` has no e2e target, so the
+e2e package can stop compiling without a single gate going red — which is what left it
+unbuildable for six commits during 010. This feature adds no e2e test, but it adds a `core`
+interface, and `e2e/` imports `core`. Hence `go vet -tags e2e ./...` as an explicit criterion.
+
+### Post-analyze amendments — 2026-09-10
+
+`/speckit-analyze` found four HIGH issues after this checklist was first written. All are
+resolved in the artifacts; recorded here because three of them were **my errors**, not
+ambiguities:
+
+- **`stepDefs` row/group count was wrong.** Research R3 claimed "35 rows across five groups".
+  Reality is **39 rows across six groups** — `Aggregate / CEL` was missed by a grep's literal
+  spacing, and written down without reconciling it against the 39 patterns counted in R1 *in
+  the same session*. Two numbers that had to agree didn't, and nobody looked. `Extend` is the
+  **seventh** group; corrected in R3, `data-model.md`, `contracts/step-grammar.md` and
+  `tasks.md`.
+- **No nil-docstring guard was specified.** Seven of the eight existing docstring handlers
+  guard `doc == nil`; the planned handler would have dereferenced it and panicked, which
+  Constitution IV forbids. Now **FR-017**.
+- **SC-001 had zero task coverage.** Every planned test built the engine through
+  `engine.WithExtraComparator` — an internal package no external module can reach — so the
+  feature's headline claim was unverified. Now **FR-018**, requiring the facade path
+  (`mentat.WithComparator`, `run.go:352`).
+- **FR-010's soundness decision was never asserted.** `sensitive=true` was passed as a literal
+  no test pinned, so it could be flipped with every gate staying green. Now **SC-011**.
+
+One pre-existing repo defect was found and deliberately **not** fixed here:
+`responseBodyJSONContains` (`steps.go:543`) is the one docstring handler with no nil guard and
+will panic where its seven siblings return an error. It belongs to the `Result` grammar, not
+this feature; widening 011 to fix it would blur what this branch's diff is accountable for.
 
 ### Roadmap bookkeeping
 

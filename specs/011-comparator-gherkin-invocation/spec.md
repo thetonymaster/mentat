@@ -4,7 +4,9 @@
 
 **Created**: 2026-09-10
 
-**Status**: Draft
+**Status**: Planned — spec, plan, research, contracts and tasks complete; implementation not
+started. Analyzed 2026-09-10 (`/speckit-analyze`); FR-017, FR-018 and SC-011 added from its
+findings.
 
 **Input**: Deferred from 009 (`specs/009-extension-surface-integrity/spec.md:143`) as
 "custom-comparator Gherkin invocation (011)". Scope narrowed to Option A by decision
@@ -379,6 +381,19 @@ failing custom comparator, asserting a non-zero exit and a failing scenario in t
   for six commits during 010. The obligation is unchanged; only its location moved.
 - **FR-016**: `CHANGELOG.md` MUST record the new step and the new interface as additive
   changes, with no breaking-change entry, since nothing existing changes shape.
+- **FR-017**: The handler MUST reject a **nil** docstring with a descriptive error naming the
+  step, before touching `doc.Content`. Seven of the eight existing docstring handlers already
+  do this (`steps.go:169, 434, 475, 511, 548, 559, 570`), four with dedicated tests.
+  Dereferencing a nil docstring panics, and Constitution IV forbids `panic` in library code.
+  This is distinct from FR-005's pass-through: an **empty** docstring is content the comparator
+  judges; a **nil** one is a malformed step Mentat rejects itself.
+  *(Added 2026-09-10 — gap found by `/speckit-analyze`; see [research R2](./research.md).)*
+- **FR-018**: SC-001 MUST be proven through the **facade**, not through internal packages. At
+  least one test or example MUST reach the new step via `mentat.WithComparator` — the path an
+  external module actually uses — rather than only via `engine.WithExtraComparator`, which no
+  external module can call. A compile-only witness does not satisfy this.
+  *(Added 2026-09-10 — gap found by `/speckit-analyze`: every planned test used internal
+  packages, leaving the feature's headline claim unverified.)*
 
 ### Key Entities
 
@@ -413,6 +428,11 @@ failing custom comparator, asserting a non-zero exit and a failing scenario in t
 - **SC-008**: `examples/kafkaecho` continues to compile untouched.
 - **SC-009**: Every touched package stays at or above the 80% coverage floor.
 - **SC-010**: `make ci` is green, and `go vet -tags e2e ./...` compiles the e2e package.
+- **SC-011**: A custom comparator driven from Gherkin against a **bounded** (request-scoped,
+  non-strict) target carries the completeness qualifier on its verdict, and against a strict
+  target does not — proving FR-010's `sensitive=true` actually reaches `Engine.Compare` rather
+  than being an untested literal that could be flipped with every gate staying green.
+  *(Added 2026-09-10 — gap found by `/speckit-analyze`.)*
 
 ---
 
