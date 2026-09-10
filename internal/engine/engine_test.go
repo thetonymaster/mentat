@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -1765,5 +1766,39 @@ func TestDriveOnceInjectsOTLPEndpointConditionally(t *testing.T) {
 				t.Fatalf("spec.Env[%q]=%q, want %q", otlpKey, val, tt.wantValue)
 			}
 		})
+	}
+}
+
+// TestEngineComparatorsListsRegisteredNames pins the accessor FR-007 needs: an
+// unknown-name error can only name the alternatives if something can enumerate them.
+// Mirrors Reporters(), including its sort — an unsorted list would make the error text
+// reorder between runs for no reason.
+//
+// Both a built-in and a WithExtraComparator registration must appear: listing only the
+// built-ins would hide exactly the comparator the author is most likely to have
+// mistyped.
+func TestEngineComparatorsListsRegisteredNames(t *testing.T) {
+	cfg := config.Config{
+		OTLPEndpoint: "http://localhost:4318",
+		Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+		Targets:      map[string]config.Target{},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	cor := correlate.New(func() string { return "run-1" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+
+	eng, err := Build(cfg, st, cor, WithExtraComparator("xcmp", stubComparatorFactory(extraStubComparator{})))
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	got := eng.Comparators()
+	if !sort.StringsAreSorted(got) {
+		t.Errorf("Comparators() = %v, want sorted order", got)
+	}
+	for _, want := range []string{"xcmp", "result", "sequence"} {
+		if !slices.Contains(got, want) {
+			t.Errorf("Comparators() = %v, missing %q", got, want)
+		}
 	}
 }

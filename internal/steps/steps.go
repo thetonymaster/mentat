@@ -615,7 +615,11 @@ func (w *world) comparatorSatisfiedByDoc(name string, doc *godog.DocString) erro
 	}
 	c, ok := w.eng.Comparator(name)
 	if !ok {
-		return fmt.Errorf("comparator %q is not registered", name)
+		// Name the alternatives. The captured name is echoed with %q so an otherwise
+		// invisible difference — a trailing space, a homoglyph — is visible rather than
+		// presenting as a mysterious unknown name.
+		return fmt.Errorf("comparator %q is not registered; registered comparators: %s",
+			name, strings.Join(w.eng.Comparators(), ", "))
 	}
 	p, ok := c.(core.ExpectationParser)
 	if !ok {

@@ -99,16 +99,16 @@ zero-value success, no silently skipped assertion, no panic.
 > the embedded-quote row after implementation, where it could never have been observed
 > failing — a Principle V violation caught by `/speckit-analyze`.
 
-- [ ] T014 [US2] Write `TestCustomComparatorErrors` in `internal/steps/steps_test.go` as a table with FOUR rows written up front: (a) unregistered name → error contains the name **and** at least one registered name; (b) registered but not an `ExpectationParser` → error names the comparator and states it cannot be driven from Gherkin; (c) `ParseExpectation` returns an error → `%w`-wrapped and named by comparator; (d) a name containing an embedded quote → the error echoes the **truncated capture verbatim** so the truncation is visible to the author (spec Edge Cases). Observe all four FAIL
+- [X] T014 [US2] Write `TestCustomComparatorErrors` in `internal/steps/steps_test.go` as a table with FOUR rows written up front: (a) unregistered name → error contains the name **and** at least one registered name; (b) registered but not an `ExpectationParser` → error names the comparator and states it cannot be driven from Gherkin; (c) `ParseExpectation` returns an error → `%w`-wrapped and named by comparator; (d) a name containing an embedded quote → the error echoes the **truncated capture verbatim** so the truncation is visible to the author (spec Edge Cases). Observe all four FAIL
 - [X] T015 [P] [US2] Write `TestCustomComparatorDocNil` in `internal/steps/steps_test.go` as a direct handler call mirroring `TestResultMeansDocNil` (`w := &world{}; w.comparatorSatisfiedByDoc("x", nil)`), asserting a descriptive error rather than a panic (FR-017); observe it FAIL
-- [ ] T016 [P] [US2] Write `TestEngineComparatorsListsRegisteredNames` in `internal/engine/engine_test.go` asserting `Engine.Comparators()` returns the sorted registered names including one added via `WithExtraComparator`; observe it FAIL (method does not exist)
+- [X] T016 [P] [US2] Write `TestEngineComparatorsListsRegisteredNames` in `internal/engine/engine_test.go` asserting `Engine.Comparators()` returns the sorted registered names including one added via `WithExtraComparator`; observe it FAIL (method does not exist)
 
 ### Implementation for User Story 2
 
-- [ ] T017 [US2] Add `func (e *Engine) Comparators() []string { return e.reg.Comparators() }` to `internal/engine/engine.go`, mirroring `Reporters()` (`:218`) over the existing `Registry.Comparators()` (`registry.go:125`)
-- [ ] T018 [US2] Implement the nil guard and the three error branches in `comparatorSatisfiedByDoc` in `internal/steps/steps.go` so T014, T015 and T016 all pass
-- [ ] T019 [US2] Verify T014–T016 pass and confirm by inspection that no branch returns a nil or zero-value expectation, a skipped assertion, or a passing step (Constitution IV)
-- [ ] T020 [US2] Extend `TestSingleRunStepRejectedInMultirunScenario` (`internal/steps/steps_test.go:912`) with the new phrase under `@runs(2)`, proving the step inherits the single-run guard (`steps.go:256`) rather than bypassing it — the spec Edge Case that had no coverage
+- [X] T017 [US2] Add `func (e *Engine) Comparators() []string { return e.reg.Comparators() }` to `internal/engine/engine.go`, mirroring `Reporters()` (`:218`) over the existing `Registry.Comparators()` (`registry.go:125`)
+- [X] T018 [US2] Implement the nil guard and the three error branches in `comparatorSatisfiedByDoc` in `internal/steps/steps.go` so T014, T015 and T016 all pass
+- [X] T019 [US2] Verify T014–T016 pass and confirm by inspection that no branch returns a nil or zero-value expectation, a skipped assertion, or a passing step (Constitution IV)
+- [X] T020 [US2] Extend `TestSingleRunStepRejectedInMultirunScenario` (`internal/steps/steps_test.go:912`) with the new phrase under `@runs(2)`, proving the step inherits the single-run guard (`steps.go:256`) rather than bypassing it — the spec Edge Case that had no coverage
 
 **Checkpoint**: US1 and US2 both work independently; the seam is usable rather than a guessing
 game, and cannot panic.

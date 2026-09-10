@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -117,6 +119,158 @@ func runInlineFeature(eng *engine.Engine, name, contents string) (int, string) {
 		},
 	}
 	return suite.Run(), out.String()
+}
+
+// TestCustomComparatorRejectedInMultirunScenario proves the new step INHERITS the
+// single-run guard (steps.go:256) rather than bypassing it, mirroring
+// TestSingleRunStepRejectedInMultirunScenario for the built-in grammar.
+//
+// This is the concrete stake in routing through checkExp instead of calling
+// Engine.Compare directly (FR-006): a handler that called Compare would evaluate only
+// the first run of a @runs(2) scenario and report a confident green. The comparator
+// here returns Pass, so a GREEN suite means the guard was lost.
+//
+// Falsified by replacing the checkExp call with a direct Engine.Compare, which turns
+// this test red while the rest of the feature stays green.
+func TestCustomComparatorRejectedInMultirunScenario(t *testing.T) {
+	eng := customComparatorEngine(t, withComparator("revenue-shape", &revenueShape{}))
+
+	feature := `Feature: mixed-grammar
+  @runs(2)
+  Scenario: the Extend step under @runs is rejected
+    Given the agent target "bot"
+    When I run scenario "x"
+    Then the "revenue-shape" comparator is satisfied by:
+      """
+      {"min": 4}
+      """
+`
+	status, out := runInlineFeature(eng, "mixed-grammar", feature)
+	if status == 0 {
+		t.Fatalf("expected RED: the Extend step inside @runs(2) must be rejected, but the suite passed\n%s", out)
+	}
+	if !strings.Contains(out, "@runs(2)") {
+		t.Fatalf("expected the error to name @runs(2), got:\n%s", out)
+	}
+	if !strings.Contains(out, "the runs satisfy") {
+		t.Fatalf("expected the error to point at \"the runs satisfy\", got:\n%s", out)
+	}
+}
+
+// plainComparator is registered but does NOT implement core.ExpectationParser — the
+// majority case, and the one that must fail loudly rather than be silently skipped.
+type plainComparator struct{}
+
+func (plainComparator) Name() string { return "plain" }
+func (plainComparator) Compare(context.Context, core.Evidence, core.Expectation) (core.Verdict, error) {
+	return core.Verdict{Pass: true}, nil
+}
+
+// TestCustomComparatorErrors is US2: every failure mode names the offending value.
+// One row per D5 mode, plus the verbatim-echo case. All four were written before the
+// branches existed.
+//
+// Asserted at the handler rather than through a suite because the point here is the
+// exact error TEXT; that the suite goes red on these is proven separately by
+// TestCustomComparatorGoesRed and TestCustomComparatorParseError.
+func TestCustomComparatorErrors(t *testing.T) {
+	tests := []struct {
+		name         string
+		comparator   string
+		wantContains []string
+	}{
+		{
+			// FR-007. Listing the alternatives mirrors 010's WithReports unknown-name
+			// behaviour and is the difference between a usable seam and a guessing game.
+			name:         "unregistered name lists the registered ones",
+			comparator:   "typo-name",
+			wantContains: []string{"typo-name", "plain", "revenue-shape"},
+		},
+		{
+			// FR-008. Not an assertion failure and not a skip — a loud error.
+			name:         "registered but not an ExpectationParser",
+			comparator:   "plain",
+			wantContains: []string{"plain", "cannot be driven from Gherkin"},
+		},
+		{
+			// FR-009. A parse failure is not an assertion failure, so it is wrapped and
+			// surfaced rather than converted into a failing verdict.
+			name:         "parser error is wrapped and named by comparator",
+			comparator:   "boom",
+			wantContains: []string{"boom", "detonated"},
+		},
+		{
+			// The captured name is echoed with %q, so an otherwise invisible difference
+			// — here a trailing space — is visible in the error instead of presenting as
+			// a mysterious unknown name.
+			name:         "captured name is echoed verbatim so invisible characters show",
+			comparator:   "revenue-shape ",
+			wantContains: []string{`"revenue-shape "`},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := customComparatorEngine(t,
+				withComparator("revenue-shape", &revenueShape{}),
+				withComparator("plain", plainComparator{}),
+				withComparator("boom", &revenueShape{parseErr: errors.New("detonated")}),
+			)
+			w := &world{eng: eng, ctx: context.Background(), target: "bot"}
+
+			err := w.comparatorSatisfiedByDoc(tt.comparator, &godog.DocString{Content: `{"min": 4}`})
+			if err == nil {
+				t.Fatalf("comparator %q: expected an error, got nil", tt.comparator)
+			}
+			for _, want := range tt.wantContains {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q must contain %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+// TestCustomComparatorPatternRejectsEmbeddedQuote records a correction to this
+// feature's own spec.
+//
+// The spec's edge case and contracts/step-grammar.md both claimed a comparator name
+// containing a quote is TRUNCATED at that quote, and that echoing the capture verbatim
+// is what makes the truncation visible. That cannot happen: the pattern is anchored at
+// both ends and ([^"]+) cannot cross a quote, so such a line matches NOTHING and the
+// step is undefined instead of mis-captured.
+//
+// Worth pinning, because the consequence is worse than truncation would have been.
+// godog is non-strict by default and run.go:411 sets no Strict, so an undefined step
+// is reported and the run still exits 0 — a mistyped Then step passes silently. That
+// is pre-existing and applies to all 40 rows equally, not something 011 introduces,
+// so it is recorded here rather than fixed inside this feature's diff.
+func TestCustomComparatorPatternRejectsEmbeddedQuote(t *testing.T) {
+	var pattern string
+	for _, sd := range stepDefs {
+		if sd.group == "Extend" {
+			pattern = sd.pattern
+		}
+	}
+	if pattern == "" {
+		t.Fatal("no Extend row found in stepDefs")
+	}
+	re := regexp.MustCompile(pattern)
+
+	if m := re.FindStringSubmatch(`the "revenue-shape" comparator is satisfied by:`); m == nil {
+		t.Fatal("the well-formed phrase must match")
+	} else if m[1] != "revenue-shape" {
+		t.Fatalf("captured %q, want %q", m[1], "revenue-shape")
+	}
+
+	// No match at all — NOT a truncated capture of "rev".
+	if m := re.FindStringSubmatch(`the "rev"enue" comparator is satisfied by:`); m != nil {
+		t.Fatalf("embedded quote matched with capture %q; the spec's truncation claim would then hold", m[1])
+	}
+	// An empty name is rejected by ([^"]+) rather than resolving to "".
+	if re.MatchString(`the "" comparator is satisfied by:`) {
+		t.Fatal("an empty comparator name must not match")
+	}
 }
 
 // sensitivityEngine builds an engine with a single request-scoped target under the
