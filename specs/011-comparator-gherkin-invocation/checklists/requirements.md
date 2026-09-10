@@ -123,3 +123,29 @@ this feature; widening 011 to fix it would blur what this branch's diff is accou
 D1 renumbers CLI/`mentatctl` UX from 012 to **013**, since Option B takes the 012 slot. The
 source-of-truth roadmap line (`specs/009-extension-surface-integrity/spec.md:143`) and
 `CLAUDE.md` both still say 012 for the CLI work and must be updated when 012 is specified.
+
+### Implementation-phase corrections — 2026-09-10
+
+Four things this specification asserted turned out not to be true when the code was
+written. Recorded here so the checklist and the artifacts cannot silently disagree, in
+the same spirit as the struck-through R6 note above.
+
+- **The embedded-quote edge case describes an impossible behaviour.** The spec and
+  `contracts/step-grammar.md` both said a comparator name containing a quote is
+  *truncated*. The pattern is anchored at both ends and `([^"]+)` cannot cross a quote,
+  so such a line matches nothing at all and the step is UNDEFINED. Both documents are
+  corrected in place; `TestCustomComparatorPatternRejectsEmbeddedQuote` pins it.
+- **Undefined steps do not fail a run.** godog is non-strict by default and
+  `run.go:411` sets no `Strict`, so a mistyped `Then` step is reported and the run still
+  exits 0. Pre-existing, applies to all 40 rows equally, and deliberately **not** fixed
+  inside this feature — but it is a live Constitution IV gap, and it is the reason the
+  new tests set `Strict` in their own harness.
+- **`Registry.Comparators()` did not sort** while its documented-to-sort `Reporters()`
+  sibling did. It had zero non-test callers, so the nondeterminism had never mattered;
+  FR-007 renders it into an error message, which makes it matter. Fixed at the source.
+- **Two task orderings could not have produced a real red.** T009 asked for
+  `suite.Run() == 0` as the failing assertion (impossible — see the non-strict point),
+  and T015 tested a nil guard that T010 mandated implementing first. Both were
+  reordered so every test was observed failing before its implementation.
+
+None of these changed the feature's scope, its decisions, or its success criteria.

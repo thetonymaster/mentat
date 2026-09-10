@@ -81,9 +81,22 @@ the only defensible choice.
 | Registered, but does not implement `ExpectationParser` | Names the comparator; states it cannot be driven from Gherkin | SC-004 |
 | `ParseExpectation` returns an error | `%w`-wrapped, named by comparator | SC-004 |
 
-**Verbatim matters.** The pattern captures `"([^"]+)"`, so a name containing an embedded quote
-is truncated at the quote. Echoing the captured name exactly is what makes that truncation
-visible to the author instead of presenting as a mysterious unknown-name error.
+**Verbatim matters.** The captured name is echoed with `%q`, so an otherwise invisible
+difference — a trailing space, a homoglyph — is visible to the author instead of presenting as
+a mysterious unknown-name error.
+
+> **Corrected 2026-09-10 during implementation (T014).** This paragraph previously claimed a
+> name containing an embedded quote is *truncated* at the quote, and that verbatim echo is what
+> makes the truncation visible. That is wrong: the pattern is anchored at both ends and
+> `([^"]+)` cannot cross a quote, so such a line matches **nothing** and the step is UNDEFINED
+> rather than mis-captured. Pinned by `TestCustomComparatorPatternRejectsEmbeddedQuote`.
+>
+> Verbatim echo remains required — it just earns its keep on the cases that actually reach the
+> handler, not on a truncation that cannot occur.
+>
+> Consequence recorded, not fixed: godog is non-strict by default and `run.go:411` sets no
+> `Strict`, so an undefined step exits **0**. See the spec's Edge Cases for why that is out of
+> scope here.
 
 **Listing the registered names** mirrors 010's `WithReports` unknown-name behaviour and is the
 difference between a usable seam and a guessing game. It is why `Engine.Comparators()` exists

@@ -207,10 +207,10 @@ Check them specifically rather than trusting the package total.
 
 ## Done when
 
-- [ ] Sweep and golden pass; sweep observed **failing** with the `XProbe` probe planted — **not** by removing the alias, which reports zero offenders rather than failing
-- [ ] Exactly one `stepDefs` row added; drift tests pass unmodified; `docs/steps.md` regenerated
-- [ ] A custom comparator runs from a feature file and its verdict lands like any other
-- [ ] Red proven for both a failing verdict and a parser error
-- [ ] All three failure modes name the offending value; unknown-name lists registered names
-- [ ] `make ci` green, `go vet -tags e2e ./...` clean, `examples/kafkaecho` builds untouched
-- [ ] Coverage floor held, error paths covered specifically
+- [x] Sweep and golden pass; sweep observed **failing** with the `XProbe` probe planted — **not** by removing the alias, which reports zero offenders rather than failing
+- [x] Exactly one `stepDefs` row added; drift tests pass unmodified; `docs/steps.md` regenerated
+- [x] A custom comparator runs from a feature file and its verdict lands like any other
+- [x] Red proven for both a failing verdict and a parser error
+- [x] All three failure modes name the offending value; unknown-name lists registered names
+- [x] `make ci` green, `go vet -tags e2e ./...` clean, `examples/kafkaecho` builds untouched
+- [x] Coverage floor held, error paths covered specifically

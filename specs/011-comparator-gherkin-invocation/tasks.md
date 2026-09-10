@@ -126,7 +126,7 @@ and the `stepDefs` drift invariant is preserved rather than relaxed.
 - [X] T021 [US3] Regenerate `docs/steps.md` from `stepDefs` so the committed reference carries the new row
 - [X] T022 [US3] Run `go test ./internal/steps/ -run 'TestStepDocs|TestStepMetadata|TestNoDirectStepRegistration' -v` and confirm all five drift tests pass with their assertions **UNMODIFIED** — needing to edit one means the design drifted into Option B and the plan is wrong, not the test (FR-012, SC-003)
 - [X] T023 [P] [US3] Run `go run ./cmd/mentat steps` and confirm the `Extend` group lists the new phrase with a non-blank summary and a valid example
-- [ ] T024 [US3] Document the seam in `docs/extending/comparator.md`: the `ExpectationParser` interface, a complete worked comparator implementing it, and the feature-file snippet that drives it (FR-014)
+- [X] T024 [US3] Document the seam in `docs/extending/comparator.md`: the `ExpectationParser` interface, a complete worked comparator implementing it, and the feature-file snippet that drives it (FR-014)
 
 **Checkpoint**: all three stories functional; the step is discoverable and documented.
 
@@ -154,14 +154,14 @@ guard is removed.
 
 ## Phase 7: Cross-Cutting Proof & Polish
 
-- [ ] T030 Prove SC-001 through the **facade** (FR-018), modelled on `TestGoldenHermeticStdout` (`mentat_golden_test.go:65`) which already runs `mentat.Run` hermetically with a facade-registered store: add a root-package test importing **only** `github.com/thetonymaster/mentat` that registers a comparator via `mentat.WithComparator` (the real external path, `run.go:352`) and drives it with the new phrase. Every other test in this feature uses `engine.WithExtraComparator`, an internal package no external module can reach — without this task the feature's headline claim is unverified
-- [ ] T031 [P] Add `CHANGELOG.md` entries under Added for the `ExpectationParser` seam and the new step, with NO breaking-change entry — nothing existing changes shape (FR-016)
-- [ ] T032 [P] Verify the coverage floor with `go test ./... -coverprofile=cover.out && go tool cover -func=cover.out`, checking `internal/steps` and `internal/engine` specifically, and confirming the five error paths from Phase 4 are covered rather than riding the package total (SC-009)
-- [ ] T033 Run `make ci` and confirm green
-- [ ] T034 Run `go vet -tags e2e ./...` and confirm the e2e package still compiles (SC-010) — `make ci` has no e2e target, and this is the hole that left e2e unbuildable for six commits during 010
-- [ ] T035 [P] Confirm `examples/kafkaecho` still builds untouched, comparing against the T002 baseline (SC-008)
-- [ ] T036 Verify the two plan invariants held: the public-surface golden changed exactly ONCE (in T005) by exactly TWO lines, and no drift-test assertion was edited anywhere in the branch — check with `git diff main -- specs/007-public-extension-api/contracts/public-surface.golden internal/steps/metadata_test.go internal/steps/docs_test.go`
-- [ ] T037 Walk [quickstart.md](./quickstart.md) end to end and confirm every "Done when" box
+- [X] T030 Prove SC-001 through the **facade** (FR-018), modelled on `TestGoldenHermeticStdout` (`mentat_golden_test.go:65`) which already runs `mentat.Run` hermetically with a facade-registered store: add a root-package test importing **only** `github.com/thetonymaster/mentat` that registers a comparator via `mentat.WithComparator` (the real external path, `run.go:352`) and drives it with the new phrase. Every other test in this feature uses `engine.WithExtraComparator`, an internal package no external module can reach — without this task the feature's headline claim is unverified
+- [X] T031 [P] Add `CHANGELOG.md` entries under Added for the `ExpectationParser` seam and the new step, with NO breaking-change entry — nothing existing changes shape (FR-016)
+- [X] T032 [P] Verify the coverage floor with `go test ./... -coverprofile=cover.out && go tool cover -func=cover.out`, checking `internal/steps` and `internal/engine` specifically, and confirming the five error paths from Phase 4 are covered rather than riding the package total (SC-009)
+- [X] T033 Run `make ci` and confirm green
+- [X] T034 Run `go vet -tags e2e ./...` and confirm the e2e package still compiles (SC-010) — `make ci` has no e2e target, and this is the hole that left e2e unbuildable for six commits during 010
+- [X] T035 [P] Confirm `examples/kafkaecho` still builds untouched, comparing against the T002 baseline (SC-008)
+- [X] T036 Verify the two plan invariants held: the public-surface golden changed exactly ONCE (in T005) by exactly TWO lines, and no drift-test assertion was edited anywhere in the branch — check with `git diff main -- specs/007-public-extension-api/contracts/public-surface.golden internal/steps/metadata_test.go internal/steps/docs_test.go`
+- [X] T037 Walk [quickstart.md](./quickstart.md) end to end and confirm every "Done when" box
 
 ---
 

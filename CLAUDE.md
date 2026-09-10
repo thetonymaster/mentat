@@ -116,15 +116,37 @@ from Tempo, and run **comparators** that assert how it behaved and what it produ
 - `/coverage` — run `go test` with coverage and enforce the 80% floor.
 
 <!-- SPECKIT START -->
-Features 001–010 are shipped, most recently **010-seam-type-nameability**
-(`specs/010-seam-type-nameability`, merged 2026-09-09 as `1206a56`, all 59 tasks
-complete).
+Features 001–011 are shipped. **011-comparator-gherkin-invocation**
+(`specs/011-comparator-gherkin-invocation`, implemented 2026-09-10, all 37 tasks
+complete) is on branch `011-comparator-gherkin-invocation`, not yet merged. Both plan
+invariants held: the public-surface golden changed **exactly once, by exactly two
+lines**, and no `stepDefs` drift-test assertion was edited anywhere in the branch —
+the operational test of D1's claim that this was Option A and not Option B.
 
-The in-flight feature is **011-comparator-gherkin-invocation** (specified and
-planned 2026-09-10): spec at `specs/011-comparator-gherkin-invocation/spec.md`,
-current plan at `specs/011-comparator-gherkin-invocation/plan.md`, with research,
-data-model, contracts/ and quickstart alongside, and `tasks.md` generated (33
-tasks, 0 done). Implementation has not started.
+What landed: `core.ExpectationParser` (aliased on the facade), one generic `stepDefs`
+row in a new **seventh** group `Extend` (39 rows/6 groups → 40/7),
+`comparatorSatisfiedByDoc` in `internal/steps/steps.go`, and `Engine.Comparators()`.
+
+Four corrections this feature made to its own artifacts — worth knowing before
+trusting the spec text:
+
+- **godog is non-strict by default**, so an UNDEFINED step is reported and the suite
+  still exits 0. `run.go:411` sets no `Strict`, so a mistyped `Then` step passes
+  silently in a real run today. Pre-existing and applies to all 40 rows equally, so it
+  was recorded rather than fixed here — but it is a live Constitution IV gap and a
+  good candidate for its own small spec.
+- **The embedded-quote edge case cannot happen.** The spec and
+  `contracts/step-grammar.md` said a name containing a quote is *truncated* at the
+  quote. The pattern is anchored at both ends and `([^"]+)` cannot cross a quote, so
+  such a line matches nothing at all. Pinned by
+  `TestCustomComparatorPatternRejectsEmbeddedQuote`.
+- **`Registry.Comparators()` did not sort** while its `Reporters()` sibling did, and
+  had zero non-test callers. 011 is its first caller, and it feeds an error message,
+  so the sort was added at the source.
+- **`tasks.md` T009's red was not achievable as written** (assert `suite.Run() == 0`
+  and expect an undefined-step failure — see the non-strict point above), and T015
+  tested a guard T010 mandated, so it could never have been observed failing. Both
+  were reordered so every test was seen red first.
 
 Read the spec's **Decisions** (D1–D5) first — D1 in particular, which narrows the
 feature to one generic step row plus an optional `ExpectationParser` seam and defers
@@ -141,13 +163,11 @@ below how 009 framed it, all in `research.md`:
   `cmd/mentat` binary which cannot contain a Go-registered comparator, and sits
   behind a build tag `make ci` never compiles.
 
-Execution order matters (plan.md, Phase 2): the seam plus its **recorded**
-falsification rehearsal lands first, so the two-line golden diff is attributable to
-nothing else; `Engine.Comparators()` lands with the error paths it serves, not with
-the seam; red proofs last. Two invariants hold across the whole sequence — the
-public-surface golden changes **exactly once, by exactly two lines**, and the
-`stepDefs` drift tests are **never edited** (needing to means the design drifted into
-Option B).
+The mutation rehearsals are recorded in the test files themselves
+(`surface_test.go` for the nameability probe, `internal/steps/custom_comparator_test.go`
+for the four step-level ones), including one that initially failed to go red because
+the *mutation* had not applied — "the mutation didn't fire" and "the guard is real"
+are indistinguishable from test output alone.
 
 **Roadmap, renumbered by 011's D1:** 012 is comparator-contributed Gherkin phrases
 (Option B, a superset of 011 — nothing 011 builds is discarded); CLI/`mentatctl` UX

@@ -305,10 +305,27 @@ failing custom comparator, asserting a non-zero exit and a failing scenario in t
 
 ### Edge Cases
 
-- **Comparator name contains a quote or regex metacharacter.** The pattern captures
+- **Comparator name contains a quote or regex metacharacter.** ~~The pattern captures
   `"([^"]+)"`, so an embedded quote truncates the name and yields an unknown-name error rather
   than a confusing match. Acceptable, but the unknown-name error must show the captured name
-  verbatim so the truncation is visible.
+  verbatim so the truncation is visible.~~
+
+  > **Corrected 2026-09-10 during implementation (T014).** There is no truncation. The
+  > pattern is anchored at both ends and `([^"]+)` cannot cross a quote, so
+  > `the "rev"enue" comparator is satisfied by:` matches **nothing** — the step is
+  > UNDEFINED, not mis-captured. Verified against the compiled pattern and pinned by
+  > `TestCustomComparatorPatternRejectsEmbeddedQuote`.
+  >
+  > The real consequence is worse than truncation would have been, and is **not fixed
+  > here**: godog is non-strict by default and `run.go:411` sets no `Strict`, so an
+  > undefined step is reported and the run still **exits 0**. A mistyped `Then` step
+  > passes silently. That is pre-existing and applies to all 40 rows equally, so
+  > widening 011 to fix it would blur what this branch's diff is accountable for — but
+  > it is a live Constitution IV gap and deserves its own spec.
+  >
+  > Verbatim echo is still required and still implemented, because it earns its keep on
+  > the cases that DO reach the handler: a trailing space or a homoglyph in the name is
+  > invisible without it. `%q` in the unknown-name error makes it visible.
 - **Empty docstring.** `ParseExpectation("")` is the comparator's decision, not the step's.
   The step passes it through; a comparator that requires content returns its own error, which
   D5 wraps. The step must not pre-validate emptiness — that would be the step guessing on the
