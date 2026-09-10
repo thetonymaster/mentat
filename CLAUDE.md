@@ -120,15 +120,33 @@ Features 001–010 are shipped, most recently **010-seam-type-nameability**
 (`specs/010-seam-type-nameability`, merged 2026-09-09 as `1206a56`, all 59 tasks
 complete).
 
-The in-flight feature is **011-comparator-gherkin-invocation** (specified
-2026-09-10, not yet planned): spec at
-`specs/011-comparator-gherkin-invocation/spec.md`. Read its **Decisions** section
-(D1–D5) first — D1 in particular, which narrows the feature to one generic step row
-plus an optional `ExpectationParser` seam, and defers comparator-contributed Gherkin
-phrases to 012. Two findings there contradict how 009 framed this work:
-`type Expectation = any` is *not* the blocker (six comparators already build typed
-expectations from feature-file text), and no new engine plumbing is needed
-(`Engine.Comparator(name)` already exists).
+The in-flight feature is **011-comparator-gherkin-invocation** (specified and
+planned 2026-09-10): spec at `specs/011-comparator-gherkin-invocation/spec.md`,
+current plan at `specs/011-comparator-gherkin-invocation/plan.md`, with research,
+data-model, contracts/ and quickstart alongside. `tasks.md` is not yet generated.
+
+Read the spec's **Decisions** (D1–D5) first — D1 in particular, which narrows the
+feature to one generic step row plus an optional `ExpectationParser` seam and defers
+comparator-contributed Gherkin phrases to 012. Three findings shrank this feature
+below how 009 framed it, all in `research.md`:
+
+- `type Expectation = any` is **not** the blocker. Six comparators already build
+  typed expectations from feature-file text; only the *choice* of concrete type is
+  frozen at compile time.
+- No new engine plumbing. `Engine.Comparator(name)` exists and `world.eng` is a
+  concrete `*engine.Engine`; the sole addition is `Engine.Comparators()`.
+- **R6 corrected the spec**: the L3 red-on-bad proof belongs in `internal/steps` as
+  an in-process godog suite, *not* in `e2e/` — that suite drives a prebuilt
+  `cmd/mentat` binary which cannot contain a Go-registered comparator, and sits
+  behind a build tag `make ci` never compiles.
+
+Execution order matters (plan.md, Phase 2): the seam plus its **recorded**
+falsification rehearsal lands first, so the two-line golden diff is attributable to
+nothing else; `Engine.Comparators()` lands with the error paths it serves, not with
+the seam; red proofs last. Two invariants hold across the whole sequence — the
+public-surface golden changes **exactly once, by exactly two lines**, and the
+`stepDefs` drift tests are **never edited** (needing to means the design drifted into
+Option B).
 
 **Roadmap, renumbered by 011's D1:** 012 is comparator-contributed Gherkin phrases
 (Option B, a superset of 011 — nothing 011 builds is discarded); CLI/`mentatctl` UX

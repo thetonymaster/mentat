@@ -364,11 +364,19 @@ failing custom comparator, asserting a non-zero exit and a failing scenario in t
 - **FR-014**: `docs/extending/comparator.md` MUST document the new phrase and the
   `ExpectationParser` seam, including a complete worked example of a custom comparator that
   implements it and the feature-file snippet that drives it.
-- **FR-015**: The L3 meta-test suite MUST prove the new step goes **red** on a failing custom
-  comparator and on a parser error, not merely green on a passing one. Note that the L3
-  meta-tests live in `e2e/` behind `//go:build e2e`, which `make ci` does **not** compile —
-  so `go vet -tags e2e ./...` is mandatory before every commit touching these types
-  (SC-010). This is the gap that left the e2e package unbuildable for six commits during 010.
+- **FR-015**: The suite MUST prove the new step goes **red** on a failing custom comparator
+  and on a parser error, not merely green on a passing one. The proof lands in
+  `internal/steps` as an **in-process godog suite**, following `TestFeatureGoesRedOnBadScenario`
+  (`internal/steps/steps_test.go:103`) and its four siblings.
+
+  *Placement corrected 2026-09-10 by [research R6](./research.md).* This requirement
+  originally assumed the proof belonged in the `e2e/` L3 suite. It cannot: `e2e/main_test.go:29`
+  builds `mentatBin` from `./cmd/mentat` and drives that prebuilt binary, so a comparator
+  registered in Go via `WithComparator` is structurally unreachable there. The in-process
+  vehicle is also strictly better — it is hermetic, and it runs under `make ci`, whereas the
+  `e2e/` placement would have hidden this feature's red-on-bad proof behind `//go:build e2e`,
+  which `make ci` never compiles. That is the same hole that left the e2e package unbuildable
+  for six commits during 010. The obligation is unchanged; only its location moved.
 - **FR-016**: `CHANGELOG.md` MUST record the new step and the new interface as additive
   changes, with no breaking-change entry, since nothing existing changes shape.
 
