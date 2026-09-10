@@ -1347,6 +1347,11 @@ func surfaceIndent(syms []string) string {
 //     Facade refs are reported but never QUEUED: the sentinel is not a directory, and
 //     walking it tries to read one. Nothing is lost, since the only facade refs that
 //     survive the filter are types an external module can neither spell nor construct.
+//
+//  8. PARENTHESIZED types were a leaf. Go's grammar allows `(Thing)` anywhere a type may
+//     appear, so this was never a type-argument quirk — a field written `Foo (Thing)`
+//     was equally invisible, and had been since the walker was written. One case, and it
+//     fixes every position at once, which is the dividend of there being one traversal.
 func TestFacadeNameabilitySweep(t *testing.T) {
 	c, aliases := surfaceAliases(t)
 
@@ -1706,6 +1711,11 @@ func surfaceNamedRefs(expr ast.Expr, self string, resolve func(string) (string, 
 	var walk func(ast.Expr)
 	walk = func(e ast.Expr) {
 		switch v := e.(type) {
+		case *ast.ParenExpr:
+			// Go's grammar allows a parenthesized type anywhere a type may appear, so
+			// this is not a type-argument quirk: a field written `Foo (Thing)` lands
+			// here too. Without the case the whole expression was a leaf.
+			walk(v.X)
 		case *ast.StarExpr:
 			walk(v.X)
 		case *ast.ArrayType:
@@ -1818,6 +1828,11 @@ func TestSurfaceNamedRefsQualifiesBareIdents(t *testing.T) {
 		// reachable, and an external module must be able to spell each. The type
 		// PARAMETER of a generic declaration is filtered separately, at the sweep, by
 		// typeParamsInDir — it is a placeholder, not a type.
+		// Go's grammar permits a parenthesized type anywhere a type may appear, so this
+		// is not a type-argument quirk: a plain field written `Foo (Thing)` reaches the
+		// same branch.
+		{name: "parenthesized type is unwrapped", expr: "(AggregateDetail)", want: []string{"internal/core.AggregateDetail"}},
+		{name: "pointer to parenthesized type", expr: "*(AggregateDetail)", want: []string{"internal/core.AggregateDetail"}},
 		{name: "generic instantiation contributes type and argument", expr: "Box[Payload]", want: []string{"internal/core.Box", "internal/core.Payload"}},
 		{name: "multi-argument generic contributes all arguments", expr: "Pair[Kind, Detail]", want: []string{"internal/core.Pair", "internal/core.Kind", "internal/core.Detail"}},
 		{name: "map contributes key and value", expr: "map[Kind]Detail", want: []string{"internal/core.Kind", "internal/core.Detail"}},
@@ -1947,6 +1962,9 @@ func TestSurfaceAliasArgsTraversesNestedArguments(t *testing.T) {
 		// placeholders, not types, whatever their case.
 		{name: "alias type parameter is not a reference", expr: "core.Box[T]", aliasParams: map[string]bool{"T": true}, want: nil},
 		{name: "lowercase alias type parameter is not a reference either", expr: "core.Box[t]", aliasParams: map[string]bool{"t": true}, want: nil},
+		// Parenthesized arguments are legal Go and must not slip past the filter.
+		{name: "parenthesized unexported facade argument is still reported", expr: "core.Box[(hidden)]", want: []string{"<facade>.hidden"}},
+		{name: "parenthesized selector argument", expr: "core.Box[(core.Thing)]", want: []string{"internal/core.Thing"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
