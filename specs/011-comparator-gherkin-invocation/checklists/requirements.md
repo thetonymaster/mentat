@@ -135,11 +135,16 @@ the same spirit as the struck-through R6 note above.
   *truncated*. The pattern is anchored at both ends and `([^"]+)` cannot cross a quote,
   so such a line matches nothing at all and the step is UNDEFINED. Both documents are
   corrected in place; `TestCustomComparatorPatternRejectsEmbeddedQuote` pins it.
-- **Undefined steps do not fail a run.** godog is non-strict by default and
-  `run.go:411` sets no `Strict`, so a mistyped `Then` step is reported and the run still
-  exits 0. Pre-existing, applies to all 40 rows equally, and deliberately **not** fixed
-  inside this feature — but it is a live Constitution IV gap, and it is the reason the
-  new tests set `Strict` in their own harness.
+- **Undefined steps and the non-strict default.** godog is non-strict by default, so an
+  undefined step leaves the SUITE STATUS at 0. The first conclusion drawn from that —
+  that a mistyped `Then` step passes silently in a real run — was **wrong**, and is
+  corrected here rather than quietly dropped. `mentat.Run` discards the suite status and
+  derives Results from the collector; godog passes the After hook
+  `step is undefined: <text>` as stepErr, so the scenario is recorded as FAILED
+  (`TestUndefinedStepFailsTheRun`). The gap was real in exactly one place,
+  `ctl.ReplayFeature`, which read the suite status directly — fixed with `Strict: true`
+  and covered by `TestReplayFeatureFailsOnUndefinedStep`. It remains the reason the new
+  in-process suites set `Strict` in their own harness: there, the status IS the verdict.
 - **`Registry.Comparators()` did not sort** while its documented-to-sort `Reporters()`
   sibling did. It had zero non-test callers, so the nondeterminism had never mattered;
   FR-007 renders it into an error message, which makes it matter. Fixed at the source.

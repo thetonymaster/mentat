@@ -94,9 +94,12 @@ a mysterious unknown-name error.
 > Verbatim echo remains required — it just earns its keep on the cases that actually reach the
 > handler, not on a truncation that cannot occur.
 >
-> Consequence recorded, not fixed: godog is non-strict by default and `run.go:411` sets no
-> `Strict`, so an undefined step exits **0**. See the spec's Edge Cases for why that is out of
-> scope here.
+> A follow-up claim in this note — that godog's non-strict default therefore lets an undefined
+> step pass silently in a real run — was investigated and found **largely false**.
+> `mentat.Run` discards the suite status and derives Results from the collector, whose After
+> hook receives `step is undefined: <text>` as stepErr and records the scenario as FAILED. The
+> gap was real only in `ctl.ReplayFeature`, which read the suite status directly; fixed with
+> `Strict: true`. See the spec's Edge Cases.
 
 **Listing the registered names** mirrors 010's `WithReports` unknown-name behaviour and is the
 difference between a usable seam and a guessing game. It is why `Engine.Comparators()` exists

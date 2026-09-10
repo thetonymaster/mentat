@@ -240,11 +240,16 @@ func TestCustomComparatorErrors(t *testing.T) {
 // both ends and ([^"]+) cannot cross a quote, so such a line matches NOTHING and the
 // step is undefined instead of mis-captured.
 //
-// Worth pinning, because the consequence is worse than truncation would have been.
-// godog is non-strict by default and run.go:411 sets no Strict, so an undefined step
-// is reported and the run still exits 0 — a mistyped Then step passes silently. That
-// is pre-existing and applies to all 40 rows equally, not something 011 introduces,
-// so it is recorded here rather than fixed inside this feature's diff.
+// A follow-up claim once recorded here — that the consequence is worse than truncation,
+// because godog's non-strict default lets an undefined step pass silently in a real run
+// — was investigated and is largely FALSE. mentat.Run discards the suite status and
+// derives Results from the collector, whose After hook receives "step is undefined: …"
+// as stepErr and records the scenario as failed (TestUndefinedStepFailsTheRun, root
+// package). The gap was real only in ctl.ReplayFeature, which read the suite status
+// directly; it is fixed with Strict there.
+//
+// So an embedded quote yields an undefined step, and an undefined step fails the run.
+// The pattern-level assertion below is what pins the first half.
 func TestCustomComparatorPatternRejectsEmbeddedQuote(t *testing.T) {
 	var pattern string
 	for _, sd := range stepDefs {

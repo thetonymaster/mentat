@@ -316,12 +316,17 @@ failing custom comparator, asserting a non-zero exit and a failing scenario in t
   > UNDEFINED, not mis-captured. Verified against the compiled pattern and pinned by
   > `TestCustomComparatorPatternRejectsEmbeddedQuote`.
   >
-  > The real consequence is worse than truncation would have been, and is **not fixed
-  > here**: godog is non-strict by default and `run.go:411` sets no `Strict`, so an
-  > undefined step is reported and the run still **exits 0**. A mistyped `Then` step
-  > passes silently. That is pre-existing and applies to all 40 rows equally, so
-  > widening 011 to fix it would blur what this branch's diff is accountable for — but
-  > it is a live Constitution IV gap and deserves its own spec.
+  > **Follow-up, 2026-09-10.** This note first claimed the consequence was worse than
+  > truncation — that godog's non-strict default let an undefined step pass silently in
+  > a real run. Investigated and **largely false**. `mentat.Run` discards the suite
+  > status and derives Results from the collector; godog hands the After hook
+  > `step is undefined: <text>` as stepErr, so the scenario is recorded as FAILED.
+  > Verified by `TestUndefinedStepFailsTheRun`.
+  >
+  > The gap was real in exactly one place: `ctl.ReplayFeature` derived its verdict from
+  > the suite status directly, so `mentatctl replay` returned success for a feature
+  > whose assertion never ran. Fixed with `Strict: true` and covered by
+  > `TestReplayFeatureFailsOnUndefinedStep`.
   >
   > Verbatim echo is still required and still implemented, because it earns its keep on
   > the cases that DO reach the handler: a trailing space or a homoglyph in the name is

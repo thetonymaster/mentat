@@ -195,3 +195,43 @@ func TestReplayFeatureHonorsCallerCancellation(t *testing.T) {
 		t.Fatalf("expected a cancellation error; caller ctx did not reach the replay steps\n%s", b.String())
 	}
 }
+
+// TestReplayFeatureFailsOnUndefinedStep pins that a step matching no registered
+// pattern fails the replay.
+//
+// ReplayFeature derives its verdict from suite.Run()'s exit status, and godog's
+// default is non-strict: an undefined step is printed but the suite still exits 0. So
+// a mistyped Then step made `mentatctl replay` report success against a stored run
+// while the assertion never ran — a silent fallback (Constitution IV).
+//
+// This is the one place that gap was real. mentat.Run is unaffected: it discards the
+// suite status and derives Results from the collector, whose After hook receives
+// "step is undefined: ..." as stepErr and records the scenario as failed. See
+// TestUndefinedStepFailsTheRun in the root package.
+func TestReplayFeatureFailsOnUndefinedStep(t *testing.T) {
+	cfg := config.Config{
+		OTLPEndpoint: "x",
+		Targets:      map[string]config.Target{"bot": {Adapter: "shell", Command: []string{"false"}, MaxConcurrency: 1}},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	st.EXPECT().Query(gomock.Any(), gomock.Any()).Return([]core.TraceRef{{TraceID: "r"}}, nil).AnyTimes()
+	stubForestByID(st, func(string) (*trace.Trace, error) { return sampleForest(), nil })
+	cor := correlate.New(func() string { return "r" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+	eng, _ := engine.Build(cfg, st, cor)
+
+	feature := writeTempFeature(t, `Feature: replay
+  Scenario: a step that matches no registered pattern
+    Given the agent target "bot"
+    When I run scenario "ignored"
+    Then the moon is made of green cheese
+`)
+	var b bytes.Buffer
+	err := ReplayFeature(context.Background(), eng, "r", feature, "", &b)
+	if err == nil {
+		t.Fatalf("replay must FAIL on an undefined step; an assertion that never ran is not a pass\n%s", b.String())
+	}
+	if !strings.Contains(b.String(), "undefined") {
+		t.Errorf("output should name the undefined step, got:\n%s", b.String())
+	}
+}

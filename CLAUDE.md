@@ -130,11 +130,19 @@ row in a new **seventh** group `Extend` (39 rows/6 groups → 40/7),
 Four corrections this feature made to its own artifacts — worth knowing before
 trusting the spec text:
 
-- **godog is non-strict by default**, so an UNDEFINED step is reported and the suite
-  still exits 0. `run.go:411` sets no `Strict`, so a mistyped `Then` step passes
-  silently in a real run today. Pre-existing and applies to all 40 rows equally, so it
-  was recorded rather than fixed here — but it is a live Constitution IV gap and a
-  good candidate for its own small spec.
+- **godog is non-strict by default**, so an UNDEFINED step is reported and the SUITE
+  STATUS is still 0. The first reading of this — that a mistyped `Then` step therefore
+  passes silently in a real run — was **wrong**, and the correction is worth keeping:
+  `mentat.Run` discards the suite status (`_ = suite.Run()`, `run.go`) and derives
+  Results from the collector, and godog passes the After hook
+  `step is undefined: <text>` as stepErr, so the scenario is recorded as FAILED. The
+  collector path is what makes `mentat.Run` correct, not what breaks it.
+  The gap WAS real in exactly one place — `ctl.ReplayFeature`, which derived its
+  verdict from the suite status directly, so `mentatctl replay` reported success on a
+  feature whose assertion never ran. Fixed with `Strict: true` there and covered by
+  `TestReplayFeatureFailsOnUndefinedStep`;
+  `TestUndefinedStepFailsTheRun` guards the `mentat.Run` side, since that behaviour is
+  emergent from godog's hook contract rather than asserted anywhere in mentat.
 - **The embedded-quote edge case cannot happen.** The spec and
   `contracts/step-grammar.md` said a name containing a quote is *truncated* at the
   quote. The pattern is anchored at both ends and `([^"]+)` cannot cross a quote, so
