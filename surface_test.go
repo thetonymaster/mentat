@@ -858,6 +858,50 @@ func (c *surfaceCtx) renderStructMethods(t *testing.T, pkg, alias, target string
 	return out
 }
 
+// structMethodSigs returns the exported methods declared on `target` in dir, as
+// (name, signature) pairs. Shared by renderStructMethods (which prints them) and
+// TestFacadeNameabilitySweep (which walks their types) so the set the golden FREEZES and
+// the set the sweep CHECKS cannot diverge — the two halves disagreeing is the defect
+// class this feature exists to close.
+func (c *surfaceCtx) structMethodSigs(t *testing.T, dir, target string) []struct {
+	Name string
+	Sig  *ast.FuncType
+} {
+	t.Helper()
+	var out []struct {
+		Name string
+		Sig  *ast.FuncType
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read aliased package dir %q: %v", dir, err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(c.fset, filepath.Join(dir, name), nil, 0)
+		if err != nil {
+			t.Fatalf("parse aliased source %s: %v", filepath.Join(dir, name), err)
+		}
+		for _, d := range f.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok || fd.Recv == nil || len(fd.Recv.List) == 0 || !fd.Name.IsExported() {
+				continue
+			}
+			if surfaceReceiverTypeName(fd.Recv.List[0].Type) != target {
+				continue
+			}
+			out = append(out, struct {
+				Name string
+				Sig  *ast.FuncType
+			}{Name: fd.Name.Name, Sig: fd.Type})
+		}
+	}
+	return out
+}
+
 // surfaceReceiverTypeName reduces a receiver expression to its bare type name, so a
 // value receiver (Results) and a pointer receiver (*Results) both match the aliased
 // target — a caller reaches both through the alias, so both are public surface.
@@ -1162,6 +1206,26 @@ func TestFacadeNameabilitySweep(t *testing.T) {
 				for _, via := range vias {
 					for _, ref := range surfaceNamedRefs(f.Type, pkg) {
 						refs = append(refs, reach{typ: ref, via: via})
+					}
+				}
+			}
+			// …and the struct's exported METHOD signatures. renderStructMethods puts
+			// these on the frozen surface (method (Results) ExitCode() int,
+			// method (ExtractConfig) Policy() ExtractPolicy, …), so a parameter or
+			// result type there is exactly as public as a field's — and was exactly as
+			// unswept until now. This gap was introduced by this feature: adding
+			// renderStructMethods created a surface position the sweep did not walk.
+			if dir, ok := c.imports[pkg]; ok {
+				// Called for its collision check as much as its result: the sweep
+				// resolves qualifiers in the FACADE's namespace, so it shares
+				// normalizeTypes' assumption that a local import name means the same
+				// thing in every package. importsOf fails loudly if any directory
+				// binds one name to two packages, so that assumption cannot break
+				// silently here either.
+				c.importsOf(t, dir)
+				for _, m := range c.structMethodSigs(t, dir, name) {
+					for _, ref := range surfaceFuncRefs(m.Sig, pkg) {
+						refs = append(refs, reach{typ: ref, via: "method (" + name + ") " + m.Name})
 					}
 				}
 			}

@@ -106,21 +106,37 @@ fields; new `RunRecord` and `WithReporter` declarations. Nothing else.
 
 **Criterion**: SC-004. This is the root-cause fix; verify it by breaking it.
 
-```bash
-# On a scratch branch, add a method to a published seam whose parameter type
-# has no facade name, e.g.:
-#   Report(res Results, w io.Writer) error
-#   Summarize(p core.Pricing) string          // deliberately unnameable
-go test . -run TestFacadeNameability
+Add a method whose result type has no facade name. Use a method on an aliased STRUCT,
+not on a seam interface: adding a method to an interface stops its implementers
+satisfying it, so the module fails to COMPILE before the sweep ever runs.
+
+`core.Pricing` is a good probe — it is genuinely unnameable, because the facade's
+`Pricing` alias points at `config.Pricing`, a different type of the same name.
+
+```go
+// in internal/result/result.go
+func (r Results) XProbe() core.Pricing { return nil }
 ```
 
-**Expected**: FAIL, naming **both** the offending type and the reaching position — e.g.
-`method (Reporter) Summarize(rep RunReport)`. A failure that names only the type does not
-satisfy the contract: the author has to go source-spelunking.
+```bash
+go test . -run TestFacadeNameabilitySweep
+```
+
+**Expected**: FAIL, naming **both** the offending type and the reaching position:
+
+```
+- core.Pricing — reached by method (Results) XProbe
+```
+
+A failure that names only the type does not satisfy the contract — the author would have
+to go source-spelunking.
 
 ```bash
-git checkout .   # discard the scratch change
+git restore -- internal/result/result.go   # revert ONLY the probe
 ```
+
+Never `git checkout .` here: it discards every unstaged change in the tree, not just the
+probe.
 
 ---
 
@@ -184,7 +200,7 @@ reports the lowest-covered functions.
 **Criterion**: SC-005, FR-010, FR-015. Not automated — read them.
 
 ```bash
-grep -n "boundary 4" docs/extending/stability.md          # EXPECT: no match
+grep -ni "boundary 4" docs/extending/stability.md         # EXPECT: no match (-i: a capitalised stale reference must not slip past)
 grep -rn "cmd/mentat calls report.EmitReports" internal/  # EXPECT: no match
 grep -n "no concrete external demand" mentat.go           # EXPECT: Correlator only
 ```
