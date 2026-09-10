@@ -111,6 +111,26 @@ type AggregateComparator interface {
 	Aggregate(ctx context.Context, evs []Evidence, e Expectation) (Verdict, error)
 }
 
+// ExpectationParser turns raw feature-file text into the comparator's own
+// Expectation type. It is OPTIONAL and deliberately not part of Comparator:
+// implementing it is what makes a comparator reachable from a .feature file by
+// name, and a comparator that does not implement it keeps working exactly as
+// before.
+//
+// It is discovered by type assertion at step time, never by registration.
+//
+// Mentat passes the docstring body verbatim and never inspects, trims or
+// normalizes it — whitespace may be significant to the comparator's format. The
+// returned value is handed to Compare unchanged; an error is wrapped and
+// surfaced, never converted into a failing verdict.
+//
+// The method receives text only: no context, no target, no Evidence. Evidence is
+// the single channel through which a comparator sees run data, and a parser able
+// to reach run context would be a second, weaker one.
+type ExpectationParser interface {
+	ParseExpectation(text string) (Expectation, error)
+}
+
 // RunSpec is the driver input. The adapter applies RunID/Tags via its transport.
 type RunSpec struct {
 	Target  string

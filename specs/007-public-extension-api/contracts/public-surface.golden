@@ -176,6 +176,7 @@ method (Correlator) Inject(ctx context.Context, spec *RunSpec) (runID string)
 method (Correlator) Resolve(ctx context.Context, store TraceStore, req ResolveRequest) (*Trace, error)
 method (Correlator) ResolveComplete(ctx context.Context, store TraceStore, runID string) (*Trace, error)
 method (Driver) Run(ctx context.Context, spec RunSpec) (RunResult, error)
+method (ExpectationParser) ParseExpectation(text string) (Expectation, error)
 method (ExtractConfig) Policy() ExtractPolicy
 method (Judge) Judge(ctx context.Context, req JudgeRequest) (JudgeVerdict, error)
 method (Reporter) Report(res Results, w io.Writer) error
@@ -201,6 +202,7 @@ type DriverFactory = func(Config) (Driver, error)
 type Endpoint = config.Endpoint
 type Evidence = core.Evidence
 type Expectation = core.Expectation
+type ExpectationParser = core.ExpectationParser
 type ExtractConfig = config.ExtractConfig
 type ExtractPolicy = core.ExtractPolicy
 type HTTP = config.HTTP

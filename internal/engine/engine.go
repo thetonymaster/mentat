@@ -201,6 +201,13 @@ func (e *Engine) Comparator(name string) (core.Comparator, bool) {
 	return e.reg.Comparator(name)
 }
 
+// Comparators returns this engine's registered comparator names, sorted. It exists to
+// serve the unknown-name error of the Gherkin comparator step (feature 011): naming
+// what IS registered is the difference between a usable seam and a guessing game.
+func (e *Engine) Comparators() []string {
+	return e.reg.Comparators()
+}
+
 // AggregateComparator resolves a named aggregate comparator from this engine's registry.
 func (e *Engine) AggregateComparator(name string) (core.AggregateComparator, bool) {
 	return e.reg.AggregateComparator(name)

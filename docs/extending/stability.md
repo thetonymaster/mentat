@@ -140,6 +140,32 @@ struck-through entry so the numbering stays stable.
    Kept as a numbered entry rather than deleted outright so the numbering of boundaries
    1–3 stays stable for anything that cites them.
 
+   **Two blind spots in that sweep were closed 2026-09-10.** Both were found by review,
+   not by the gate, and both were latent — no live instance existed on the surface — so
+   each was proven by planting a probe and observing the sweep report **zero** offenders
+   beforehand. Neither was ever an accepted boundary; they were simply unwalked:
+
+   - **Generic instantiations.** A type written `Box[Payload]` parses as an
+     `ast.IndexExpr`, which the walker had no case for, so both the generic type and
+     its type arguments were invisible. Now walked; a generic type *parameter* (the `T`
+     in `Box[T any]`) is filtered, since it is a placeholder rather than a nameable type.
+   - **Unexported local types.** An exported field or seam-method parameter whose type
+     is unexported cannot be spelled by an external module at all — the strictest
+     nameability failure there is — and was skipped silently. Now reported. Go's
+     predeclared identifiers (`string`, `int`, `error`, `any`, …) are unexported idents
+     too, and remain excluded.
+   - **Instantiated aliases.** `type PublicBox = core.Box[int]` was dropped from the
+     seed set entirely — not merely unnameable but unseeded, so everything reachable
+     through it went unwalked. Now unwrapped, with the instantiation's type *arguments*
+     checked in their own right: a caller writes `mentat.PublicBox` and never spells the
+     argument, yet lands in fields typed by it.
+   - **Generic receivers and renamed receiver parameters.** Methods on a generic type
+     matched no target and were never collected. Go also lets a receiver rename its type
+     parameters (`type Box[t any]` with `func (b Box[x]) …`), scoped to the method, so
+     each method's references are filtered by its own receiver's names rather than the
+     declaration's — otherwise a package-level type colliding with a declaration
+     parameter name is wrongly ignored.
+
 > Every symbol on the surface earns its place: the manifest rule is that a symbol
 > appears in the contract *with a justification, or it does not get exported*. See
 > [`contracts/public-surface.md`](../../specs/007-public-extension-api/contracts/public-surface.md)

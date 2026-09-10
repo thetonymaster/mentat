@@ -8,6 +8,28 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- **Custom comparators are drivable from a `.feature` file.** A comparator registered
+  with `WithComparator` could be composed but not *invoked* by an authored step: every
+  `Then` step chose its comparator and its expectation type at compile time. One generic
+  step now takes both from the scenario —
+  `Then the "revenue-shape" comparator is satisfied by:` followed by a docstring. The
+  quoted name resolves through the same registry the built-in steps use, and the
+  docstring goes to the comparator's own parser. The step inherits everything a built-in
+  step gets: completeness qualifiers, judge-usage accounting, and the `@runs(N>1)` guard.
+  Three failure modes are loud and specific — an unregistered name (the error lists the
+  names that *are* registered), a comparator that cannot be driven from Gherkin, and a
+  parser error (wrapped, never converted into a failing verdict, because a parse failure
+  is not an assertion failure).
+- **`ExpectationParser` on the facade.** The optional companion to `Comparator`:
+  `ParseExpectation(text string) (Expectation, error)`. Implement it and your comparator
+  becomes reachable from Gherkin; omit it and nothing changes. It is discovered by type
+  assertion, so `Comparator` itself is unchanged and every existing implementation —
+  including `examples/kafkaecho` — compiles and behaves identically. It takes text and
+  nothing else: no context, no target, no `Evidence`, so it cannot become a second
+  channel to run data alongside `Evidence`.
+- **`Engine.Comparators()`** lists the registered comparator names, sorted, so an
+  unknown-name error can name the alternatives instead of just rejecting the input.
+
 - **Custom reporters — `WithReporter`.** A caller-supplied `Reporter` can now be
   registered for a run and selected by name through `WithReports`, exactly as a built-in
   json/html/junit reporter is. It receives the same `Results` a library caller receives

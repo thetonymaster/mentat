@@ -116,24 +116,88 @@ from Tempo, and run **comparators** that assert how it behaved and what it produ
 - `/coverage` — run `go test` with coverage and enforce the 80% floor.
 
 <!-- SPECKIT START -->
-Features 001–009 are shipped (through `specs/009-extension-surface-integrity`,
-merged 2026-07-18, all 34 tasks complete). The in-flight feature is
-**010-seam-type-nameability** (specified and planned 2026-09-09): spec at
-`specs/010-seam-type-nameability/spec.md`, current plan at
-`specs/010-seam-type-nameability/plan.md`, with research, data-model, contracts/
-and quickstart alongside, and `tasks.md` complete (59/59). Read the spec's **Decisions** section (D1–D5) before touching anything. **D5 is the
-one to read first**: the result types (`Results`, `ScenarioResult`, `RunRecord`,
-`Reporter`) move to a new leaf package `internal/result` and are aliased on the
-facade. A seam's parameter types *cannot* be declared at the facade — root imports
-`internal/report`, `internal/engine` and `internal/registry`, so anything they
-consume must live beneath them. Only terminal types may be facade-declared.
-Execution order is *not* story priority order — the report-format golden (FR-013)
-lands green before anything moves, Phase 5's step 5a is a **pure move** with that
-golden green across it, and the US4 gate can only go green last (plan.md, Phase 2).
-For additional
-context about technologies used, project structure, shell commands, and other
-important information, read `specs/` as history — each feature dir carries its
-`spec.md`, `plan.md`, `tasks.md`, and `contracts/`. When work is in flight, the
+Features 001–011 are shipped. **011-comparator-gherkin-invocation**
+(`specs/011-comparator-gherkin-invocation`, implemented 2026-09-10, all 37 tasks
+complete) is on branch `011-comparator-gherkin-invocation`, not yet merged. Both plan
+invariants held: the public-surface golden changed **exactly once, by exactly two
+lines**, and no `stepDefs` drift-test assertion was edited anywhere in the branch —
+the operational test of D1's claim that this was Option A and not Option B.
+
+What landed: `core.ExpectationParser` (aliased on the facade), one generic `stepDefs`
+row in a new **seventh** group `Extend` (39 rows/6 groups → 40/7),
+`comparatorSatisfiedByDoc` in `internal/steps/steps.go`, and `Engine.Comparators()`.
+
+Four corrections this feature made to its own artifacts — worth knowing before
+trusting the spec text:
+
+- **godog is non-strict by default**, so an UNDEFINED step is reported and the SUITE
+  STATUS is still 0. The first reading of this — that a mistyped `Then` step therefore
+  passes silently in a real run — was **wrong**, and the correction is worth keeping:
+  `mentat.Run` discards the suite status (`_ = suite.Run()`, `run.go`) and derives
+  Results from the collector, and godog passes the After hook
+  `step is undefined: <text>` as stepErr, so the scenario is recorded as FAILED. The
+  collector path is what makes `mentat.Run` correct, not what breaks it.
+  The gap WAS real in exactly one place — `ctl.ReplayFeature`, which derived its
+  verdict from the suite status directly, so `mentatctl replay` reported success on a
+  feature whose assertion never ran. Fixed with `Strict: true` there and covered by
+  `TestReplayFeatureFailsOnUndefinedStep`;
+  `TestUndefinedStepFailsTheRun` guards the `mentat.Run` side, since that behaviour is
+  emergent from godog's hook contract rather than asserted anywhere in mentat.
+- **The embedded-quote edge case cannot happen.** The spec and
+  `contracts/step-grammar.md` said a name containing a quote is *truncated* at the
+  quote. The pattern is anchored at both ends and `([^"]+)` cannot cross a quote, so
+  such a line matches nothing at all. Pinned by
+  `TestCustomComparatorPatternRejectsEmbeddedQuote`.
+- **`Registry.Comparators()` did not sort** while its `Reporters()` sibling did, and
+  had zero non-test callers. 011 is its first caller, and it feeds an error message,
+  so the sort was added at the source.
+- **`tasks.md` T009's red was not achievable as written** (assert `suite.Run() == 0`
+  and expect an undefined-step failure — see the non-strict point above), and T015
+  tested a guard T010 mandated, so it could never have been observed failing. Both
+  were reordered so every test was seen red first.
+
+Read the spec's **Decisions** (D1–D5) first — D1 in particular, which narrows the
+feature to one generic step row plus an optional `ExpectationParser` seam and defers
+comparator-contributed Gherkin phrases to 012. Three findings shrank this feature
+below how 009 framed it, all in `research.md`:
+
+- `type Expectation = any` is **not** the blocker. Six comparators already build
+  typed expectations from feature-file text; only the *choice* of concrete type is
+  frozen at compile time.
+- No new engine plumbing. `Engine.Comparator(name)` exists and `world.eng` is a
+  concrete `*engine.Engine`; the sole addition is `Engine.Comparators()`.
+- **R6 corrected the spec**: the L3 red-on-bad proof belongs in `internal/steps` as
+  an in-process godog suite, *not* in `e2e/` — that suite drives a prebuilt
+  `cmd/mentat` binary which cannot contain a Go-registered comparator, and sits
+  behind a build tag `make ci` never compiles.
+
+The mutation rehearsals are recorded in the test files themselves
+(`surface_test.go` for the nameability probe, `internal/steps/custom_comparator_test.go`
+for the four step-level ones), including one that initially failed to go red because
+the *mutation* had not applied — "the mutation didn't fire" and "the guard is real"
+are indistinguishable from test output alone.
+
+**Roadmap, renumbered by 011's D1:** 012 is comparator-contributed Gherkin phrases
+(Option B, a superset of 011 — nothing 011 builds is discarded); CLI/`mentatctl` UX
+moves from 012 to **013**. The 009 roadmap line
+(`specs/009-extension-surface-integrity/spec.md:143`) still shows the old numbering
+and should be corrected when 012 is specified.
+
+Two standing rules 010 established — read these before touching the facade:
+
+- **Only terminal types may be facade-declared.** Root imports `internal/report`,
+  `internal/engine` and `internal/registry`, so any type those packages *consume*
+  must live beneath them and be aliased on the facade, never declared there. This
+  is why the result types (`Results`, `ScenarioResult`, `RunRecord`, `Reporter`)
+  live in the leaf package `internal/result`. See `specs/010-.../spec.md` D5.
+- **The reachable set includes seam signatures.** `TestFacadeNameabilitySweep`
+  (`surface_test.go`) walks parameter and result types of every published seam, not
+  just fields reachable from `Config`/`Results`. `docs/extending/stability.md`
+  boundary 4 is closed; boundaries 1–3 remain accepted gaps.
+
+For additional context about technologies used, project structure, shell commands,
+and other important information, read `specs/` as history — each feature dir carries
+its `spec.md`, `plan.md`, `tasks.md`, and `contracts/`. When work is in flight, the
 current plan is the `plan.md` of the highest-numbered spec dir whose `tasks.md`
 still has unchecked tasks.
 <!-- SPECKIT END -->

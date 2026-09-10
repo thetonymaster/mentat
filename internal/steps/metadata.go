@@ -364,4 +364,11 @@ var stepDefs = []stepDef{
 		example: `Then the run matches shape "research-flow"`,
 		handler: func(w *world) any { return w.matchesShape },
 	},
+	{
+		group:   "Extend",
+		pattern: `^the "([^"]+)" comparator is satisfied by:$`,
+		summary: "Runs a caller-registered comparator by name, passing the docstring to its own ExpectationParser.",
+		example: "Then the \"revenue-shape\" comparator is satisfied by:\n  \"\"\"\n  {\"min\": 4, \"currency\": \"USD\"}\n  \"\"\"",
+		handler: func(w *world) any { return w.comparatorSatisfiedByDoc },
+	},
 }

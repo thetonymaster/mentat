@@ -121,7 +121,13 @@ func (r *Registry) Comparator(name string) (core.Comparator, bool) {
 	return c, ok
 }
 
-// Comparators returns all registered comparator names.
+// Comparators returns the registered comparator names in sorted order, so an unknown-
+// name error can name the alternatives instead of just rejecting the input — the same
+// contract Reporters has.
+//
+// The sort is load-bearing rather than cosmetic: feature 011's Gherkin step renders
+// this list into its unknown-comparator error, and map iteration order would reorder
+// that message between runs of an unchanged suite.
 func (r *Registry) Comparators() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -129,6 +135,7 @@ func (r *Registry) Comparators() []string {
 	for n := range r.comparators {
 		names = append(names, n)
 	}
+	sort.Strings(names)
 	return names
 }
 

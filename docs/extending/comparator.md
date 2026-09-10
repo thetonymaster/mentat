@@ -77,35 +77,90 @@ res, err := mentat.Run(ctx, cfg,
 )
 ```
 
-> **Out of scope for feature 007 (planned as spec 010, not yet started).**
-> `WithComparator` publishes the *registration* surface: a custom comparator is
-> registered and composes at build today. Actually *invoking* it from a `.feature`
-> step, however, needs new Gherkin grammar plus generic expectation parsing. That
-> work is planned as spec 010, custom comparator steps; it has not been started, so
-> there is no spec document to read yet. A registered comparator is therefore
-> composable now but is not yet driven by an authored step — see the "Out of scope"
-> note in
-> [`specs/007-public-extension-api/tasks.md`](../../specs/007-public-extension-api/tasks.md).
-> (Custom **drivers** and **stores** do work end to end today — see
-> [`examples/kafkaecho`](../../examples/kafkaecho).)
+Registration alone makes a comparator *composable*. To make it reachable from a
+`.feature` file, implement `ExpectationParser` as well — see the next section.
 
-## Walkthrough: a conceptual sketch
+## Driving your comparator from a feature file
 
-There is no shipped custom-comparator example (the invocation grammar is deferred,
-above), so the shape is a short sketch rather than a runnable module. A comparator
-reads `Evidence` and returns a `Verdict`:
+A registered comparator is invoked by name through one generic step:
+
+```gherkin
+Then the "mycomparator" comparator is satisfied by:
+  """
+  { "minSpans": 3 }
+  """
+```
+
+The quoted name is resolved through the same per-engine registry the built-in steps
+use. The docstring is handed to your comparator's own `ExpectationParser`, which turns
+it into whatever type your `Compare` expects:
 
 ```go
+// ExpectationParser is OPTIONAL and separate from Comparator. Implementing it is
+// what makes a comparator Gherkin-drivable; omitting it changes nothing.
+type ExpectationParser interface {
+	ParseExpectation(text string) (Expectation, error)
+}
+```
+
+Four things are worth knowing before you implement it:
+
+1. **The text arrives verbatim.** Mentat does not trim, dedent or normalize the
+   docstring — whitespace may be significant to your format. An *empty* docstring is
+   passed through, because whether empty is valid is your decision, not the step's. A
+   *missing* docstring is a malformed step and is rejected before your parser is called.
+2. **It takes text and nothing else** — no `context.Context`, no target, no `Evidence`.
+   `Evidence` is the single channel through which a comparator sees run data
+   (obligation 1), and a parser able to reach run context would be a second, weaker one.
+   The narrow signature also makes the parser trivially unit-testable.
+3. **You own the round trip.** If `ParseExpectation` returns a type your own `Compare`
+   does not accept, that surfaces as your comparator's own type-assertion error.
+   Mentat does not police it — doing so would require Mentat to know your expectation
+   type, which is exactly the coupling this seam removes.
+4. **The step is always completeness-sensitive.** Against a bounded (request-scoped,
+   non-strict) target, a verdict from this step carries the ingestion-window qualifier.
+   The step cannot know your comparator's sensitivity, and the errors are asymmetric:
+   over-qualifying adds a visible caveat, under-qualifying produces an unsound green.
+
+Three things fail loudly rather than silently (no fallbacks, no skipped assertions):
+a name that is not registered — the error lists the names that *are*; a comparator that
+does not implement `ExpectationParser`; and a parser that returns an error, which is
+wrapped and surfaced rather than converted into a failing verdict, because a parse
+failure is not an assertion failure.
+
+## Walkthrough: a complete comparator
+
+A comparator reads `Evidence` and returns a `Verdict`:
+
+```go
+// myExpectation is YOUR type. Mentat never names it.
+type myExpectation struct {
+	MinSpans int `json:"minSpans"`
+}
+
 type myComparator struct{}
 
 func (myComparator) Name() string { return "mycomparator" }
 
+// ParseExpectation makes this comparator Gherkin-drivable. Text in, your type out.
+func (myComparator) ParseExpectation(text string) (mentat.Expectation, error) {
+	var exp myExpectation
+	if err := json.Unmarshal([]byte(text), &exp); err != nil {
+		return nil, fmt.Errorf("mycomparator: parsing expectation %q: %w", text, err)
+	}
+	if exp.MinSpans < 0 {
+		return nil, fmt.Errorf("mycomparator: minSpans must be >= 0, got %d", exp.MinSpans)
+	}
+	return exp, nil
+}
+
 func (myComparator) Compare(_ context.Context, ev mentat.Evidence, e mentat.Expectation) (mentat.Verdict, error) {
 	// Obligation 2: a malformed expectation is a loud error, not a silent PASS.
-	want, ok := e.(int)
+	exp, ok := e.(myExpectation)
 	if !ok {
-		return mentat.Verdict{}, fmt.Errorf("mycomparator: expected int, got %T", e)
+		return mentat.Verdict{}, fmt.Errorf("mycomparator: expected myExpectation, got %T", e)
 	}
+	want := exp.MinSpans
 	// Obligation 3: a failed run carries no Trace.
 	if ev.Failed || ev.Trace == nil {
 		return mentat.Verdict{Pass: false, Reasons: []string{"run failed; no trace"}}, nil
@@ -120,6 +175,28 @@ func (myComparator) Compare(_ context.Context, ev mentat.Evidence, e mentat.Expe
 	}
 	return mentat.Verdict{Pass: true}, nil
 }
+```
+
+Registered and driven together:
+
+```go
+res, err := mentat.Run(ctx, cfg,
+	mentat.WithFeatures("testdata/spans.feature"),
+	mentat.WithComparator("mycomparator", func(mentat.Config) (mentat.Comparator, error) {
+		return myComparator{}, nil
+	}),
+)
+```
+
+```gherkin
+Feature: span floor
+  Scenario: the agent emits enough spans
+    Given the agent target "bot"
+    When I run scenario "any"
+    Then the "mycomparator" comparator is satisfied by:
+      """
+      { "minSpans": 3 }
+      """
 ```
 
 The `Evidence` this reads — the `Trace` forest, the driver `Output`, and the

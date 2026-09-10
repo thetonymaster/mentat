@@ -797,6 +797,32 @@ func (c *surfaceCtx) structInDir(t *testing.T, dir, name string) *ast.StructType
 	return c.structs[dir][name]
 }
 
+// typeParamsInDir returns the names of dir.name's generic type PARAMETERS — {"T"} for
+// `type Box[T any] struct{ Item T }`.
+//
+// A type parameter is a placeholder the caller supplies, not a type anyone can name,
+// so it must never be reported as unnameable. Without this filter the generic
+// traversal reports `internal/core.T — reached by field (Box) Item` alongside the real
+// offenders, and a gate that emits noise is a gate that gets suppressed.
+func (c *surfaceCtx) typeParamsInDir(t *testing.T, dir, name string) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	if dir == "" {
+		return out
+	}
+	for _, ts := range c.exportedTypeSpecs(t, dir) {
+		if ts.Name.Name != name || ts.TypeParams == nil {
+			continue
+		}
+		for _, f := range ts.TypeParams.List {
+			for _, n := range f.Names {
+				out[n.Name] = true
+			}
+		}
+	}
+	return out
+}
+
 // indexStructs indexes dir's exported `type X struct { … }` declarations by name.
 func (c *surfaceCtx) indexStructs(t *testing.T, dir string) map[string]*ast.StructType {
 	t.Helper()
@@ -883,13 +909,15 @@ func (c *surfaceCtx) renderStructMethods(t *testing.T, pkg, alias, target string
 // the set the sweep CHECKS cannot diverge — the two halves disagreeing is the defect
 // class this feature exists to close.
 func (c *surfaceCtx) structMethodSigs(t *testing.T, dir, target string) []struct {
-	Name string
-	Sig  *ast.FuncType
+	Name       string
+	Sig        *ast.FuncType
+	RecvParams map[string]bool
 } {
 	t.Helper()
 	var out []struct {
-		Name string
-		Sig  *ast.FuncType
+		Name       string
+		Sig        *ast.FuncType
+		RecvParams map[string]bool
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -913,9 +941,14 @@ func (c *surfaceCtx) structMethodSigs(t *testing.T, dir, target string) []struct
 				continue
 			}
 			out = append(out, struct {
-				Name string
-				Sig  *ast.FuncType
-			}{Name: fd.Name.Name, Sig: fd.Type})
+				Name       string
+				Sig        *ast.FuncType
+				RecvParams map[string]bool
+			}{
+				Name:       fd.Name.Name,
+				Sig:        fd.Type,
+				RecvParams: surfaceReceiverTypeParams(fd.Recv.List[0].Type),
+			})
 		}
 	}
 	return out
@@ -924,14 +957,52 @@ func (c *surfaceCtx) structMethodSigs(t *testing.T, dir, target string) []struct
 // surfaceReceiverTypeName reduces a receiver expression to its bare type name, so a
 // value receiver (Results) and a pointer receiver (*Results) both match the aliased
 // target — a caller reaches both through the alias, so both are public surface.
+// A GENERIC receiver (Box[T], *Pair[K, V]) is unwrapped to its base name too. Without
+// that it returned "", so methods on a generic type matched no target and were never
+// collected — their parameter and result types went unswept entirely.
 func surfaceReceiverTypeName(expr ast.Expr) string {
 	if star, ok := expr.(*ast.StarExpr); ok {
 		expr = star.X
+	}
+	switch v := expr.(type) {
+	case *ast.IndexExpr:
+		expr = v.X
+	case *ast.IndexListExpr:
+		expr = v.X
 	}
 	if id, ok := expr.(*ast.Ident); ok {
 		return id.Name
 	}
 	return ""
+}
+
+// surfaceReceiverTypeParams returns the type-parameter names a METHOD's receiver
+// declares — {"x"} for `func (b Box[x]) …`, even when the declaration reads
+// `type Box[t any]`.
+//
+// Go lets a receiver rename its type parameters, and those names are scoped to the
+// method. So filtering a method's references by the DECLARATION's parameter names is
+// wrong in both directions: it can drop a reference to a real package-level type whose
+// name happens to match a declaration parameter, and it can fail to drop the receiver's
+// actual placeholder. Each method is filtered by its own receiver's names.
+func surfaceReceiverTypeParams(expr ast.Expr) map[string]bool {
+	out := map[string]bool{}
+	if star, ok := expr.(*ast.StarExpr); ok {
+		expr = star.X
+	}
+	var idx []ast.Expr
+	switch v := expr.(type) {
+	case *ast.IndexExpr:
+		idx = []ast.Expr{v.Index}
+	case *ast.IndexListExpr:
+		idx = v.Indices
+	}
+	for _, e := range idx {
+		if id, ok := e.(*ast.Ident); ok {
+			out[id.Name] = true
+		}
+	}
+	return out
 }
 
 // renderStructFields renders each EXPORTED field of a re-exported struct as a
@@ -1169,6 +1240,118 @@ func surfaceIndent(syms []string) string {
 // stops satisfying an extended interface. The compile-level witness in
 // mentat_external_test.go is doing real work; this sweep covers what it cannot, namely a
 // type nobody happened to write a literal for.
+//
+// # Mutation rehearsal (011 T006, observed 2026-09-10)
+//
+// ExpectationParser is the first seam added since 010 closed stability boundary 4, so it is
+// the first live test that this sweep catches a new unnameable seam type with nobody
+// remembering to check. Probe planted in internal/core, WITH the facade alias left in place:
+//
+//	type XProbeSpec struct{ Note string }   // deliberately no facade alias
+//
+//	type ExpectationParser interface {
+//		ParseExpectation(text string) (Expectation, error)
+//		XProbe() XProbeSpec                 // temporary second method
+//	}
+//
+// giving:
+//
+//	--- FAIL: TestFacadeNameabilitySweep
+//	    1 type(s) are reachable from the public surface but have NO facade name…
+//	        - internal/core.XProbeSpec — reached by method (ExpectationParser) XProbe
+//
+// Reverting both edits returns the sweep to green.
+//
+// # Why the probe, and not "delete the alias"
+//
+// Removing `type ExpectationParser = core.ExpectationParser` from mentat.go is NOT a
+// rehearsal of this gate, and believing otherwise would have recorded a proof that proves
+// nothing. The seed loop above (:1191-1198) queues ONLY facade alias targets, so an
+// interface with no alias is never queued, never walked, and yields ZERO offenders — it
+// leaves the gate rather than tripping it.
+//
+// That is the gate's stated contract, not a defect: it verifies that everything PUBLISHED is
+// nameable. It cannot tell you that you forgot to publish something. mentat_external_test.go
+// is what covers that direction, by failing to compile.
+//
+// # Two blind spots closed (CodeRabbit pass 4 on PR #38; observed 2026-09-10)
+//
+// Both were found by review rather than by the gate, and both were LATENT — no live instance
+// existed on the surface — so each was proven by planting a probe and watching the sweep
+// report ZERO offenders before the fix.
+//
+//  1. GENERICS. surfaceNamedRefs' type switch had no *ast.IndexExpr case, so a field written
+//     `XProbe XBox[XProbeSpec]` on the facade-aliased ResolveRequest fell through the switch
+//     entirely and contributed nothing. Sweep: PASS, with two unnameable types on the
+//     surface. With IndexExpr/IndexListExpr added it reports both XBox and XProbeSpec.
+//
+//     The first version of that fix ALSO reported `internal/core.T — reached by field (XBox)
+//     Item`: the generic type PARAMETER, which is a placeholder no facade could name. A gate
+//     that emits noise is a gate that gets suppressed, so typeParamsInDir now filters those.
+//
+//  2. UNEXPORTED LOCAL TYPES. `case *ast.Ident: if v.IsExported()` skipped them silently, so
+//     `XProbe xHiddenSpec` — a type an external module cannot even SPELL — was invisible.
+//     Sweep: PASS. Inverting it needs care, because IsExported was doing double duty: it also
+//     filtered Go's predeclared identifiers, which are unexported idents too. Collecting
+//     those would key every `Name string` field as "internal/core.string". surfacePredeclared
+//     is that discriminator.
+//
+// One assertion in TestSurfaceNamedRefsQualifiesBareIdents was inverted as part of (2). It
+// read "unexported ident is not surface", want: nil — which encoded the blind spot rather
+// than a contract. Noted explicitly because editing a gate's own assertions is normally the
+// wrong move; the justification is that the row asserted the absence of a check, not the
+// presence of a guarantee, and the predeclared rows beside it are what bound the change.
+//
+// # Three more, from CodeRabbit on PR #39 (observed 2026-09-10)
+//
+// The first fix for (1) walked generic types but left three related holes, all of which
+// were also latent and all proven the same way — plant, watch the sweep report ZERO, fix,
+// watch it report the offender:
+//
+//  3. INSTANTIATED ALIASES were dropped whole. surfaceAliases asserted *ast.SelectorExpr on
+//     the alias target, so `type XPublicBox = core.XBox[int]` matched nothing and was
+//     skipped — not merely unnameable but UNSEEDED, so the entire subtree behind it went
+//     unwalked. This is the seed-side twin of (1); fixing only the walk side was half a fix.
+//     surfaceAliasBase unwraps it. Type ARGUMENTS are tracked separately, because a caller
+//     writes mentat.XPublicBox and never spells the argument, yet lands in fields typed by
+//     it — and substitution happens nowhere, so `Item T` never reveals the concrete type.
+//
+//  4. GENERIC RECEIVERS matched no target. surfaceReceiverTypeName returned "" for
+//     `func (b Box[T]) …`, so methods on a generic type were never collected at all and
+//     their signatures went unswept.
+//
+//  5. RECEIVER TYPE PARAMETERS may be RENAMED. Go scopes a receiver's parameter names to
+//     the method, so filtering a method's references by the DECLARATION's names is wrong:
+//     given `type XGen[xcollide any]` with `func (g XGen[q]) XDo() xcollide`, the result
+//     type is the package-level `xcollide`, and the declaration-name filter dropped it.
+//     Each method is now filtered by its own receiver's names. Cross-checked: swapping
+//     m.RecvParams back to declParams makes that offender disappear while everything else
+//     stays green, so the distinction is what catches it.
+//
+//  6. TYPE ARGUMENTS were matched only as a DIRECT selector, so `Box[*core.Thing]`,
+//     `Box[[]core.Thing]` and `Box[core.Pair[string, core.Thing]]` slipped past and never
+//     entered the queue. Reduced with surfaceNamedRefs now — the same traversal every
+//     other position uses. Any position that unwraps type expressions by hand drifts from
+//     the ones that do not; there is one traversal, and (6) is the second time that
+//     lesson arrived. Covered by TestSurfaceAliasArgsTraversesNestedArguments.
+//
+//  7. FACADE-LOCAL arguments were dropped wholesale. (6) discarded every ref that
+//     resolved to the facade itself, justified by "a bare ident at the facade names a
+//     facade-declared type, which is nameable by definition" — true only for an
+//     EXPORTED ident. `core.Box[hidden]`, with an unexported facade-local type, is the
+//     strictest gap there is and was silently discarded by the very filter meant to
+//     remove noise. Now dropped only when exported, or when it is one of a parameterized
+//     alias's own type parameters (`type Public[T any] = core.Box[T]`, legal since Go
+//     1.24) — those are placeholders whatever their case.
+//
+//     Facade refs are reported but never QUEUED: the sentinel is not a directory, and
+//     walking it tries to read one. Nothing is lost, since the only facade refs that
+//     survive the filter are types an external module can neither spell nor construct.
+//
+//  8. PARENTHESIZED types were a leaf. Go's grammar allows `(Thing)` anywhere a type may
+//     appear, so this was never a type-argument quirk — a field written `Foo (Thing)`
+//     was equally invisible, and had been since the walker was written. One case, and it
+//     fixes every position at once, which is the dividend of there being one traversal.
 func TestFacadeNameabilitySweep(t *testing.T) {
 	c, aliases := surfaceAliases(t)
 
@@ -1198,6 +1381,31 @@ func TestFacadeNameabilitySweep(t *testing.T) {
 	}
 
 	var offenders []string
+
+	// A generic alias's TYPE ARGUMENTS are reachable without ever being spelled by the
+	// caller: `type PublicBox = core.Box[core.Thing]` lets an external module write
+	// mentat.PublicBox and land in fields typed core.Thing. So each argument must be
+	// nameable in its own right, and is walked like any other reachable type.
+	// Substitution is not performed anywhere — the AST of Box says `Item T` — so
+	// without this the concrete argument is never visited at all.
+	for _, a := range aliases {
+		for _, arg := range a.args {
+			if !nameable[arg] {
+				offenders = append(offenders, fmt.Sprintf("%s — reached by type argument of alias %s", arg, a.name))
+			}
+			// A facade-local argument is REPORTED but never queued: the sentinel is not
+			// a directory, so walking it would try to read one. Nothing is lost —
+			// the only facade refs that survive surfaceAliasArgs are unexported types,
+			// which an external module can neither spell nor construct.
+			if strings.HasPrefix(arg, surfaceAliasFacadeSelf+".") {
+				continue
+			}
+			if !seen[arg] {
+				seen[arg] = true
+				queue = append(queue, reach{typ: arg, via: "type argument of alias " + a.name})
+			}
+		}
+	}
 	for len(queue) > 0 {
 		cur := queue[0]
 		queue = queue[1:]
@@ -1213,6 +1421,31 @@ func TestFacadeNameabilitySweep(t *testing.T) {
 		// A struct contributes its exported field types; an interface contributes its
 		// method parameter and result types. Everything else is a leaf.
 		var refs []reach
+
+		// A generic type's type PARAMETERS are placeholders, not types the facade could
+		// name, so they are dropped rather than reported. The filter is applied PER
+		// POSITION, not once over the whole batch: a method receiver may rename the
+		// declaration's parameters, and those names are scoped to the method — so a
+		// method's references are filtered by its own receiver's names, and everything
+		// else by the declaration's.
+		declParams := c.typeParamsInDir(t, dir, name)
+		keep := func(ref string, params map[string]bool) bool {
+			if len(params) == 0 {
+				return true
+			}
+			d, n, cut := surfaceCutDirType(ref)
+			if !cut || d != dir {
+				return true // another package's type can never be this one's parameter
+			}
+			return !params[n]
+		}
+		add := func(names []string, via string, params map[string]bool) {
+			for _, ref := range names {
+				if keep(ref, params) {
+					refs = append(refs, reach{typ: ref, via: via})
+				}
+			}
+		}
 		if st := c.structInDir(t, dir, name); st != nil && st.Fields != nil {
 			for _, f := range st.Fields.List {
 				// EVERY name in a multi-name declaration, filtered individually — the
@@ -1232,9 +1465,7 @@ func TestFacadeNameabilitySweep(t *testing.T) {
 					vias = append(vias, "field ("+name+") <embedded>")
 				}
 				for _, via := range vias {
-					for _, ref := range surfaceNamedRefs(f.Type, dir, resolve) {
-						refs = append(refs, reach{typ: ref, via: via})
-					}
+					add(surfaceNamedRefs(f.Type, dir, resolve), via, declParams)
 				}
 			}
 			// …and the struct's exported METHOD signatures. renderStructMethods puts
@@ -1244,17 +1475,16 @@ func TestFacadeNameabilitySweep(t *testing.T) {
 			// unswept until now. This gap was introduced by this feature: adding
 			// renderStructMethods created a surface position the sweep did not walk.
 			for _, m := range c.structMethodSigs(t, dir, name) {
-				for _, ref := range surfaceFuncRefs(m.Sig, dir, resolve) {
-					refs = append(refs, reach{typ: ref, via: "method (" + name + ") " + m.Name})
-				}
+				// m.RecvParams, not declParams: the receiver may rename them.
+				add(surfaceFuncRefs(m.Sig, dir, resolve), "method ("+name+") "+m.Name, m.RecvParams)
 			}
 		}
 		if iface := c.ifaceInDir(t, dir, name); iface != nil && iface.Methods != nil {
 			for _, m := range iface.Methods.List {
 				if fn, isFunc := m.Type.(*ast.FuncType); isFunc && len(m.Names) > 0 {
-					for _, ref := range surfaceFuncRefs(fn, dir, resolve) {
-						refs = append(refs, reach{typ: ref, via: "method (" + name + ") " + m.Names[0].Name})
-					}
+					// An interface method has no receiver, so the declaration's own type
+					// parameters are the ones in scope.
+					add(surfaceFuncRefs(fn, dir, resolve), "method ("+name+") "+m.Names[0].Name, declParams)
 					continue
 				}
 				// An EMBEDDED interface contributes its methods to the published seam's
@@ -1264,11 +1494,11 @@ func TestFacadeNameabilitySweep(t *testing.T) {
 				// so the BFS traverses it with the same rules — which also handles an
 				// embed of an embed without recursing here. Embeds of stdlib interfaces
 				// (io.Writer) resolve to no local package and terminate naturally.
-				for _, ref := range surfaceNamedRefs(m.Type, dir, resolve) {
-					refs = append(refs, reach{typ: ref, via: "embedded interface in " + name})
-				}
+				add(surfaceNamedRefs(m.Type, dir, resolve), "embedded interface in "+name, declParams)
 			}
 		}
+		// Type parameters were already dropped per position by add(), which is where the
+		// receiver-vs-declaration distinction lives.
 		for _, r := range refs {
 			// surfaceNamedRefs only emits module-internal refs now — a qualifier that
 			// resolved to nothing local was dropped at the source, so there is no
@@ -1296,7 +1526,83 @@ func TestFacadeNameabilitySweep(t *testing.T) {
 }
 
 // surfaceAlias is one `type Name = pkg.Target` declaration on the facade.
-type surfaceAlias struct{ name, pkg, target string }
+//
+// args carries the canonical "dir.Type" keys of a generic instantiation's TYPE
+// ARGUMENTS — `type PublicBox = core.Box[core.Thing]` yields target "Box" and args
+// ["internal/core.Thing"]. They are tracked separately because they are reachable
+// without being spelled: a caller writes mentat.PublicBox and never names Thing, yet
+// lands in fields typed Thing, so an argument the facade cannot name is a gap. Empty
+// for the ordinary non-generic alias.
+type surfaceAlias struct {
+	name, pkg, target string
+	args              []string
+}
+
+// surfaceAliasFacadeSelf marks a bare identifier written at the FACADE. A bare
+// exported ident there names a facade-declared type, which is nameable by construction,
+// so those refs are dropped rather than reported.
+const surfaceAliasFacadeSelf = "<facade>"
+
+// surfaceAliasArgs reduces a generic alias's type ARGUMENTS to canonical "dir.Type"
+// keys, dropping anything nameable by construction (predeclared, facade-declared).
+//
+// It delegates to surfaceNamedRefs rather than matching *ast.SelectorExpr directly. An
+// earlier version did the latter and silently skipped every argument that was not a
+// bare selector — `Box[*core.Thing]`, `Box[[]core.Thing]`, `Box[core.Pair[string,
+// core.Thing]]` — so those types never entered the reachability queue at all. Any
+// position that unwraps type expressions by hand drifts from every other position that
+// does; there is one traversal, and this is it.
+func surfaceAliasArgs(targs []ast.Expr, aliasParams map[string]bool, resolve func(string) (string, bool)) []string {
+	var args []string
+	for _, a := range targs {
+		for _, ref := range surfaceNamedRefs(a, surfaceAliasFacadeSelf, resolve) {
+			name, isFacade := strings.CutPrefix(ref, surfaceAliasFacadeSelf+".")
+			if !isFacade {
+				args = append(args, ref)
+				continue
+			}
+			// A bare ident written at the facade is dropped in exactly two cases, and
+			// an earlier version dropped ALL of them on reasoning that only holds for
+			// the first:
+			//
+			//   - EXPORTED: it names a facade-declared type, and declaring it there is
+			//     what makes it nameable.
+			//   - the alias declaration's OWN type parameter: a parameterized alias
+			//     (`type Public[T any] = core.Box[T]`, legal since Go 1.24) passes its
+			//     placeholders through as arguments, whatever their case.
+			//
+			// Anything else is an UNEXPORTED facade-local type an external module
+			// cannot spell — the strictest gap there is, and precisely what the blanket
+			// drop was hiding.
+			if aliasParams[name] || token.IsExported(name) {
+				continue
+			}
+			args = append(args, ref)
+		}
+	}
+	return args
+}
+
+// surfaceAliasBase unwraps a generic instantiation to the alias's base target and its
+// type arguments: `core.Box[int]` → (core.Box, [int]); `core.Pair[K, V]` → (core.Pair,
+// [K, V]); a plain `core.Thing` → (core.Thing, nil).
+//
+// Without this an instantiated alias fell through the *ast.SelectorExpr assertion and
+// was dropped WHOLE — not merely unnameable but unseeded, so everything reachable
+// through it went unwalked and the sweep reported zero offenders.
+func surfaceAliasBase(e ast.Expr) (*ast.SelectorExpr, []ast.Expr) {
+	switch v := e.(type) {
+	case *ast.SelectorExpr:
+		return v, nil
+	case *ast.IndexExpr:
+		sel, _ := surfaceAliasBase(v.X)
+		return sel, []ast.Expr{v.Index}
+	case *ast.IndexListExpr:
+		sel, _ := surfaceAliasBase(v.X)
+		return sel, v.Indices
+	}
+	return nil, nil
+}
 
 // surfaceAliases parses the facade package and returns its context plus every type-alias
 // declaration whose target is a module-internal package.
@@ -1341,8 +1647,8 @@ func surfaceAliases(t *testing.T) (*surfaceCtx, []surfaceAlias) {
 				if !ok || !ts.Name.IsExported() || !ts.Assign.IsValid() {
 					continue
 				}
-				sel, ok := ts.Type.(*ast.SelectorExpr)
-				if !ok {
+				sel, targs := surfaceAliasBase(ts.Type)
+				if sel == nil {
 					continue
 				}
 				pkg, ok := sel.X.(*ast.Ident)
@@ -1352,7 +1658,19 @@ func surfaceAliases(t *testing.T) (*surfaceCtx, []surfaceAlias) {
 				if _, local := c.imports[pkg.Name]; !local {
 					continue
 				}
-				out = append(out, surfaceAlias{name: ts.Name.Name, pkg: pkg.Name, target: sel.Sel.Name})
+				aliasParams := map[string]bool{}
+				if ts.TypeParams != nil {
+					for _, f := range ts.TypeParams.List {
+						for _, n := range f.Names {
+							aliasParams[n.Name] = true
+						}
+					}
+				}
+				args := surfaceAliasArgs(targs, aliasParams, func(q string) (string, bool) {
+					d, ok := c.imports[q]
+					return d, ok
+				})
+				out = append(out, surfaceAlias{name: ts.Name.Name, pkg: pkg.Name, target: sel.Sel.Name, args: args})
 			}
 		}
 	}
@@ -1370,14 +1688,34 @@ func surfaceAliases(t *testing.T) (*surfaceCtx, []surfaceAlias) {
 // hop was invisible and the sweep reported zero offenders while being blind to the exact
 // gaps feature 010 exists to close. The mutation rehearsal below is what caught it.
 //
-// Unexported identifiers are skipped (not public surface) and so are the predeclared
-// types, which are conveniently all lowercase — string, int, error, any and friends never
-// pass IsExported.
+// Unexported identifiers are NOT skipped: a local type an external module cannot even
+// spell is the strictest nameability failure there is, so it is collected and reported.
+// Go's predeclared types are unexported idents too — string, int, error, any — and those
+// ARE skipped, via surfacePredeclared. Conflating the two classes under IsExported was
+// the blind spot; separating them is what makes reporting the first class safe.
+// surfacePredeclared is Go's set of predeclared type and constant identifiers. They
+// parse as unexported *ast.Idents but are universally nameable, so they terminate the
+// walk rather than being reported as unnameable local types.
+var surfacePredeclared = map[string]bool{
+	"bool": true, "byte": true, "complex64": true, "complex128": true,
+	"error": true, "float32": true, "float64": true, "int": true,
+	"int8": true, "int16": true, "int32": true, "int64": true,
+	"rune": true, "string": true, "uint": true, "uint8": true,
+	"uint16": true, "uint32": true, "uint64": true, "uintptr": true,
+	"any": true, "comparable": true,
+	"true": true, "false": true, "iota": true, "nil": true,
+}
+
 func surfaceNamedRefs(expr ast.Expr, self string, resolve func(string) (string, bool)) []string {
 	var out []string
 	var walk func(ast.Expr)
 	walk = func(e ast.Expr) {
 		switch v := e.(type) {
+		case *ast.ParenExpr:
+			// Go's grammar allows a parenthesized type anywhere a type may appear, so
+			// this is not a type-argument quirk: a field written `Foo (Thing)` lands
+			// here too. Without the case the whole expression was a leaf.
+			walk(v.X)
 		case *ast.StarExpr:
 			walk(v.X)
 		case *ast.ArrayType:
@@ -1389,6 +1727,18 @@ func surfaceNamedRefs(expr ast.Expr, self string, resolve func(string) (string, 
 			walk(v.Value)
 		case *ast.ChanType:
 			walk(v.Value)
+		case *ast.IndexExpr:
+			// A generic instantiation with ONE type argument: Box[Payload]. Both the
+			// generic type and its argument are reachable and both must be nameable —
+			// an external module writing this field needs to spell both.
+			walk(v.X)
+			walk(v.Index)
+		case *ast.IndexListExpr:
+			// Two or more type arguments: Pair[K, V].
+			walk(v.X)
+			for _, idx := range v.Indices {
+				walk(idx)
+			}
 		case *ast.SelectorExpr:
 			id, ok := v.X.(*ast.Ident)
 			if !ok {
@@ -1402,7 +1752,14 @@ func surfaceNamedRefs(expr ast.Expr, self string, resolve func(string) (string, 
 				out = append(out, dir+"."+v.Sel.Name)
 			}
 		case *ast.Ident:
-			if v.IsExported() {
+			// An UNEXPORTED local type in a published position is the strictest
+			// nameability failure there is: an external module cannot even spell it, so
+			// it can never construct the surrounding value. Reporting it requires care,
+			// because IsExported() was doing double duty here — it also filtered out
+			// Go's PREDECLARED identifiers (string, int, error, any, …), which are
+			// unexported idents too. Collecting those would key every `Name string`
+			// field as "internal/core.string" and bury the gate in noise.
+			if v.IsExported() || !surfacePredeclared[v.Name] {
 				out = append(out, self+"."+v.Name)
 			}
 		case *ast.FuncType:
@@ -1459,7 +1816,25 @@ func TestSurfaceNamedRefsQualifiesBareIdents(t *testing.T) {
 		{name: "selector resolves through the DECLARING package's imports", expr: "*trace.Trace", want: []string{"internal/trace.Trace"}},
 		{name: "a qualifier the declaring package does not import is stdlib and is dropped", expr: "time.Duration", want: nil},
 		{name: "predeclared types are not references", expr: "string", want: nil},
-		{name: "unexported ident is not surface", expr: "compiled", want: nil},
+		{name: "predeclared any is not a reference", expr: "any", want: nil},
+		// This row previously asserted want: nil — "an unexported ident is not
+		// surface". That encoded the blind spot rather than a contract: an unexported
+		// local type in a published position is the STRICTEST nameability failure
+		// there is, because an external module cannot even spell it. The row is
+		// inverted deliberately, and the two predeclared rows above are what keep the
+		// change from over-reaching (IsExported was filtering both classes at once).
+		{name: "unexported local ident IS an unnameable reference", expr: "compiled", want: []string{"internal/core.compiled"}},
+		// Generic instantiations: both the generic type and its type ARGUMENTS are
+		// reachable, and an external module must be able to spell each. The type
+		// PARAMETER of a generic declaration is filtered separately, at the sweep, by
+		// typeParamsInDir — it is a placeholder, not a type.
+		// Go's grammar permits a parenthesized type anywhere a type may appear, so this
+		// is not a type-argument quirk: a plain field written `Foo (Thing)` reaches the
+		// same branch.
+		{name: "parenthesized type is unwrapped", expr: "(AggregateDetail)", want: []string{"internal/core.AggregateDetail"}},
+		{name: "pointer to parenthesized type", expr: "*(AggregateDetail)", want: []string{"internal/core.AggregateDetail"}},
+		{name: "generic instantiation contributes type and argument", expr: "Box[Payload]", want: []string{"internal/core.Box", "internal/core.Payload"}},
+		{name: "multi-argument generic contributes all arguments", expr: "Pair[Kind, Detail]", want: []string{"internal/core.Pair", "internal/core.Kind", "internal/core.Detail"}},
 		{name: "map contributes key and value", expr: "map[Kind]Detail", want: []string{"internal/core.Kind", "internal/core.Detail"}},
 		{name: "func type contributes params and results", expr: "func(Evidence) (Verdict, error)", want: []string{"internal/core.Evidence", "internal/core.Verdict"}},
 	}
@@ -1539,4 +1914,76 @@ func surfaceCutDirType(key string) (dir, name string, ok bool) {
 		return "", "", false
 	}
 	return key[:i], key[i+1:], true
+}
+
+// TestSurfaceAliasArgsTraversesNestedArguments pins the fix for the second CodeRabbit
+// finding on PR #39: a generic alias's type ARGUMENTS were matched only as a direct
+// *ast.SelectorExpr, so `core.Box[*core.Thing]`, `core.Box[[]core.Thing]` and a nested
+// instantiation all slipped past and never entered the reachability queue.
+//
+// Arguments are reduced with the same traversal every other position uses, so pointers,
+// slices, maps, channels, func types and nested generics unwrap identically. Anything
+// nameable by construction — predeclared types, and bare idents naming a
+// facade-DECLARED type — is dropped rather than reported.
+func TestSurfaceAliasArgsTraversesNestedArguments(t *testing.T) {
+	t.Parallel()
+
+	resolve := func(q string) (string, bool) {
+		d, ok := map[string]string{"core": "internal/core", "trace": "internal/trace"}[q]
+		return d, ok
+	}
+
+	tests := []struct {
+		name        string
+		expr        string          // the full alias target, e.g. core.Box[...]
+		aliasParams map[string]bool // the ALIAS declaration's own type parameters
+		want        []string
+	}{
+		{name: "direct selector", expr: "core.Box[core.Thing]", want: []string{"internal/core.Thing"}},
+		{name: "pointer argument", expr: "core.Box[*core.Thing]", want: []string{"internal/core.Thing"}},
+		{name: "slice argument", expr: "core.Box[[]core.Thing]", want: []string{"internal/core.Thing"}},
+		{name: "map argument contributes key and value", expr: "core.Box[map[core.Kind]core.Thing]", want: []string{"internal/core.Kind", "internal/core.Thing"}},
+		{name: "nested instantiation contributes base and inner argument", expr: "core.Box[core.Pair[string, core.Thing]]", want: []string{"internal/core.Pair", "internal/core.Thing"}},
+		{name: "multiple arguments", expr: "core.Pair[core.Kind, *core.Thing]", want: []string{"internal/core.Kind", "internal/core.Thing"}},
+		{name: "cross-package argument resolves through its own qualifier", expr: "core.Box[*trace.Trace]", want: []string{"internal/trace.Trace"}},
+		{name: "predeclared argument is nameable by construction", expr: "core.Box[int]", want: nil},
+		{name: "stdlib argument is not the facade's to re-export", expr: "core.Box[time.Duration]", want: nil},
+		{name: "non-generic alias has no arguments", expr: "core.Thing", want: nil},
+		// A bare EXPORTED ident at the facade names a facade-declared type, which is
+		// nameable because declaring it there is what makes it nameable.
+		{name: "exported facade argument is nameable by construction", expr: "core.Box[Verdict]", want: nil},
+		// An UNEXPORTED one is the opposite: an external module cannot spell it at all,
+		// so discarding it hid the strictest kind of gap. The earlier blanket drop of
+		// every <facade>.* ref was justified by reasoning that only holds for exported
+		// idents.
+		{name: "unexported facade argument is NOT nameable", expr: "core.Box[hidden]", want: []string{"<facade>.hidden"}},
+		// A parameterized alias (`type Public[T any] = core.Box[T]`, legal since Go
+		// 1.24) passes its OWN type parameters through as arguments. Those are
+		// placeholders, not types, whatever their case.
+		{name: "alias type parameter is not a reference", expr: "core.Box[T]", aliasParams: map[string]bool{"T": true}, want: nil},
+		{name: "lowercase alias type parameter is not a reference either", expr: "core.Box[t]", aliasParams: map[string]bool{"t": true}, want: nil},
+		// Parenthesized arguments are legal Go and must not slip past the filter.
+		{name: "parenthesized unexported facade argument is still reported", expr: "core.Box[(hidden)]", want: []string{"<facade>.hidden"}},
+		{name: "parenthesized selector argument", expr: "core.Box[(core.Thing)]", want: []string{"internal/core.Thing"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			e, err := parser.ParseExpr(tt.expr)
+			if err != nil {
+				t.Fatalf("parse %q: %v", tt.expr, err)
+			}
+			_, targs := surfaceAliasBase(e)
+			got := surfaceAliasArgs(targs, tt.aliasParams, resolve)
+			if len(got) != len(tt.want) {
+				t.Fatalf("surfaceAliasArgs(%q) = %v, want %v", tt.expr, got, tt.want)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Errorf("surfaceAliasArgs(%q)[%d] = %q, want %q", tt.expr, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
 }

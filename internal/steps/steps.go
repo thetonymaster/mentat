@@ -591,6 +591,61 @@ func (w *world) checkRuns(expr string) error {
 	return nil
 }
 
+// comparatorSatisfiedByDoc drives a caller-registered comparator by NAME from a
+// feature file — the one generic row in the Extend group (feature 011).
+//
+// Every other Then handler picks its comparator and its expectation type at compile
+// time. This one takes both from the scenario: the quoted capture names the
+// comparator, and the docstring is handed to that comparator's own
+// core.ExpectationParser to become whatever type it wants.
+//
+// It introduces no new resolution mechanism. Engine.Comparator is the same per-engine
+// registry lookup every built-in step already goes through, and routing through
+// checkExp (not Engine.Compare directly) is what keeps qualifier recording, judge-usage
+// accounting and the @runs(n>1) guard identical to a built-in's — calling Compare here
+// would silently drop all three.
+//
+// sensitive is always true: the step cannot know an arbitrary comparator's
+// sensitivity, and the two errors are not symmetric. Over-qualifying adds a visible
+// caveat; under-qualifying produces an unsound green, which is the exact property
+// feature 008 exists to protect (spec 011 D3).
+func (w *world) comparatorSatisfiedByDoc(name string, doc *godog.DocString) error {
+	if doc == nil {
+		return fmt.Errorf("the %q comparator is satisfied by: expected a docstring expectation, got none", name)
+	}
+	c, ok := w.eng.Comparator(name)
+	if !ok {
+		// Name the alternatives. The captured name is echoed with %q so an otherwise
+		// invisible difference — a trailing space, a homoglyph — is visible rather than
+		// presenting as a mysterious unknown name.
+		return fmt.Errorf("comparator %q is not registered; registered comparators: %s",
+			name, strings.Join(w.eng.Comparators(), ", "))
+	}
+	p, ok := c.(core.ExpectationParser)
+	if !ok {
+		return fmt.Errorf("comparator %q cannot be driven from Gherkin: it does not implement ExpectationParser", name)
+	}
+	// doc.Content is passed verbatim — never trimmed or normalized. Whitespace may be
+	// significant to the comparator's own format.
+	exp, err := p.ParseExpectation(doc.Content)
+	if err != nil {
+		return fmt.Errorf("comparator %q: parsing expectation: %w", name, err)
+	}
+	// A parser that claims success while returning nil is refused rather than trusted.
+	// Forwarding the nil would let a comparator that tolerates nil return a passing
+	// verdict for a step that asserted nothing (Constitution IV). This checks for nil
+	// only — it never inspects the value's shape, which would require knowing the
+	// expectation type and is exactly the coupling this seam removes. A zero-valued
+	// but non-nil expectation is legitimate and passes through.
+	//
+	// It catches an UNTYPED nil only. A typed nil pointer is a non-nil interface and
+	// reaches Compare, where it is the comparator's own type assertion and its own bug.
+	if exp == nil {
+		return fmt.Errorf("comparator %q: ParseExpectation returned a nil expectation with no error", name)
+	}
+	return w.checkExp(name, exp, true)
+}
+
 // parseShapeSelector wraps ParseSelector failures with which selector failed
 // (role: "subject" or "parent") and the raw value, per the %w error-wrapping
 // convention — so a malformed shape step reports actionable, consistent diagnostics.
