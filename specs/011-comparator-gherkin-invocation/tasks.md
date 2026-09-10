@@ -36,8 +36,8 @@ independent guards.
 attributable to this feature rather than inherited. This is the discipline 010 used and the
 reason its central claim was measured rather than argued.
 
-- [ ] T001 Record a clean baseline at the branch point: run `gofmt -l .`, `go vet ./...`, `go vet -tags e2e ./...`, and `go test . -run 'TestFacadeNameabilitySweep|TestPublicSurfaceGolden'`, capturing output in the task notes
-- [ ] T002 [P] Confirm `examples/kafkaecho` builds untouched at the branch point (`cd examples/kafkaecho && go build ./...`) — the SC-008 baseline
+- [X] T001 Record a clean baseline at the branch point: run `gofmt -l .`, `go vet ./...`, `go vet -tags e2e ./...`, and `go test . -run 'TestFacadeNameabilitySweep|TestPublicSurfaceGolden'`, capturing output in the task notes
+- [X] T002 [P] Confirm `examples/kafkaecho` builds untouched at the branch point (`cd examples/kafkaecho && go build ./...`) — the SC-008 baseline
 
 **Checkpoint**: every gate green and recorded; any later red is this feature's.
 
@@ -50,12 +50,12 @@ reason its central claim was measured rather than argued.
 **⚠️ CRITICAL**: No user story work begins until this phase is complete. It lands before any
 handler exists so the two-line golden diff is attributable to nothing else.
 
-- [ ] T003 Add the `ExpectationParser` interface to `internal/core/core.go`, beside `Comparator` and `Expectation`, with a doc comment stating it is OPTIONAL, discovered by type assertion, and that Mentat never inspects the text
-- [ ] T004 Add `type ExpectationParser = core.ExpectationParser` to `mentat.go`, alongside the existing seam aliases
-- [ ] T005 Run `go test . -run TestPublicSurfaceGolden` and observe it FAIL on surface drift, then regenerate with `MENTAT_UPDATE_GOLDEN=1` and verify the diff to `specs/007-public-extension-api/contracts/public-surface.golden` is EXACTLY two lines: the `method (ExpectationParser) ParseExpectation(text string) (Expectation, error)` line and the `type ExpectationParser = core.ExpectationParser` line
-- [ ] T006 Perform the mutation rehearsal per [contracts/expectation-parser-seam.md](./contracts/expectation-parser-seam.md#falsification): temporarily add `type XProbeSpec struct{ Note string }` and an `XProbe() XProbeSpec` method to `internal/core/core.go`, run `go test . -run TestFacadeNameabilitySweep`, and confirm it fails with `internal/core.XProbeSpec — reached by method (ExpectationParser) XProbe`, then revert both edits
-- [ ] T007 Record the T006 transcript as a comment in `surface_test.go` alongside the existing rehearsals (`:66`, `:78`, `:96`, `:116`, `:826`, `:1141`), including the note that deleting the facade alias does NOT fail the sweep because it seeds only from alias targets (`surface_test.go:1191-1198`)
-- [ ] T008 Verify `go test . -run 'TestFacadeNameabilitySweep|TestPublicSurfaceGolden'` is green after the T006 revert
+- [X] T003 Add the `ExpectationParser` interface to `internal/core/core.go`, beside `Comparator` and `Expectation`, with a doc comment stating it is OPTIONAL, discovered by type assertion, and that Mentat never inspects the text
+- [X] T004 Add `type ExpectationParser = core.ExpectationParser` to `mentat.go`, alongside the existing seam aliases
+- [X] T005 Run `go test . -run TestPublicSurfaceGolden` and observe it FAIL on surface drift, then regenerate with `MENTAT_UPDATE_GOLDEN=1` and verify the diff to `specs/007-public-extension-api/contracts/public-surface.golden` is EXACTLY two lines: the `method (ExpectationParser) ParseExpectation(text string) (Expectation, error)` line and the `type ExpectationParser = core.ExpectationParser` line
+- [X] T006 Perform the mutation rehearsal per [contracts/expectation-parser-seam.md](./contracts/expectation-parser-seam.md#falsification): temporarily add `type XProbeSpec struct{ Note string }` and an `XProbe() XProbeSpec` method to `internal/core/core.go`, run `go test . -run TestFacadeNameabilitySweep`, and confirm it fails with `internal/core.XProbeSpec — reached by method (ExpectationParser) XProbe`, then revert both edits
+- [X] T007 Record the T006 transcript as a comment in `surface_test.go` alongside the existing rehearsals (`:66`, `:78`, `:96`, `:116`, `:826`, `:1141`), including the note that deleting the facade alias does NOT fail the sweep because it seeds only from alias targets (`surface_test.go:1191-1198`)
+- [X] T008 Verify `go test . -run 'TestFacadeNameabilitySweep|TestPublicSurfaceGolden'` is green after the T006 revert
 
 **Checkpoint**: the seam is published, nameable, frozen in the golden, and the gate is proven
 to catch a regression in it.

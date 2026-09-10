@@ -49,6 +49,13 @@ type TraceStore = core.TraceStore
 // which is what keeps comparators portable across agents and microservices.
 type Comparator = core.Comparator
 
+// ExpectationParser is the optional companion to Comparator: implement it and a
+// comparator registered with WithComparator can be named directly from a
+// .feature file, turning the step's docstring into its own Expectation type. It
+// is discovered by type assertion, so implementing it is opt-in and omitting it
+// breaks nothing.
+type ExpectationParser = core.ExpectationParser
+
 // Judge is the semantic-verdict seam: a registrable adapter (WithJudge hook).
 type Judge = core.Judge
 

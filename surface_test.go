@@ -1169,6 +1169,39 @@ func surfaceIndent(syms []string) string {
 // stops satisfying an extended interface. The compile-level witness in
 // mentat_external_test.go is doing real work; this sweep covers what it cannot, namely a
 // type nobody happened to write a literal for.
+//
+// # Mutation rehearsal (011 T006, observed 2026-09-10)
+//
+// ExpectationParser is the first seam added since 010 closed stability boundary 4, so it is
+// the first live test that this sweep catches a new unnameable seam type with nobody
+// remembering to check. Probe planted in internal/core, WITH the facade alias left in place:
+//
+//	type XProbeSpec struct{ Note string }   // deliberately no facade alias
+//
+//	type ExpectationParser interface {
+//		ParseExpectation(text string) (Expectation, error)
+//		XProbe() XProbeSpec                 // temporary second method
+//	}
+//
+// giving:
+//
+//	--- FAIL: TestFacadeNameabilitySweep
+//	    1 type(s) are reachable from the public surface but have NO facade name…
+//	        - internal/core.XProbeSpec — reached by method (ExpectationParser) XProbe
+//
+// Reverting both edits returns the sweep to green.
+//
+// # Why the probe, and not "delete the alias"
+//
+// Removing `type ExpectationParser = core.ExpectationParser` from mentat.go is NOT a
+// rehearsal of this gate, and believing otherwise would have recorded a proof that proves
+// nothing. The seed loop above (:1191-1198) queues ONLY facade alias targets, so an
+// interface with no alias is never queued, never walked, and yields ZERO offenders — it
+// leaves the gate rather than tripping it.
+//
+// That is the gate's stated contract, not a defect: it verifies that everything PUBLISHED is
+// nameable. It cannot tell you that you forgot to publish something. mentat_external_test.go
+// is what covers that direction, by failing to compile.
 func TestFacadeNameabilitySweep(t *testing.T) {
 	c, aliases := surfaceAliases(t)
 
