@@ -7,6 +7,9 @@ package mentat_test
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"regexp"
 	"testing"
 	"time"
 
@@ -49,6 +52,57 @@ func (toyComparator) Compare(_ context.Context, ev mentat.Evidence, _ mentat.Exp
 	return mentat.Verdict{Pass: true}, nil
 }
 
+// toyReporter implements mentat.Reporter using only facade type names — the sixth
+// seam. Before feature 010 this type could not be DECLARED from outside the module:
+// the method's parameter was core.RunReport, which had no facade name, so an external
+// author could not write their own method set. That made Reporter the one published
+// seam an external module could not implement at all.
+type toyReporter struct{ rendered int }
+
+func (r *toyReporter) Report(res mentat.Results, w io.Writer) error {
+	r.rendered++
+	// The data a reporter author actually needs — suite rollups, timing, and the
+	// per-scenario detail the built-in reporters render.
+	_, err := fmt.Fprintf(w, "%d/%d passed in %s (cost $%.4f)\n",
+		res.Passed, res.Total, res.Duration, res.TotalCost)
+	if err != nil {
+		return err
+	}
+	for _, s := range res.Scenarios {
+		if _, err := fmt.Fprintf(w, "  %s pass=%v tags=%v seq=%v runs=%d\n",
+			s.Name, s.Pass, s.Tags, s.Sequence, len(s.Runs)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// toyCorrelator implements mentat.Correlator using only facade type names. Correlator
+// has no registration hook (no concrete external demand has appeared), but it IS on the
+// published surface, so it must be implementable from outside — a seam nobody can write
+// is not a seam. Asserting it here is what makes "6 of 6" a checked fact (010 SC-001)
+// rather than five plus an assumption.
+type toyCorrelator struct{}
+
+func (toyCorrelator) Inject(_ context.Context, spec *mentat.RunSpec) string {
+	if spec.RunID == "" {
+		spec.RunID = "toy-run"
+	}
+	return spec.RunID
+}
+
+func (toyCorrelator) Resolve(_ context.Context, _ mentat.TraceStore, req mentat.ResolveRequest) (*mentat.Trace, error) {
+	// A correlator author reads the completeness contract off the request.
+	_ = req.Contract.Kind
+	_ = req.Contract.Mode
+	_ = req.Contract.Settle
+	return &mentat.Trace{RunID: req.RunID}, nil
+}
+
+func (toyCorrelator) ResolveComplete(_ context.Context, _ mentat.TraceStore, runID string) (*mentat.Trace, error) {
+	return &mentat.Trace{RunID: runID}, nil
+}
+
 // toyJudge implements mentat.Judge using only facade type names.
 type toyJudge struct{}
 
@@ -66,6 +120,8 @@ var (
 	_ mentat.TraceStore = toyStore{}
 	_ mentat.Comparator = toyComparator{}
 	_ mentat.Judge      = toyJudge{}
+	_ mentat.Reporter   = &toyReporter{}
+	_ mentat.Correlator = toyCorrelator{}
 )
 
 // Nameability proof (feature 009 US3, contracts/facade-nameability.md).
@@ -159,6 +215,95 @@ var (
 	}
 	_ = mentat.JudgeUsage{Calls: 1, InputTokens: 120, OutputTokens: 34, CostUsd: 0.0125, Model: "claude-haiku-4-5"}
 )
+
+// Nameability proof v2 (feature 010, contracts/facade-nameability-v2.md).
+//
+// The 009 sweep above walks outward from Config and Results only. It does not walk
+// SEAM SIGNATURES, which is how four types came to be frozen on the public surface
+// while remaining unwritable from outside the module. The literals below close that
+// gap for the types a Driver and a Comparator author must construct:
+//
+//	from the Driver seam — Run(ctx, spec RunSpec):
+//	  ExtractPolicy  RunSpec.Extract    ALIAS ADDED (010 US2)
+//	  HTTPSpec       RunSpec.HTTP       ALIAS ADDED (010 US2)
+//	from the Comparator seam — Compare(ctx, ev, e) (Verdict, error):
+//	  AggregateDetail  Verdict.Detail   ALIAS ADDED (010 US3)
+//
+// As above, compiling IS the proof: this file imports only the facade, so a field
+// whose own type has no facade name breaks the build.
+var (
+	// A driver author forwarding or constructing a complete RunSpec — every
+	// composite-typed field named through the facade.
+	_ = mentat.RunSpec{
+		Target:    "agent",
+		Adapter:   "http",
+		Command:   []string{"--scenario", "smoke"},
+		Env:       map[string]string{"MENTAT_RUN": "1"},
+		Input:     "what is 6*7?",
+		HTTP:      mentat.HTTPSpec{URL: "http://localhost:8080/ask", Method: "POST", Headers: map[string]string{"content-type": "application/json"}},
+		RunID:     "run-1",
+		Tags:      map[string]string{"test.run.id": "run-1"},
+		KillGrace: 10 * time.Second,
+		Extract:   mentat.ExtractPolicy{Mode: mentat.ExtractPattern, Marker: "ANSWER:", Pattern: regexp.MustCompile(`ANSWER:\s*(.*)`)},
+	}
+	_ = mentat.HTTPSpec{URL: "http://localhost:8080/ask", Method: "POST", Headers: map[string]string{"content-type": "application/json"}}
+	_ = mentat.ExtractPolicy{Mode: mentat.ExtractPattern, Marker: "ANSWER:", Pattern: regexp.MustCompile(`ANSWER:\s*(.*)`)}
+
+	// A comparator author attaching the structured detail behind an aggregate
+	// verdict, so a report can show WHY the verdict landed and not merely that it
+	// did. Verdict.Detail is frozen on the surface; before 010 its type could not
+	// be named, so this field was unreachable from outside the module.
+	_ = mentat.Verdict{
+		Pass:       false,
+		Reasons:    []string{"rate = 0.50, want >= 0.80"},
+		Qualifiers: []string{"trace-completeness: bounded by ingestion window"},
+		Detail: &mentat.AggregateDetail{
+			Expr:     "rate(r, pass) >= 0.80",
+			Macro:    "rate",
+			Op:       ">=",
+			Computed: 0.5,
+			Expected: 0.8,
+			PerRun:   []float64{1, 0},
+		},
+	}
+	_ = mentat.AggregateDetail{
+		Expr: "rate(r, pass) >= 0.80", Macro: "rate", Op: ">=",
+		Computed: 0.5, Expected: 0.8, PerRun: []float64{1, 0},
+	}
+
+	// Every extraction mode is nameable, so a driver author never writes the mode as a
+	// string literal. Naming a type is not enough on its own: ExtractPolicy.Mode is a
+	// plain string, so without these an author writes Mode: "pattern" and a typo becomes
+	// a run-time extraction error instead of a compile error. Same reasoning that already
+	// exports the FailureKind constants.
+	_ = mentat.ExtractPolicy{Mode: mentat.ExtractWhole}
+	_ = mentat.ExtractPolicy{Mode: mentat.ExtractMarker, Marker: "ANSWER:"}
+)
+
+// TestExtractModeConstantsAreDistinct proves the three published modes are distinct,
+// non-empty values an external author can branch on — not three names for one string.
+// The zero value of ExtractPolicy.Mode is "" and behaves as ExtractWhole, so ExtractWhole
+// is deliberately NOT the empty string: a caller can tell "unset" from "explicitly whole".
+func TestExtractModeConstantsAreDistinct(t *testing.T) {
+	t.Parallel()
+
+	modes := map[string]string{
+		"whole":   mentat.ExtractWhole,
+		"marker":  mentat.ExtractMarker,
+		"pattern": mentat.ExtractPattern,
+	}
+	seen := map[string]string{}
+	for name, val := range modes {
+		if val == "" {
+			t.Errorf("%s mode constant is the empty string; the zero value already means "+
+				"'unset', so a mode must be distinguishable from it", name)
+		}
+		if prior, dup := seen[val]; dup {
+			t.Errorf("%s and %s are both %q; the modes must be distinct", name, prior, val)
+		}
+		seen[val] = name
+	}
+}
 
 // TestFacadeSurfaceExercisesContractTypes touches the evidence/contract types a
 // store, comparator, and judge author reads or constructs through the facade —

@@ -8,6 +8,30 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- **Custom reporters — `WithReporter`.** A caller-supplied `Reporter` can now be
+  registered for a run and selected by name through `WithReports`, exactly as a built-in
+  json/html/junit reporter is. It receives the same `Results` a library caller receives
+  from `Run`, so a custom reporter can render everything the built-ins do. Registration
+  is scoped to one `Run`: two concurrent runs may register different reporters under the
+  same name and each uses its own. A name already taken by a built-in or an earlier
+  registration is a loud collision error, never a silent overwrite.
+- **`ExtractPolicy`, `HTTPSpec`, `AggregateDetail`, `RunRecord` on the facade.** These
+  were frozen on the public surface but had no facade name, so an external module could
+  not write them — a driver author could not populate `RunSpec.Extract` or `RunSpec.HTTP`,
+  and a comparator author could not attach `Verdict.Detail`.
+- **`ExtractWhole`, `ExtractMarker`, `ExtractPattern` on the facade.** The legal values of
+  `ExtractPolicy.Mode`. Naming the struct was not enough on its own: `Mode` is a plain
+  string, so without these a driver author writes `Mode: "pattern"` as a literal and a
+  typo becomes a run-time extraction error rather than a compile error.
+- **`Results` carries the full run outcome.** `Total`, `StartedAt` and `Duration` at the
+  suite level; `Tags`, `Qualifiers`, `Sequence`, `Runs` and `Aggregate` per scenario. The
+  facade's result types were previously lossy against what the built-in reporters saw.
+- **Mechanical nameability gate.** `TestFacadeNameabilitySweep` walks the reachable set —
+  now including seam method parameter and result types, not only data reachable from
+  `Config`/`Results` — and fails on any type the facade cannot name, reporting the type
+  *and* the position that reaches it. This closes stability boundary 4, which had been a
+  hand-performed check.
+
 - **Public extension API — extend without forking.** A root `github.com/thetonymaster/mentat`
   package re-exports the seam interfaces (`Driver`, `TraceStore`, `Comparator`, `Judge`,
   plus `Correlator`/`Reporter` as types), the `Evidence`/`Verdict`/`Output`/`Config`
@@ -24,6 +48,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- **BREAKING — `Reporter.Report` now takes `Results`, not `RunReport`.** `RunReport` no
+  longer exists; the run-result types moved to an internal package and are aliased on the
+  facade. Migration:
+  - An implementation of `Reporter` changes its parameter type to `mentat.Results`. The
+    field names it reads are unchanged — `Results` *is* the former report type, with the
+    facade's separate (and lossy) struct collapsed into it.
+  - `mentat.Results` and `mentat.ScenarioResult` gained fields **and changed field
+    order**. Keyed composite literals — the normal form — are unaffected. An *unkeyed*
+    literal will either fail to compile or, worse, still compile and mean something
+    different; search for unkeyed literals of both types before upgrading.
+  - `ScenarioResult.RunIDs` is unchanged for readers, but is now derived from the new
+    `Runs` field and excluded from report serialization, so emitted report files are
+    byte-identical to before.
+  - Reporters are registered per-`Run` on the engine registry rather than in a package
+    global. `registry.RegisterReporter` as a package-level function is gone.
 - **The `mentat` CLI is now consumer zero of the public API.** `mentat run` composes
   entirely through `mentat.Run` (flags → `Config` + `With*` options → `Run` →
   `Results.ExitCode`) — one composition path, no forked internal wiring. The green happy

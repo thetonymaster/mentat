@@ -7,9 +7,10 @@ import (
 )
 
 func TestRegisterBuiltins(t *testing.T) {
-	RegisterBuiltins()
+	reg := registry.New()
+	RegisterBuiltins(reg)
 	for _, name := range []string{"json", "html"} {
-		if _, ok := registry.Reporter(name); !ok {
+		if _, ok := reg.Reporter(name); !ok {
 			t.Errorf("reporter %q not registered", name)
 		}
 	}

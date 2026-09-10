@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="mentat" tests="1" failures="0">
+    <properties>
+      <property name="interrupted" value="true"></property>
+    </properties>
+    <testcase name="green-before-signal"></testcase>
+  </testsuite>
+</testsuites>

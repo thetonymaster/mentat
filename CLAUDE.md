@@ -116,11 +116,21 @@ from Tempo, and run **comparators** that assert how it behaved and what it produ
 - `/coverage` — run `go test` with coverage and enforce the 80% floor.
 
 <!-- SPECKIT START -->
-Features 001–008 are shipped (through `specs/008-trace-completeness`). The
-in-flight feature is **009-extension-surface-integrity** (planned and implemented
-2026-07-18): spec at `specs/009-extension-surface-integrity/spec.md`, current plan
-at `specs/009-extension-surface-integrity/plan.md`, with research, data-model,
-contracts/, quickstart and `tasks.md` alongside. For additional
+Features 001–009 are shipped (through `specs/009-extension-surface-integrity`,
+merged 2026-07-18, all 34 tasks complete). The in-flight feature is
+**010-seam-type-nameability** (specified and planned 2026-09-09): spec at
+`specs/010-seam-type-nameability/spec.md`, current plan at
+`specs/010-seam-type-nameability/plan.md`, with research, data-model, contracts/
+and quickstart alongside, and `tasks.md` complete (59/59). Read the spec's **Decisions** section (D1–D5) before touching anything. **D5 is the
+one to read first**: the result types (`Results`, `ScenarioResult`, `RunRecord`,
+`Reporter`) move to a new leaf package `internal/result` and are aliased on the
+facade. A seam's parameter types *cannot* be declared at the facade — root imports
+`internal/report`, `internal/engine` and `internal/registry`, so anything they
+consume must live beneath them. Only terminal types may be facade-declared.
+Execution order is *not* story priority order — the report-format golden (FR-013)
+lands green before anything moves, Phase 5's step 5a is a **pure move** with that
+golden green across it, and the US4 gate can only go green last (plan.md, Phase 2).
+For additional
 context about technologies used, project structure, shell commands, and other
 important information, read `specs/` as history — each feature dir carries its
 `spec.md`, `plan.md`, `tasks.md`, and `contracts/`. When work is in flight, the

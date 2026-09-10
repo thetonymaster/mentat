@@ -5,18 +5,19 @@ import (
 	"time"
 
 	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/result"
 )
 
 // Collector accumulates per-scenario results across a run. Append is safe for the
 // concurrent scenarios godog may run (the -concurrency flag).
 type Collector struct {
 	mu        sync.Mutex
-	scenarios []core.ScenarioResult
+	scenarios []result.ScenarioResult
 }
 
 func NewCollector() *Collector { return &Collector{} }
 
-func (c *Collector) Append(sr core.ScenarioResult) {
+func (c *Collector) Append(sr result.ScenarioResult) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.scenarios = append(c.scenarios, sr)
@@ -25,10 +26,10 @@ func (c *Collector) Append(sr core.ScenarioResult) {
 // Report folds the accumulated scenarios into a RunReport with rollups. interrupted
 // records whether a signal cancelled the run before completion (feature 003); it
 // surfaces as RunReport.Interrupted so every emitted format carries the marker.
-func (c *Collector) Report(started time.Time, dur time.Duration, interrupted bool) core.RunReport {
+func (c *Collector) Report(started time.Time, dur time.Duration, interrupted bool) result.Results {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	rep := core.RunReport{StartedAt: started, Duration: dur, Total: len(c.scenarios), Interrupted: interrupted}
+	rep := result.Results{StartedAt: started, Duration: dur, Total: len(c.scenarios), Interrupted: interrupted}
 	rep.Scenarios = append(rep.Scenarios, c.scenarios...)
 	var judgeTotal *core.JudgeUsage
 	for _, sr := range c.scenarios {

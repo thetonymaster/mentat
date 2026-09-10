@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/result"
 )
 
 type jsonReporter struct{}
 
-func (jsonReporter) Report(rep core.RunReport, w io.Writer) error {
+func (jsonReporter) Report(rep result.Results, w io.Writer) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(rep); err != nil {

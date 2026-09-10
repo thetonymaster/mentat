@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/thetonymaster/mentat/internal/config"
 	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/result"
 )
 
 // extraStubDriver/Comparator/Judge are minimal seam stubs used to exercise the
@@ -64,6 +66,7 @@ func TestBuildAppliesExtraSeams(t *testing.T) {
 		wantDriver     string   // non-empty ⇒ assert this driver name is registered after Build
 		wantComparator string   // non-empty ⇒ assert this comparator name is registered after Build
 		wantJudge      string   // non-empty ⇒ assert this judge name is registered after Build
+		wantReporter   string   // non-empty ⇒ assert this reporter name is registered after Build
 	}{
 		{name: "custom driver registers as first-class adapter", opts: []Option{WithExtraDriver("xdrv", stubDriverFactory(drv))}, wantDriver: "xdrv"},
 		{name: "driver collides with built-in", opts: []Option{WithExtraDriver("shell", stubDriverFactory(drv))}, wantErrSub: []string{"WithDriver", "shell"}},
@@ -77,6 +80,17 @@ func TestBuildAppliesExtraSeams(t *testing.T) {
 		{name: "nil driver factory rejected", opts: []Option{WithExtraDriver("xnil", nil)}, wantErrSub: []string{"WithDriver", "xnil", "nil"}},
 		{name: "nil comparator factory rejected", opts: []Option{WithExtraComparator("xnil", nil)}, wantErrSub: []string{"WithComparator", "xnil", "nil"}},
 		{name: "nil judge factory rejected", opts: []Option{WithExtraJudge("xnil", nil)}, wantErrSub: []string{"WithJudge", "xnil", "nil"}},
+		// Reporter is the sixth seam (feature 010). It gets the same four rows as its
+		// siblings: registers, collides with a built-in, collides with an earlier extra,
+		// and rejects a nil factory. It shipped without them, which is what the gate audit
+		// caught — the guards read correctly but nothing executed them.
+		{name: "custom reporter registers", opts: []Option{WithExtraReporter("xrep", stubReporterFactory(nil))}, wantReporter: "xrep"},
+		{name: "reporter collides with built-in", opts: []Option{WithExtraReporter("json", stubReporterFactory(nil))}, wantErrSub: []string{"WithReporter", "json"}},
+		{name: "reporter collides with earlier extra", opts: []Option{WithExtraReporter("dup-r", stubReporterFactory(nil)), WithExtraReporter("dup-r", stubReporterFactory(nil))}, wantErrSub: []string{"WithReporter", "dup-r"}},
+		{name: "nil reporter factory rejected", opts: []Option{WithExtraReporter("xnil", nil)}, wantErrSub: []string{"WithReporter", "xnil", "nil"}},
+		{name: "reporter factory error is wrapped and names the reporter", opts: []Option{WithExtraReporter("xboom", func(config.Config) (result.Reporter, error) {
+			return nil, errors.New("reporter backend unreachable")
+		})}, wantErrSub: []string{"WithReporter", "xboom", "reporter backend unreachable"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -101,6 +115,11 @@ func TestBuildAppliesExtraSeams(t *testing.T) {
 				if tt.wantJudge != "" {
 					if _, ok := eng.reg.Judge(tt.wantJudge); !ok {
 						t.Fatalf("extra judge %q not registered after Build", tt.wantJudge)
+					}
+				}
+				if tt.wantReporter != "" {
+					if _, ok := eng.reg.Reporter(tt.wantReporter); !ok {
+						t.Fatalf("extra reporter %q not registered after Build", tt.wantReporter)
 					}
 				}
 				return
@@ -495,4 +514,49 @@ func TestToPricing(t *testing.T) {
 			t.Fatalf("rate = %+v, want {3 15}", r)
 		}
 	})
+}
+
+// extraStubReporter is the reporter counterpart of extraStubJudge: a typed nil of it is
+// a non-nil interface holding a nil pointer, which is exactly the value isNilSeam exists
+// to reject.
+type extraStubReporter struct{}
+
+func (*extraStubReporter) Report(_ result.Results, _ io.Writer) error { return nil }
+
+// stubReporterFactory returns a factory yielding rep, or a working stub when rep is nil.
+func stubReporterFactory(rep result.Reporter) func(config.Config) (result.Reporter, error) {
+	if rep == nil {
+		rep = &extraStubReporter{}
+	}
+	return func(config.Config) (result.Reporter, error) { return rep, nil }
+}
+
+// TestBuildRejectsNilReporterFromFactory mirrors TestBuildRejectsNilJudgeFromFactory for
+// the sixth seam. A factory returning (nil, nil) must be a loud Build error, not a
+// silently-wired nil reporter that would panic at emission time — after the suite has
+// already run, which is the worst possible moment to discover it.
+//
+// The typed-nil case is the one that matters: (*extraStubReporter)(nil) is a NON-nil
+// interface value holding a nil pointer, so a plain `rep == nil` check would pass it
+// straight through. That is the silent-fallback class Constitution IV exists for.
+func TestBuildRejectsNilReporterFromFactory(t *testing.T) {
+	cfg := config.Config{OTLPEndpoint: "x"}
+	tests := []struct {
+		name    string
+		factory func(config.Config) (result.Reporter, error)
+	}{
+		{name: "nil reporter", factory: func(config.Config) (result.Reporter, error) { return nil, nil }},
+		{name: "typed-nil reporter", factory: func(config.Config) (result.Reporter, error) { return (*extraStubReporter)(nil), nil }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Build(cfg, nil, nil, WithExtraReporter("xrep", tt.factory))
+			if err == nil {
+				t.Fatalf("Build must reject a reporter factory returning %s, got nil error", tt.name)
+			}
+			if !strings.Contains(err.Error(), "xrep") {
+				t.Fatalf("Build error = %q, want it to name the reporter %q", err, "xrep")
+			}
+		})
+	}
 }

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/result"
 )
 
 // judgePricing is a small pricing table used across the ledger-rendering tests.
@@ -24,9 +25,9 @@ const wantJudgeCost = 0.0045
 func TestJSONRendersJudgeLedger(t *testing.T) {
 	t.Parallel()
 
-	rep := core.RunReport{
+	rep := result.Results{
 		Total: 2, Passed: 2,
-		Scenarios: []core.ScenarioResult{
+		Scenarios: []result.ScenarioResult{
 			{Name: "with-judge", Pass: true, Judge: &core.JudgeUsage{Calls: 3, InputTokens: 1000, OutputTokens: 100, Model: "judge-model"}},
 			{Name: "no-judge", Pass: true},
 		},
@@ -95,7 +96,7 @@ func TestJSONRendersJudgeLedger(t *testing.T) {
 // calls and no total must render exactly today's shape — no judge/judgeTotal keys.
 func TestJSONOmitsJudgeWhenNoCalls(t *testing.T) {
 	t.Parallel()
-	rep := core.RunReport{Total: 1, Passed: 1, Scenarios: []core.ScenarioResult{{Name: "plain", Pass: true}}}
+	rep := result.Results{Total: 1, Passed: 1, Scenarios: []result.ScenarioResult{{Name: "plain", Pass: true}}}
 	var buf bytes.Buffer
 	if err := (jsonReporter{}).Report(rep, &buf); err != nil {
 		t.Fatalf("Report: %v", err)
@@ -111,9 +112,9 @@ func TestJSONOmitsJudgeWhenNoCalls(t *testing.T) {
 func TestHTMLRendersJudgeLedger(t *testing.T) {
 	t.Parallel()
 
-	rep := core.RunReport{
+	rep := result.Results{
 		Total: 1, Passed: 1,
-		Scenarios: []core.ScenarioResult{
+		Scenarios: []result.ScenarioResult{
 			{Name: "means", Pass: true, Judge: &core.JudgeUsage{Calls: 3, InputTokens: 1000, OutputTokens: 100, Model: "judge-model"}},
 		},
 		JudgeTotal: &core.JudgeUsage{Calls: 3, InputTokens: 1000, OutputTokens: 100},
@@ -132,7 +133,7 @@ func TestHTMLRendersJudgeLedger(t *testing.T) {
 		}
 	}
 
-	clean := core.RunReport{Total: 1, Passed: 1, Scenarios: []core.ScenarioResult{{Name: "plain", Pass: true}}}
+	clean := result.Results{Total: 1, Passed: 1, Scenarios: []result.ScenarioResult{{Name: "plain", Pass: true}}}
 	var cleanBuf bytes.Buffer
 	if err := (htmlReporter{}).Report(clean, &cleanBuf); err != nil {
 		t.Fatalf("Report(clean): %v", err)
@@ -199,11 +200,11 @@ func TestBudget_TripsAndNamesScenario(t *testing.T) {
 	b := NewBudget(0.01, budgetPricing) // 1-cent ceiling
 
 	// $0.005 — under budget, no trip.
-	if err := b.Add(core.ScenarioResult{Name: "cheap", Judge: budgetUsage(500)}); err != nil {
+	if err := b.Add(result.ScenarioResult{Name: "cheap", Judge: budgetUsage(500)}); err != nil {
 		t.Fatalf("cheap scenario tripped early: %v", err)
 	}
 	// cumulative $0.005 + $0.02 = $0.025 > $0.01 — this scenario crosses it.
-	err := b.Add(core.ScenarioResult{Name: "expensive", Judge: budgetUsage(2000)})
+	err := b.Add(result.ScenarioResult{Name: "expensive", Judge: budgetUsage(2000)})
 	if err == nil {
 		t.Fatal("expected the budget to trip on the expensive scenario, got nil")
 	}
@@ -230,14 +231,14 @@ func TestBudget_ContinuesAccountingAfterTrip(t *testing.T) {
 	b := NewBudget(0.01, budgetPricing) // 1-cent ceiling
 
 	// $0.02 > $0.01 — trips here, naming this scenario.
-	tripErr := b.Add(core.ScenarioResult{Name: "tripper", Judge: budgetUsage(2000)})
+	tripErr := b.Add(result.ScenarioResult{Name: "tripper", Judge: budgetUsage(2000)})
 	if tripErr == nil {
 		t.Fatal("expected the budget to trip on the tripper scenario, got nil")
 	}
 
 	// A later scenario that ALSO completed its judge call: its $0.01 must still land in
 	// Spent() even though the budget already tripped.
-	if err := b.Add(core.ScenarioResult{Name: "later", Judge: budgetUsage(1000)}); err == nil {
+	if err := b.Add(result.ScenarioResult{Name: "later", Judge: budgetUsage(1000)}); err == nil {
 		t.Fatal("Add after a trip returned nil, want the retained trip error")
 	}
 	if math.Abs(b.Spent()-0.03) > 1e-9 {
@@ -260,7 +261,7 @@ func TestBudget_CleanPaths(t *testing.T) {
 	tests := []struct {
 		name      string
 		max       float64
-		sr        core.ScenarioResult
+		sr        result.ScenarioResult
 		wantErr   bool
 		errSub    string
 		disabled  bool    // max <= 0: Add must not account — Spent()==0 and Err()==nil after Add
@@ -269,19 +270,19 @@ func TestBudget_CleanPaths(t *testing.T) {
 		{
 			name:     "unlimited budget never trips even on a costly scenario",
 			max:      0,
-			sr:       core.ScenarioResult{Name: "big", Judge: budgetUsage(1_000_000)},
+			sr:       result.ScenarioResult{Name: "big", Judge: budgetUsage(1_000_000)},
 			disabled: true,
 		},
 		{
 			name:      "scenario with no judge call contributes nothing",
 			max:       0.01,
-			sr:        core.ScenarioResult{Name: "no-judge"},
+			sr:        result.ScenarioResult{Name: "no-judge"},
 			wantSpent: 0, // no judge usage => no accounting, even under an active budget
 		},
 		{
 			name:    "ambiguous model under a budget is a hard error",
 			max:     0.01,
-			sr:      core.ScenarioResult{Name: "ambiguous", Judge: &core.JudgeUsage{Calls: 1, InputTokens: 100}},
+			sr:      result.ScenarioResult{Name: "ambiguous", Judge: &core.JudgeUsage{Calls: 1, InputTokens: 100}},
 			wantErr: true,
 			errSub:  "ambiguous",
 		},
@@ -318,7 +319,7 @@ func TestBudget_CleanPaths(t *testing.T) {
 // the pricing table), never a silent $0 for a real call.
 func TestPriceNamesScenarioOnBadModel(t *testing.T) {
 	t.Parallel()
-	rep := core.RunReport{Scenarios: []core.ScenarioResult{
+	rep := result.Results{Scenarios: []result.ScenarioResult{
 		{Name: "priced-ok", Pass: true, Judge: &core.JudgeUsage{Calls: 1, InputTokens: 10, OutputTokens: 1, Model: "judge-model"}},
 		{Name: "unpriceable", Pass: true, Judge: &core.JudgeUsage{Calls: 1, InputTokens: 10, OutputTokens: 1, Model: "mystery"}},
 	}}
@@ -343,16 +344,16 @@ func TestReportRendersDerivationNote(t *testing.T) {
 	const noteFragment = "missing service.name"
 	const note = `sequence unavailable for run "r1": sequence: span[0] ("fetch") ` + noteFragment
 
-	withNote := core.RunReport{Total: 1, Passed: 1, Scenarios: []core.ScenarioResult{
+	withNote := result.Results{Total: 1, Passed: 1, Scenarios: []result.ScenarioResult{
 		{Name: "degraded", Pass: true, DerivationNote: note},
 	}}
-	clean := core.RunReport{Total: 1, Passed: 1, Scenarios: []core.ScenarioResult{
+	clean := result.Results{Total: 1, Passed: 1, Scenarios: []result.ScenarioResult{
 		{Name: "healthy", Pass: true},
 	}}
 
 	tests := []struct {
 		name     string
-		reporter core.Reporter
+		reporter result.Reporter
 	}{
 		{"json", jsonReporter{}},
 		{"html", htmlReporter{}},

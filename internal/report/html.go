@@ -5,7 +5,7 @@ import (
 	"html/template"
 	"io"
 
-	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/result"
 )
 
 var htmlTmpl = template.Must(template.New("report").Parse(`<!doctype html>
@@ -35,7 +35,7 @@ td,th{border:1px solid #ccc;padding:.25rem .5rem}.fail{color:#b00}.pass{color:#0
 
 type htmlReporter struct{}
 
-func (htmlReporter) Report(rep core.RunReport, w io.Writer) error {
+func (htmlReporter) Report(rep result.Results, w io.Writer) error {
 	if err := htmlTmpl.Execute(w, rep); err != nil {
 		return fmt.Errorf("report: executing html template: %w", err)
 	}

@@ -7,12 +7,13 @@ import (
 	"time"
 
 	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/result"
 )
 
 func TestCollector(t *testing.T) {
 	c := NewCollector()
-	c.Append(core.ScenarioResult{Name: "a", Pass: true, Cost: 0.01})
-	c.Append(core.ScenarioResult{Name: "b", Pass: false, Cost: 0.02})
+	c.Append(result.ScenarioResult{Name: "a", Pass: true, Cost: 0.01})
+	c.Append(result.ScenarioResult{Name: "b", Pass: false, Cost: 0.02})
 	rep := c.Report(time.Unix(0, 0), 5*time.Second, false)
 	if rep.Total != 2 || rep.Passed != 1 || rep.Failed != 1 {
 		t.Errorf("totals = %+v", rep)
@@ -25,7 +26,7 @@ func TestCollector(t *testing.T) {
 func TestCollector_Scenarios(t *testing.T) {
 	tests := []struct {
 		name       string
-		appends    []core.ScenarioResult
+		appends    []result.ScenarioResult
 		wantTotal  int
 		wantPassed int
 		wantFailed int
@@ -41,7 +42,7 @@ func TestCollector_Scenarios(t *testing.T) {
 		},
 		{
 			name: "all_passed",
-			appends: []core.ScenarioResult{
+			appends: []result.ScenarioResult{
 				{Name: "x", Pass: true, Cost: 0.01},
 				{Name: "y", Pass: true, Cost: 0.02},
 			},
@@ -52,7 +53,7 @@ func TestCollector_Scenarios(t *testing.T) {
 		},
 		{
 			name: "all_failed",
-			appends: []core.ScenarioResult{
+			appends: []result.ScenarioResult{
 				{Name: "p", Pass: false, Cost: 0.00},
 				{Name: "q", Pass: false, Cost: 0.00},
 			},
@@ -100,7 +101,7 @@ func TestCollector_Scenarios(t *testing.T) {
 func TestCollector_JudgeTotal(t *testing.T) {
 	tests := []struct {
 		name      string
-		appends   []core.ScenarioResult
+		appends   []result.ScenarioResult
 		wantNil   bool
 		wantCalls int
 		wantIn    int64
@@ -109,7 +110,7 @@ func TestCollector_JudgeTotal(t *testing.T) {
 	}{
 		{
 			name: "no judge calls yields a nil total (no fabricated zeros)",
-			appends: []core.ScenarioResult{
+			appends: []result.ScenarioResult{
 				{Name: "a", Pass: true, Cost: 0.01},
 				{Name: "b", Pass: false},
 			},
@@ -117,7 +118,7 @@ func TestCollector_JudgeTotal(t *testing.T) {
 		},
 		{
 			name: "sums judge usage across the scenarios that called the judge",
-			appends: []core.ScenarioResult{
+			appends: []result.ScenarioResult{
 				{Name: "a", Pass: true, Judge: &core.JudgeUsage{Calls: 3, InputTokens: 1250, OutputTokens: 90, Model: "judge-model", CostUsd: 0.0125}},
 				{Name: "b", Pass: true}, // made no judge call — contributes nothing
 				{Name: "c", Pass: true, Judge: &core.JudgeUsage{Calls: 9, InputTokens: 3750, OutputTokens: 270, Model: "judge-model", CostUsd: 0.0375}},
@@ -173,7 +174,7 @@ func TestCollector_ConcurrentAppend(t *testing.T) {
 	for i := 0; i < n; i++ {
 		go func() {
 			defer wg.Done()
-			c.Append(core.ScenarioResult{Pass: true, Cost: 0.001})
+			c.Append(result.ScenarioResult{Pass: true, Cost: 0.001})
 		}()
 	}
 	wg.Wait()

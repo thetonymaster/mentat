@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="mentat" tests="4" failures="1">
+    <properties></properties>
+    <testcase name="green-plain"></testcase>
+    <testcase name="green-qualified">
+      <system-out>trace-completeness: bounded by ingestion window (settle 5s); spans exported later are not observed</system-out>
+    </testcase>
+    <testcase name="red-aggregate">
+      <failure message="scenario failed">rate = 0.50, want &gt;= 0.80</failure>
+    </testcase>
+    <testcase name="multi-run"></testcase>
+  </testsuite>
+</testsuites>

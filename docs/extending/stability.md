@@ -74,9 +74,13 @@ It runs under plain `go test` (part of the standard gate), so:
 
   **Adding, removing, or re-typing an exported field of a re-exported struct fails
   `TestPublicSurfaceGolden`, and the failure names the drifted type** in
-  parentheses. The field type is rendered exactly as written in the aliased
-  package's source, so renaming a named field type is drift too. Unexported fields
-  are omitted — they are not a public promise.
+  parentheses. The field type is printed by `go/printer` and then **normalized to
+  its facade name** (feature 010, T059), so one type renders one way no matter which
+  internal package declares the struct — `*core.JudgeUsage` reads `*JudgeUsage`.
+  Renaming the underlying type is still drift, but it surfaces on the **alias line**
+  (`type JudgeUsage = core.JudgeUsage`), which a rename must update or the module will
+  not compile; field lines no longer repeat the internal name. Unexported fields are
+  omitted — they are not a public promise.
 
 - **The declaration ORDER of those fields**, via the bracketed zero-padded ordinal.
   Permuting two fields changes no field name and no field type, but it is a real
@@ -89,8 +93,9 @@ It runs under plain `go test` (part of the standard gate), so:
 
 ### What the gate does not catch
 
-Four boundaries, stated here so they are not tribal knowledge. All four are known
-and accepted; none is a TODO.
+Three boundaries, stated here so they are not tribal knowledge. All three are known
+and accepted; none is a TODO. A fourth was closed by feature 010 and is kept below as a
+struck-through entry so the numbering stays stable.
 
 1. **Aliases of map, func, and `any` types stay single-line.** Only *struct* and
    *interface* aliases are expanded. A declaration like `type ComparatorFactory =
@@ -119,22 +124,21 @@ and accepted; none is a TODO.
    mechanical fix, when one of these matters, is to re-export it from the facade —
    the alias line brings its field set into the golden with it.
 
-4. **Types reachable through *seam* signatures are not guaranteed nameable.** The
-   nameability sweep that feature 009 froze walks outward from `Config` and
-   `Results` (see
-   [`facade-nameability.md`](../../specs/009-extension-surface-integrity/contracts/facade-nameability.md));
-   it does not walk seam-interface parameter and result types. Four types are
-   therefore frozen in the golden but cannot be named from outside the module:
-   `AggregateDetail`, `ExtractPolicy`, `HTTPSpec`, and `RunReport`. The practical
-   consequence is sharpest for `RunReport`: **`Reporter` is an aliased seam
-   interface that an external module cannot implement**, because it cannot write
-   the type of its own method parameter. Likewise a Comparator author cannot
-   construct a `Verdict` with `Detail` set, and a Driver author cannot build a
-   `RunSpec` with `Extract` or `HTTP` set.
+4. ~~**Types reachable through *seam* signatures are not guaranteed nameable.**~~
+   **CLOSED by feature 010.** The nameability sweep now walks seam method parameter
+   and result types as well as data reachability from `Config` and `Results`, and it is
+   MECHANICAL rather than a hand-check: `TestFacadeNameabilitySweep` fails on any type
+   reachable from the public surface that the facade cannot name, reporting both the
+   offending type and the position that reaches it. See
+   [`facade-nameability-v2.md`](../../specs/010-seam-type-nameability/contracts/facade-nameability-v2.md).
 
-   This is a verified, deliberately-deferred gap, not an oversight: closing it
-   means widening the public surface, which is a one-way door and gets its own
-   spec rather than riding along in 009. Recorded as input to spec 010.
+   The four types this boundary named are resolved: `AggregateDetail`, `ExtractPolicy`
+   and `HTTPSpec` are now aliased on the facade; `RunReport` left the surface entirely
+   when the `Reporter` seam was re-shaped to render `Results`. `Reporter` is
+   implementable — and, via `WithReporter`, registrable — from outside the module.
+
+   Kept as a numbered entry rather than deleted outright so the numbering of boundaries
+   1–3 stays stable for anything that cites them.
 
 > Every symbol on the surface earns its place: the manifest rule is that a symbol
 > appears in the contract *with a justification, or it does not get exported*. See

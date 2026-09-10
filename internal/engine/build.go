@@ -50,10 +50,12 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator, opts ...O
 	reg.RegisterComparator("retries", comparator.NewRetries())
 	reg.RegisterAggregateComparator("aggregate-cel", comparator.NewAggregateCEL(pricing))
 	comparator.RegisterBuiltinMatchers(reg)
-	// Reporters are a POST-run rendering concern (cmd/mentat emits them after Run
-	// returns Results, not the Engine), so they stay package-global — not part of the
-	// per-engine registry.
-	report.RegisterBuiltins()
+	// Reporters are a post-run rendering concern, but they are per-engine like every
+	// other seam (feature 010, D4). The older comment here claimed cmd/mentat emitted
+	// them after Run returned, so they could not be per-engine — that call path has not
+	// existed since the 007 recompose put emission inside Run (run.go), and the stale
+	// justification was the only thing keeping the seam on a package-global map.
+	report.RegisterBuiltins(reg)
 
 	// Wire the LLM-judge seam and the "semantic" result matcher. The judge
 	// backend defaults to "claude" when unset (the documented default, resolved
@@ -206,6 +208,22 @@ func applyExtras(cfg config.Config, o options, reg *registry.Registry) error {
 			return fmt.Errorf("engine: WithComparator: comparator %q: factory returned a nil comparator with no error", ec.name)
 		}
 		reg.RegisterComparator(ec.name, cmp)
+	}
+	for _, er := range o.extraReporters {
+		if er.factory == nil {
+			return fmt.Errorf("engine: WithReporter: reporter factory %q is nil; a registered reporter factory must be non-nil", er.name)
+		}
+		if _, exists := reg.Reporter(er.name); exists {
+			return fmt.Errorf("engine: WithReporter: reporter %q is already registered (a built-in or an earlier registration); reporter names must be unique", er.name)
+		}
+		rep, err := er.factory(cfg)
+		if err != nil {
+			return fmt.Errorf("engine: WithReporter: build reporter %q: %w", er.name, err)
+		}
+		if isNilSeam(rep) {
+			return fmt.Errorf("engine: WithReporter: reporter %q: factory returned a nil reporter with no error", er.name)
+		}
+		reg.RegisterReporter(er.name, rep)
 	}
 	for _, ej := range o.extraJudges {
 		if ej.factory == nil {

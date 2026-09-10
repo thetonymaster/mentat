@@ -36,7 +36,18 @@ proof; it needs no runtime assertions beyond keeping the values referenced.
 `examples/kafkaecho` (separate module, `replace`-directive, facade-only imports)
 remains the external-module witness; it MUST keep compiling untouched.
 
-## Verified gap, deferred to spec 010 (recorded 2026-07-18, T018)
+## Verified gap, deferred to spec 010 — **RESOLVED** (deferred 2026-07-18 T018; closed 2026-09-09)
+
+> **Superseded by [facade-nameability-v2.md](../../010-seam-type-nameability/contracts/facade-nameability-v2.md).**
+> All four types below are resolved: `AggregateDetail`, `ExtractPolicy` and `HTTPSpec` are
+> aliased on the facade; `RunReport` left the surface entirely when the `Reporter` seam was
+> re-shaped to render `Results` (spec 010, D2/D5). The reachable-set definition this
+> contract establishes was widened in v2 to include seam method parameter and result types,
+> and the sweep below — performed by hand here — is now mechanical
+> (`TestFacadeNameabilitySweep`). `docs/extending/stability.md` boundary 4 is closed.
+>
+> The record below is kept as written, because the gap it describes is what spec 010 exists
+> to close and the reasoning should stay legible.
 
 The T018 sweep walked the reachable set as defined above (14 members) and found
 `Completeness` to be the only gap inside that definition — it is now aliased, and

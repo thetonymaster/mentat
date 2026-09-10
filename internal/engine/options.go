@@ -6,6 +6,7 @@ import (
 	"github.com/thetonymaster/mentat/internal/config"
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/registry"
+	"github.com/thetonymaster/mentat/internal/result"
 )
 
 // options carries the resolved composition-root configuration set by functional
@@ -26,6 +27,7 @@ type options struct {
 	extraJudges      []namedJudge
 	extraStores      []namedStore
 	extraMatchers    []namedMatcher
+	extraReporters   []namedReporter
 }
 
 type namedDriver struct {
@@ -51,6 +53,11 @@ type namedJudge struct {
 type namedStore struct {
 	name    string
 	factory registry.StoreFactory
+}
+
+type namedReporter struct {
+	name    string
+	factory func(config.Config) (result.Reporter, error)
 }
 
 // Option configures Build, the single composition root.
@@ -84,6 +91,17 @@ func WithExtraDriver(name string, f func(config.Config) (core.Driver, error)) Op
 func WithExtraComparator(name string, f func(config.Config) (core.Comparator, error)) Option {
 	return func(o *options) {
 		o.extraComparators = append(o.extraComparators, namedComparator{name: name, factory: f})
+	}
+}
+
+// WithExtraReporter funnels a custom reporter factory into the composition root under
+// name, with the same defer-past-collision discipline as WithExtraDriver. Reporters
+// became per-engine in feature 010 precisely so this option could exist: registering
+// into the old package-global map would have raced two concurrent Runs against each
+// other (D4).
+func WithExtraReporter(name string, f func(config.Config) (result.Reporter, error)) Option {
+	return func(o *options) {
+		o.extraReporters = append(o.extraReporters, namedReporter{name: name, factory: f})
 	}
 }
 

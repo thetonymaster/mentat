@@ -6,6 +6,7 @@ import (
 
 	"github.com/thetonymaster/mentat/internal/comparator"
 	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/result"
 	"github.com/thetonymaster/mentat/internal/trace"
 )
 
@@ -22,8 +23,8 @@ import (
 // the best-effort detail — an empty sequence, cost 0 for that run — and records a
 // human-readable DerivationNote instead of returning an error. The degradation
 // stays visible in the JSON and HTML report (no silent fallback, constitution IV).
-func Derive(name, featureFile string, tags []string, v core.Verdict, evs []core.Evidence, pricing core.Pricing) core.ScenarioResult {
-	sr := core.ScenarioResult{
+func Derive(name, featureFile string, tags []string, v core.Verdict, evs []core.Evidence, pricing core.Pricing) result.ScenarioResult {
+	sr := result.ScenarioResult{
 		Name:        name,
 		FeatureFile: featureFile,
 		Tags:        tags,
@@ -50,7 +51,7 @@ func Derive(name, featureFile string, tags []string, v core.Verdict, evs []core.
 			notes = append(notes, fmt.Sprintf("cost unavailable for run %q: %v", ev.RunID, err))
 			cost = 0
 		}
-		rec := core.RunRecord{
+		rec := result.RunRecord{
 			RunID:       ev.RunID,
 			Passed:      !ev.Failed,
 			FailureKind: ev.FailureKind,
@@ -60,6 +61,10 @@ func Derive(name, featureFile string, tags []string, v core.Verdict, evs []core.
 			rec.LatencyMS = ev.Trace.Envelope().Milliseconds()
 		}
 		sr.Runs = append(sr.Runs, rec)
+		// RunIDs is the serialization-excluded projection of Runs that library callers
+		// read (feature 010). Appended in the SAME loop so the two are aligned by
+		// construction and cannot drift; TestDeriveRunIDsMirrorRuns pins it.
+		sr.RunIDs = append(sr.RunIDs, rec.RunID)
 		sr.Cost += cost
 	}
 	if len(evs) > 0 && evs[0].Trace != nil {

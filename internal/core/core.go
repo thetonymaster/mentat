@@ -5,7 +5,6 @@ package core
 import (
 	"context"
 	"fmt"
-	"io"
 	"regexp"
 	"strings"
 	"time"
@@ -330,70 +329,10 @@ func ExtractAnswer(stdout string, policy ExtractPolicy) (string, error) {
 	}
 }
 
-// RunReport is the whole-run artifact a Reporter renders. Pure data.
-type RunReport struct {
-	Scenarios []ScenarioResult
-	Total     int
-	Passed    int
-	Failed    int
-	TotalCost float64
-	StartedAt time.Time
-	Duration  time.Duration
-	// Interrupted marks a run that a SIGINT/SIGTERM cancelled before it ran to
-	// completion (feature 003, FR-006). The report then carries the scenarios that
-	// finished plus this explicit marker; omitted from a clean run's JSON.
-	Interrupted bool `json:"interrupted,omitempty"`
-	// JudgeTotal is the suite-wide judge-token ledger, summed field-wise across the
-	// scenarios that made judge calls (US6). Non-nil ONLY when at least one scenario
-	// issued a judge call — absence of usage is not a fabricated all-zero total
-	// (judge-ledger contract, FR-006). Its Model is intentionally empty (the total is
-	// not attributed to one model); CostUsd is filled by report.Price at render time.
-	JudgeTotal *JudgeUsage `json:"judgeTotal,omitempty"`
-}
-
-// ScenarioResult is one scenario's outcome, derived from its Evidence + Verdict.
-type ScenarioResult struct {
-	Name string
-	// FeatureFile is the source .feature file this scenario was parsed from (godog's
-	// scenario Uri), so scenarios can be told apart by origin, not just by Name.
-	FeatureFile string `json:"FeatureFile,omitempty"`
-	Tags        []string
-	Pass        bool
-	Reasons     []string
-	// Qualifiers are the completeness qualifiers the engine attached to this scenario's
-	// verdict (feature 008, US2) — e.g. the ingestion-window caveat a bounded
-	// request-scoped run carries on a completeness-sensitive assertion. Carried verbatim
-	// from Verdict.Qualifiers by report.Derive and rendered by every reporter on pass AND
-	// fail; empty (omitted from JSON) when none apply. Reporters never derive them.
-	Qualifiers []string `json:"qualifiers,omitempty"`
-	Cost       float64
-	Sequence   []string
-	Runs       []RunRecord
-	Aggregate  *AggregateDetail
-	// DerivationNote is a non-fatal, human-readable note recorded when report
-	// derivation (sequence/cost) could not be completed for this scenario — e.g. a
-	// span missing service.name. It is an observer artifact: it never changes Pass
-	// (verdicts come only from step results, audit A8) but stays visible in the JSON
-	// and HTML report so the degradation is surfaced, not swallowed. Empty when
-	// derivation was clean.
-	DerivationNote string `json:"DerivationNote,omitempty"`
-	// Judge is this scenario's summed judge-token ledger (US6), carried from the
-	// semantic matcher's Verdict.Judge through report.Derive. Non-nil ONLY when the
-	// scenario made a judge call — a scenario with no `the result means` step leaves
-	// it nil (no fabricated zeros, FR-006). CostUsd is 0 until report.Price fills it.
-	Judge *JudgeUsage `json:"judge,omitempty"`
-}
-
-// RunRecord is one run within a scenario (one element per @runs iteration).
-type RunRecord struct {
-	RunID       string
-	Passed      bool
-	FailureKind string
-	LatencyMS   int64
-	Cost        float64
-}
-
-// Reporter renders a whole RunReport to a writer. Stateless; registered as an instance.
-type Reporter interface {
-	Report(rep RunReport, w io.Writer) error
-}
+// RunReport, ScenarioResult, RunRecord and Reporter moved to internal/result in feature
+// 010 (D5). They are what a run PRODUCES, not part of the driver/comparator contract
+// vocabulary this package holds — and, decisively, the Reporter seam's parameter type
+// must be nameable from the facade, which means it has to live in a package the facade
+// can alias without an import cycle. RunReport was renamed Results there: the facade's
+// separate, lossy Results struct and this one are a single type now, so a custom reporter
+// and a built-in one render from exactly the same input.

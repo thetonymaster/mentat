@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/result"
 )
 
 // qualifierText is the canonical completeness qualifier (contracts §3), shared by the
@@ -17,7 +18,7 @@ const qualifierText = "trace-completeness: bounded by ingestion window (settle 5
 // OUTSIDE the fail-only {{if not .Pass}} reasons guard. A scenario with no qualifier
 // renders no qualifier block.
 func TestHTMLReporterQualifierRendersOnPassAndFail(t *testing.T) {
-	rep := core.RunReport{Total: 3, Passed: 2, Failed: 1, Scenarios: []core.ScenarioResult{
+	rep := result.Results{Total: 3, Passed: 2, Failed: 1, Scenarios: []result.ScenarioResult{
 		{Name: "green-bounded", Pass: true, Qualifiers: []string{qualifierText}},
 		{Name: "red-bounded", Pass: false, Reasons: []string{"boom"}, Qualifiers: []string{qualifierText}},
 		{Name: "green-plain", Pass: true},
@@ -46,31 +47,31 @@ func (errWriter) Write(_ []byte) (int, error) {
 }
 
 func TestHTMLReporter(t *testing.T) {
-	failingRep := core.RunReport{Total: 1, Failed: 1, Scenarios: []core.ScenarioResult{
+	failingRep := result.Results{Total: 1, Failed: 1, Scenarios: []result.ScenarioResult{
 		{Name: "flaky", Pass: false, Cost: 0.0125,
 			Reasons:   []string{"rate = 0.50, want >= 0.80"},
-			Runs:      []core.RunRecord{{RunID: "abc", Passed: true, LatencyMS: 120}},
+			Runs:      []result.RunRecord{{RunID: "abc", Passed: true, LatencyMS: 120}},
 			Aggregate: &core.AggregateDetail{Macro: "rate", Op: ">=", Computed: 0.5, Expected: 0.8}},
 	}}
 
-	passingRep := core.RunReport{Total: 1, Passed: 1, Scenarios: []core.ScenarioResult{
+	passingRep := result.Results{Total: 1, Passed: 1, Scenarios: []result.ScenarioResult{
 		{Name: "sunny", Pass: true, Cost: 0.005},
 	}}
 
-	noAggRep := core.RunReport{Total: 1, Failed: 1, Scenarios: []core.ScenarioResult{
+	noAggRep := result.Results{Total: 1, Failed: 1, Scenarios: []result.ScenarioResult{
 		{Name: "no-agg", Pass: false, Cost: 0.001,
 			Reasons:   []string{"something failed"},
 			Aggregate: nil},
 	}}
 
-	seqRep := core.RunReport{Total: 1, Passed: 1, Scenarios: []core.ScenarioResult{
+	seqRep := result.Results{Total: 1, Passed: 1, Scenarios: []result.ScenarioResult{
 		{Name: "with-seq", Pass: true, Cost: 0.002,
 			Sequence: []string{"search", "summarize"}},
 	}}
 
 	tests := []struct {
 		name        string
-		rep         core.RunReport
+		rep         result.Results
 		writer      interface{ Write([]byte) (int, error) }
 		wantStrings []string
 		wantAbsent  []string

@@ -13,6 +13,7 @@ import (
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/engine"
 	"github.com/thetonymaster/mentat/internal/report"
+	"github.com/thetonymaster/mentat/internal/result"
 	"github.com/thetonymaster/mentat/internal/steps"
 )
 
@@ -68,6 +69,7 @@ type runOptions struct {
 	stores      []storeReg
 	comparators []comparatorReg
 	judges      []judgeReg
+	reporters   []reporterReg
 }
 
 // driverReg / storeReg / comparatorReg / judgeReg pair a registration name with its
@@ -91,6 +93,10 @@ type (
 		name    string
 		factory JudgeFactory
 	}
+	reporterReg struct {
+		name    string
+		factory ReporterFactory
+	}
 )
 
 // DriverFactory builds a custom Driver from the resolved Config. Registered under a
@@ -110,8 +116,13 @@ type StoreFactory = func(Config) (TraceStore, error)
 // comparator is registered and composable today but is not yet invokable from a
 // .feature step without new grammar. Publishing the registration surface is
 // deliberately all this does for now; first-class custom-comparator Gherkin steps
-// are planned future work (tracked in-repo as spec 010) that has not been started.
+// are planned future work (tracked in-repo as spec 011) that has not been started.
 type ComparatorFactory = func(Config) (Comparator, error)
+
+// ReporterFactory builds a custom Reporter from the resolved Config. Registered under a
+// name via WithReporter; WithReports then selects it by that name exactly as it selects
+// a built-in json/html/junit reporter — there is no second selection mechanism.
+type ReporterFactory = func(Config) (Reporter, error)
 
 // JudgeFactory builds a custom Judge from the resolved Config. Registered under a
 // name via WithJudge; the judge is USED only when cfg.Judge.Backend names it (like
@@ -208,55 +219,27 @@ func WithJudge(name string, f JudgeFactory) Option {
 	return func(o *runOptions) { o.judges = append(o.judges, judgeReg{name: name, factory: f}) }
 }
 
-// Results is the structured outcome of a Run — the library-mode equivalent of the
-// CLI's report + exit status. A red suite is reflected here (Failed > 0),
-// not as a Run error: Run returns a non-nil error only for harness/composition
-// failures. TotalCost and JudgeTotal mirror core.RunReport's suite aggregates;
-// JudgeTotal is nil unless a scenario actually made a judge call (no fabricated
-// zeros).
-type Results struct {
-	Scenarios   []ScenarioResult
-	Passed      int
-	Failed      int
-	Interrupted bool
-	TotalCost   float64
-	JudgeTotal  *JudgeUsage
+// WithReporter registers a custom Reporter factory under name, for this Run's
+// composition root only. The reporter is USED when WithReports maps that name to an
+// output path — the same way a built-in reporter is selected — so registration and
+// selection stay two separate, composable steps. Same collision discipline as
+// WithDriver: a name already taken by a built-in or an earlier registration is a loud
+// build error, never a silent last-wins.
+//
+// Scoped per Run, not package-global (feature 010, D4): two concurrent Runs may register
+// different reporters under the same name and each uses its own.
+func WithReporter(name string, f ReporterFactory) Option {
+	return func(o *runOptions) { o.reporters = append(o.reporters, reporterReg{name: name, factory: f}) }
 }
 
-// ExitCode maps Results onto the process exit code the CLI uses, so a library
-// consumer (and the CLI as "consumer zero") can turn a Run into an os.Exit code with
-// one call: an interrupted run is 130 (128 + SIGINT, and it wins over a red suite so
-// CI can tell cancellation from a plain failure), else any failed scenario is 1, else
-// 0. These three codes are the stable Results-to-exit-status contract.
-func (r Results) ExitCode() int {
-	switch {
-	case r.Interrupted:
-		return 130
-	case r.Failed > 0:
-		return 1
-	default:
-		return 0
-	}
-}
-
-// ScenarioResult is one scenario's outcome. It is a facade-owned struct (not an
-// alias) so the internal report record types (RunRecord etc.) never leak through the
-// public surface. RunIDs are the injected run ids of the scenario's runs (>1 for a
-// @runs(N) scenario). Judge is this scenario's judge ledger, nil when it made no
-// judge call.
-type ScenarioResult struct {
-	Name string
-	// FeatureFile is the source .feature file this scenario was parsed from (godog's
-	// scenario Uri), so a consumer running several feature files can tell scenarios
-	// apart by origin, not just by Name (which may collide across files).
-	FeatureFile    string
-	Pass           bool
-	Reasons        []string
-	Cost           float64
-	RunIDs         []string
-	DerivationNote string
-	Judge          *JudgeUsage
-}
+// Results, ScenarioResult, RunRecord and ExitCode moved to internal/result in feature
+// 010 (D5) and are aliased in mentat.go. They were facade-declared structs, deliberately
+// separate from the internal report records so those would not leak onto the public
+// surface — but that separation also made them LOSSY: a built-in reporter saw eight data
+// points a custom one could not, and the Reporter seam's parameter type had no facade
+// name at all, so no external module could implement it. Collapsing the two into one
+// aliased type fixes both, and keeps the surface honest: what a reporter renders is
+// exactly what a Run caller receives.
 
 // Run executes the behaviour suite in-process against cfg and returns structured
 // Results. It mirrors the CLI's `run` composition (engine.BuildCorrelator →
@@ -381,6 +364,17 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 			return j.factory(c)
 		}))
 	}
+	// Reporters are registered like every other seam and USED only when WithReports
+	// names one (feature 010). The collision check runs unconditionally, so a name
+	// clashing with a built-in fails the build even if no report was requested.
+	for _, r := range ro.reporters {
+		if r.factory == nil {
+			return Results{}, fmt.Errorf("mentat: WithReporter %q: nil factory; register a non-nil ReporterFactory", r.name)
+		}
+		buildOpts = append(buildOpts, engine.WithExtraReporter(r.name, func(c config.Config) (result.Reporter, error) {
+			return r.factory(c)
+		}))
+	}
 	eng, err := engine.Build(cfg, st, cor, buildOpts...)
 	if err != nil {
 		return Results{}, fmt.Errorf("mentat: build engine: %w", err)
@@ -454,7 +448,7 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 	// error is captured (not early-returned) so a simultaneous budget trip is not masked.
 	var emitErr error
 	if len(ro.reports) > 0 {
-		if e := report.EmitReports(rep, ro.reports); e != nil {
+		if e := report.EmitReports(rep, ro.reports, eng); e != nil {
 			emitErr = fmt.Errorf("mentat: emit reports: %w", e)
 		}
 	}
@@ -472,37 +466,12 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 	// trip masks the other (the pre-recompose CLI printed both). errors.Join drops nils,
 	// so an emit-only or budget-only run keeps its single, original message intact.
 	if emitErr != nil || budgetErr != nil {
-		return toResults(rep), errors.Join(emitErr, budgetErr)
+		return rep, errors.Join(emitErr, budgetErr)
 	}
 
-	return toResults(rep), nil
+	return rep, nil
 }
 
-// toResults maps the internal RunReport onto the facade-owned Results, carrying the
-// suite aggregates and JudgeTotal verbatim (nil stays nil — no fabricated zeros).
-func toResults(rep core.RunReport) Results {
-	res := Results{
-		Passed:      rep.Passed,
-		Failed:      rep.Failed,
-		Interrupted: rep.Interrupted,
-		TotalCost:   rep.TotalCost,
-		JudgeTotal:  rep.JudgeTotal,
-	}
-	for _, sc := range rep.Scenarios {
-		runIDs := make([]string, 0, len(sc.Runs))
-		for _, r := range sc.Runs {
-			runIDs = append(runIDs, r.RunID)
-		}
-		res.Scenarios = append(res.Scenarios, ScenarioResult{
-			Name:           sc.Name,
-			FeatureFile:    sc.FeatureFile,
-			Pass:           sc.Pass,
-			Reasons:        sc.Reasons,
-			Cost:           sc.Cost,
-			RunIDs:         runIDs,
-			DerivationNote: sc.DerivationNote,
-			Judge:          sc.Judge,
-		})
-	}
-	return res
-}
+// toResults is gone (feature 010, D5). The collector already produces the type Run
+// returns, so there is nothing left to convert — and nothing left to lose in the
+// conversion, which is what made the old facade Results lossy against the report.

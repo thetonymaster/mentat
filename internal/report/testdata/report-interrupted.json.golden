@@ -1,0 +1,21 @@
+{
+  "Scenarios": [
+    {
+      "Name": "green-before-signal",
+      "Tags": null,
+      "Pass": true,
+      "Reasons": null,
+      "Cost": 0.01,
+      "Sequence": null,
+      "Runs": null,
+      "Aggregate": null
+    }
+  ],
+  "Total": 1,
+  "Passed": 1,
+  "Failed": 0,
+  "TotalCost": 0.01,
+  "StartedAt": "2026-01-02T03:04:05Z",
+  "Duration": 250000000,
+  "interrupted": true
+}
