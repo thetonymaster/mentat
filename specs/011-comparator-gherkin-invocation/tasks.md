@@ -73,14 +73,14 @@ assert the suite passes and the verdict is recorded. Hermetic — gomock store, 
 
 ### Tests for User Story 1 (REQUIRED — Test-First) ⚠️
 
-- [ ] T009 [US1] Write `TestCustomComparatorFromGherkin` in `internal/steps/steps_test.go` following the shape of `TestFeatureExercisesGrammarAgainstFakeEngine` (`:58`): build the engine with `engine.Build(cfg, st, cor, engine.WithExtraComparator("revenue-shape", …))`, drive an inline feature using the new phrase with a docstring, and assert `suite.Run() == 0`; observe it FAIL with an undefined-step error
+- [X] T009 [US1] Write `TestCustomComparatorFromGherkin` in `internal/steps/steps_test.go` following the shape of `TestFeatureExercisesGrammarAgainstFakeEngine` (`:58`): build the engine with `engine.Build(cfg, st, cor, engine.WithExtraComparator("revenue-shape", …))`, drive an inline feature using the new phrase with a docstring, and assert `suite.Run() == 0`; observe it FAIL with an undefined-step error
 
 ### Implementation for User Story 1
 
-- [ ] T010 [US1] Add the `comparatorSatisfiedByDoc(name string, doc *godog.DocString) error` handler to `internal/steps/steps.go`, following the captures-first/docstring-last convention of `resultMeansDoc` (`:510`). It MUST open with a `doc == nil` guard returning a descriptive error naming the step (FR-017), as seven of the eight existing docstring handlers do (`:169, 434, 475, 511, 548, 559, 570`); then resolve via `w.eng.Comparator(name)`, type-assert `core.ExpectationParser`, call `ParseExpectation(doc.Content)` unmodified, and route the result through `w.checkExp(name, exp, true)` (`:254`)
-- [ ] T011 [US1] Add exactly ONE row to `stepDefs` in `internal/steps/metadata.go` in a new **seventh** group `Extend` — appended after the existing six (`Drive`, `Sequence`, `Budgets`, `Result`, `Aggregate / CEL`, `Shape`) — with pattern `^the "([^"]+)" comparator is satisfied by:$`, a non-blank summary and a valid example, bound to the T010 handler (depends on T010)
-- [ ] T012 [US1] Verify T009 passes, and assert within it that the comparator received the expectation its own `ParseExpectation` produced, and that qualifiers and judge usage were recorded on the world exactly as for a built-in step
-- [ ] T013 [US1] Assert FR-010's sensitivity actually reaches the engine (SC-011), modelled on `internal/steps/qualifier_test.go`: against a **bounded** (request-scoped, non-strict) target the custom comparator's verdict carries the completeness qualifier; against a **strict** target it does not. Without this, `sensitive=true` is an untested literal that could be flipped to `false` with every gate staying green
+- [X] T010 [US1] Add the `comparatorSatisfiedByDoc(name string, doc *godog.DocString) error` handler to `internal/steps/steps.go`, following the captures-first/docstring-last convention of `resultMeansDoc` (`:510`). It MUST open with a `doc == nil` guard returning a descriptive error naming the step (FR-017), as seven of the eight existing docstring handlers do (`:169, 434, 475, 511, 548, 559, 570`); then resolve via `w.eng.Comparator(name)`, type-assert `core.ExpectationParser`, call `ParseExpectation(doc.Content)` unmodified, and route the result through `w.checkExp(name, exp, true)` (`:254`)
+- [X] T011 [US1] Add exactly ONE row to `stepDefs` in `internal/steps/metadata.go` in a new **seventh** group `Extend` — appended after the existing six (`Drive`, `Sequence`, `Budgets`, `Result`, `Aggregate / CEL`, `Shape`) — with pattern `^the "([^"]+)" comparator is satisfied by:$`, a non-blank summary and a valid example, bound to the T010 handler (depends on T010)
+- [X] T012 [US1] Verify T009 passes, and assert within it that the comparator received the expectation its own `ParseExpectation` produced, and that qualifiers and judge usage were recorded on the world exactly as for a built-in step
+- [X] T013 [US1] Assert FR-010's sensitivity actually reaches the engine (SC-011), modelled on `internal/steps/qualifier_test.go`: against a **bounded** (request-scoped, non-strict) target the custom comparator's verdict carries the completeness qualifier; against a **strict** target it does not. Without this, `sensitive=true` is an untested literal that could be flipped to `false` with every gate staying green
 
 **Checkpoint**: US1 is fully functional. This is the MVP — the capability exists end to end.
 
@@ -100,7 +100,7 @@ zero-value success, no silently skipped assertion, no panic.
 > failing — a Principle V violation caught by `/speckit-analyze`.
 
 - [ ] T014 [US2] Write `TestCustomComparatorErrors` in `internal/steps/steps_test.go` as a table with FOUR rows written up front: (a) unregistered name → error contains the name **and** at least one registered name; (b) registered but not an `ExpectationParser` → error names the comparator and states it cannot be driven from Gherkin; (c) `ParseExpectation` returns an error → `%w`-wrapped and named by comparator; (d) a name containing an embedded quote → the error echoes the **truncated capture verbatim** so the truncation is visible to the author (spec Edge Cases). Observe all four FAIL
-- [ ] T015 [P] [US2] Write `TestCustomComparatorDocNil` in `internal/steps/steps_test.go` as a direct handler call mirroring `TestResultMeansDocNil` (`w := &world{}; w.comparatorSatisfiedByDoc("x", nil)`), asserting a descriptive error rather than a panic (FR-017); observe it FAIL
+- [X] T015 [P] [US2] Write `TestCustomComparatorDocNil` in `internal/steps/steps_test.go` as a direct handler call mirroring `TestResultMeansDocNil` (`w := &world{}; w.comparatorSatisfiedByDoc("x", nil)`), asserting a descriptive error rather than a panic (FR-017); observe it FAIL
 - [ ] T016 [P] [US2] Write `TestEngineComparatorsListsRegisteredNames` in `internal/engine/engine_test.go` asserting `Engine.Comparators()` returns the sorted registered names including one added via `WithExtraComparator`; observe it FAIL (method does not exist)
 
 ### Implementation for User Story 2
@@ -123,9 +123,9 @@ and the `stepDefs` drift invariant is preserved rather than relaxed.
 **Independent Test**: run the five drift tests and `mentat steps`; confirm the committed
 `docs/steps.md` matches.
 
-- [ ] T021 [US3] Regenerate `docs/steps.md` from `stepDefs` so the committed reference carries the new row
-- [ ] T022 [US3] Run `go test ./internal/steps/ -run 'TestStepDocs|TestStepMetadata|TestNoDirectStepRegistration' -v` and confirm all five drift tests pass with their assertions **UNMODIFIED** — needing to edit one means the design drifted into Option B and the plan is wrong, not the test (FR-012, SC-003)
-- [ ] T023 [P] [US3] Run `go run ./cmd/mentat steps` and confirm the `Extend` group lists the new phrase with a non-blank summary and a valid example
+- [X] T021 [US3] Regenerate `docs/steps.md` from `stepDefs` so the committed reference carries the new row
+- [X] T022 [US3] Run `go test ./internal/steps/ -run 'TestStepDocs|TestStepMetadata|TestNoDirectStepRegistration' -v` and confirm all five drift tests pass with their assertions **UNMODIFIED** — needing to edit one means the design drifted into Option B and the plan is wrong, not the test (FR-012, SC-003)
+- [X] T023 [P] [US3] Run `go run ./cmd/mentat steps` and confirm the `Extend` group lists the new phrase with a non-blank summary and a valid example
 - [ ] T024 [US3] Document the seam in `docs/extending/comparator.md`: the `ExpectationParser` interface, a complete worked comparator implementing it, and the feature-file snippet that drives it (FR-014)
 
 **Checkpoint**: all three stories functional; the step is discoverable and documented.

@@ -124,6 +124,45 @@ func (mr *MockAggregateComparatorMockRecorder) Name() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Name", reflect.TypeOf((*MockAggregateComparator)(nil).Name))
 }
 
+// MockExpectationParser is a mock of ExpectationParser interface.
+type MockExpectationParser struct {
+	ctrl     *gomock.Controller
+	recorder *MockExpectationParserMockRecorder
+	isgomock struct{}
+}
+
+// MockExpectationParserMockRecorder is the mock recorder for MockExpectationParser.
+type MockExpectationParserMockRecorder struct {
+	mock *MockExpectationParser
+}
+
+// NewMockExpectationParser creates a new mock instance.
+func NewMockExpectationParser(ctrl *gomock.Controller) *MockExpectationParser {
+	mock := &MockExpectationParser{ctrl: ctrl}
+	mock.recorder = &MockExpectationParserMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockExpectationParser) EXPECT() *MockExpectationParserMockRecorder {
+	return m.recorder
+}
+
+// ParseExpectation mocks base method.
+func (m *MockExpectationParser) ParseExpectation(text string) (core.Expectation, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ParseExpectation", text)
+	ret0, _ := ret[0].(core.Expectation)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ParseExpectation indicates an expected call of ParseExpectation.
+func (mr *MockExpectationParserMockRecorder) ParseExpectation(text any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ParseExpectation", reflect.TypeOf((*MockExpectationParser)(nil).ParseExpectation), text)
+}
+
 // MockDriver is a mock of Driver interface.
 type MockDriver struct {
 	ctrl     *gomock.Controller

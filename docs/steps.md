@@ -363,6 +363,19 @@ Asserts the run matches a named shape pattern loaded from the expectations dir.
 Then the run matches shape "research-flow"
 ```
 
+### Extend
+
+#### `^the "([^"]+)" comparator is satisfied by:$`
+
+Runs a caller-registered comparator by name, passing the docstring to its own ExpectationParser.
+
+```gherkin
+Then the "revenue-shape" comparator is satisfied by:
+  """
+  {"min": 4, "currency": "USD"}
+  """
+```
+
 ## Grammar
 
 Beyond the per-step patterns above, several steps share a small cross-cutting
