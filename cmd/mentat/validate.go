@@ -28,8 +28,11 @@ func validateCmd(args []string, stdout io.Writer) (int, error) {
 	// wall of false unbound-step findings on a feature file that is actually valid.
 	fs.Usage = func() {
 		_, _ = fmt.Fprint(stdout, "usage: mentat validate [paths...] [--config FILE] [--format text|json]\n\n"+
-			"Statically checks feature files: step binding, target and shape references,\n"+
-			"CEL expressions and @runs tags. Drives no SUT and contacts no store.\n\n"+
+			"Statically checks feature files: step binding, step arguments, target and shape\n"+
+			"references, CEL expressions and @runs tags. Drives no SUT and contacts no store.\n\n"+
+			"A step carrying an argument its definition cannot receive is reported: the runner\n"+
+			"discards such an argument in silence, so the step would assert something you did\n"+
+			"not write. This can fail a suite that passed before the check existed.\n\n"+
 			"Checks BUILT-IN steps only. Comparator-contributed Gherkin phrases are scoped\n"+
 			"to the engine that registered them, and a compiled binary cannot reach a\n"+
 			"consumer's Go registrations, so a suite written in contributed phrases will\n"+

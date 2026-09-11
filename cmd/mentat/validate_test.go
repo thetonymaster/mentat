@@ -649,3 +649,38 @@ func TestValidateUsageStatesTheContributedPhraseLimit(t *testing.T) {
 		}
 	}
 }
+
+// TestValidateUsageListsTheChecksItPerforms guards the ENUMERATION in the usage text
+// rather than its mere existence.
+//
+// The usage line tells an author what `mentat validate` looks at, and convergence found
+// it had gone stale: the binary gained the step-argument check — a built-in step carrying
+// an argument its handler cannot receive — while the help still listed only the original
+// four. That omission is load-bearing, not cosmetic. The check is marked BREAKING
+// (authoring) in the CHANGELOG and fails suites that previously passed, so the first
+// place its victim looks is the text that did not mention it.
+//
+// Asserted per-check, so giving the binary a new finding class without documenting it
+// reddens here instead of shipping. `ambiguous-step` is deliberately NOT in this list:
+// the binary binds against built-in patterns only and no two of those are known to match
+// one sentence, so it is not a check this binary can report.
+func TestValidateUsageListsTheChecksItPerforms(t *testing.T) {
+	var buf bytes.Buffer
+	code, err := validateCmd([]string{"--help"}, &buf)
+	if err == nil && code == 0 {
+		t.Fatalf("validate --help returned success; want a usage exit\n%s", buf.String())
+	}
+	got := buf.String()
+	for _, want := range []string{
+		"step binding",
+		"step arguments",
+		"target",
+		"shape",
+		"CEL",
+		"@runs",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("validate --help does not name the %q check it performs\n%s", want, got)
+		}
+	}
+}
