@@ -40,14 +40,20 @@ built-in × built-in pairs apart from the rest so it can skip them (R6).
 
 ---
 
-## 2. `Verdict` — the decider's answer
+## 2. `Intersection` — the decider's answer
 
 ```go
-type Verdict struct {
+type Intersection struct {
     Intersects bool
     Witness    string // non-empty iff Intersects; a string both patterns match
 }
 ```
+
+**NOT `Verdict`, because that name is already taken in this package's scope.** `core.Verdict` is a
+comparator's pass/fail result, used at `internal/steps/steps.go:163` and published as
+`mentat.Verdict` (`mentat.go:141`) — and "verdict" is the word SC-005 itself uses for scenario
+outcomes. A `steps.Verdict{Intersects, Witness}` would compile while putting two unrelated
+`Verdict`s in one file's scope; cheap to avoid now, churn to fix later.
 
 **NOT NEGOTIABLE** (FR-011): `Intersects == true` requires a `Witness`, and the witness MUST be
 re-verified against both compiled patterns before it is reported. A positive verdict proves
@@ -60,17 +66,17 @@ false` means "this code found no shared string", which is why US3 exists (D4, R3
 - `Witness == "" && Intersects == true` is an invariant violation — the empty string is a legal
   witness only when both patterns match the empty string, so the check is on the verification, not
   on emptiness. Verify by `MatchString` on both, never by inspecting the witness.
-- A `Verdict` is meaningless without its error being nil. See §3.
+- An `Intersection` is meaningless without its error being nil. See §3.
 
 ---
 
 ## 3. Decider errors — the refusal path
 
 ```go
-func Intersects(a, b string) (Verdict, error)
+func Intersects(a, b string) (Intersection, error)
 ```
 
-**NOT NEGOTIABLE** (FR-012, Constitution IV): returning `Verdict{Intersects: false}` for a pattern
+**NOT NEGOTIABLE** (FR-012, Constitution IV): returning `Intersection{Intersects: false}` for a pattern
 the decider cannot model is PROHIBITED. Errors, wrapped with `%w`, naming the concrete pattern and
 the concrete construct:
 

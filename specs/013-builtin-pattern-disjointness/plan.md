@@ -82,6 +82,7 @@ update.
 ```text
 specs/013-builtin-pattern-disjointness/
 ├── plan.md              # This file
+├── baseline.txt         # Setup output (T001–T003); SC-005/SC-006 diff against it
 ├── spec.md              # Feature specification (amended by /speckit-clarify and by R3)
 ├── research.md          # Phase 0 output — R1..R8
 ├── data-model.md        # Phase 1 output
@@ -182,6 +183,14 @@ sharpened:
   deterministic table is the gate and the fuzz target is the extension, because `go test` runs a
   fuzz target's seed corpus only. A differential check that depended on fuzzing having run would
   be green in CI while never having sampled anything.
+
+  **On the L3 meta-test: not engaged, rather than satisfied by equivalence.** An earlier draft of
+  this section called the mutation rehearsals "the L3-equivalent proof". That overstates it. 013
+  adds no Gherkin behaviour, so the L3 mandate (drive bad scenarios, assert Mentat goes RED) has
+  nothing new to drive — and the run-path half is *already* covered by
+  `TestGenuinelyOverlappingPhrasesFailLoudly` (`custom_phrase_isolation_test.go:302`, 012's
+  T038/SC-011). Saying "not engaged, and here is the existing test that covers the adjacent
+  behaviour" is stronger and more checkable than claiming an equivalence.
 
 One thing the design deliberately leaves asymmetric, recorded so review does not read it as an
 oversight: built-in overlap fails the build, contributed overlap is reported (D5, FR-014). The

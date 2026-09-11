@@ -6,7 +6,7 @@
 
 ```go
 // Intersects decides whether any string matches both patterns.
-func Intersects(a, b string) (Verdict, error)
+func Intersects(a, b string) (Intersection, error)
 ```
 
 Internal to `internal/steps` (R5). Not aliased on the facade, not a comparator seam, not a
@@ -50,11 +50,17 @@ built-in pairs correctly and reported `^(?i)abc$` and `^abc$` as **disjoint** wh
 | Caller | Pairs decided | On overlap |
 |---|---|---|
 | Built-in gate (test, `make ci`) | all pairs over `stepDefs` — 780 at 40 patterns | **FAIL the build**, naming both patterns and the witness (FR-013) |
-| `mentat.Validate` (`run.go`, after `EngineStepChecks`) | only pairs touching ≥1 **contributed** pattern (R6) | emit one `pattern-overlap` finding per pair; **composition still succeeds** (FR-014, D5) |
+| An **unexported** helper inside `EngineStepChecks` (`internal/steps/phrase.go:611`), reaching `mentat.Validate` as a return value | only pairs touching ≥1 **contributed** pattern (R6) | emit one `pattern-overlap` finding per pair; **`mentat.Validate` still returns a nil error** (FR-014, D5) |
 
 **Not a caller: the scenario-init fail-fast path** (FR-017). This is structural, not disciplinary —
 the pattern half of the check set has no scenario-init counterpart, because godog owns runtime
 matching and `registerSteps` hands it patterns directly. See R6.
+
+**And "structural" has to be earned, not asserted.** An *exported* `PatternOverlapFindings` in
+`internal/steps` would be callable from `steps.go:101`, so FR-017 would really mean "`run.go`
+happens to be its only caller today" — discipline wearing the word structural, in a feature whose
+subject is claims resting on unexamined evidence. Hence: unexported helper, invoked from the one
+function scenario init does not call, findings surfaced as a return value.
 
 **Not a caller: the `mentat validate` binary.** It builds no engine, so it cannot see contributed
 phrases (012's D7), and built-in × built-in is the CI gate's job. Unchanged by this feature.

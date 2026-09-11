@@ -47,9 +47,12 @@ and four claims lean on it:
    meaningful if the built-in set is itself unambiguous.
 2. **R10's "latent, not live" finding** — that godog's ambiguity branch is unreachable through the
    public surface at `0f9dcea`.
-3. **`ambiguous-step` is unreachable from the `mentat validate` binary** — stated in
-   `specs/012-.../contracts/validate-surface.md` §4, `CHANGELOG.md`, and the `StepBindingFindings`
-   doc comment.
+3. **`ambiguous-step` is unreachable from the `mentat validate` binary** — stated at
+   `specs/012-.../contracts/validate-surface.md:150` and at `CLAUDE.md:322` and `CLAUDE.md:333`.
+   (An earlier draft of this list named `CHANGELOG.md` and the `StepBindingFindings` doc comment.
+   **Both were wrong** — grep finds the hedge in neither; `precheck.go:110`'s only "unreachable" is
+   about `MustCompile` invariants. Corrected 2026-09-11 by measurement, which is the third time a
+   provenance claim in this spec has had to be checked rather than trusted.)
 4. **`StepArguments.matchBuiltin`** (`internal/steps/stepargs.go:310`) returns the **first**
    matching built-in as though it were the only one.
 
@@ -211,6 +214,13 @@ dependency is still there. This feature closes the dependency rather than re-wor
   there is a design bug. We do not own consumers' comparators, and overlap between two of them is a
   *potential* failure that becomes real only for a sentence inside the overlap — so it is surfaced
   where the author can act on it, without forbidding a working setup. See Clarifications.
+
+  **The load-bearing half of that argument is already pinned, so cite it rather than assert it:**
+  `TestGenuinelyOverlappingPhrasesFailLoudly` (`custom_phrase_isolation_test.go:302`, 012's
+  T038/SC-011) is the existing proof that a sentence inside the overlap fails loudly at run time.
+  Its `overlapComparator` fixture (`:270`) is also exactly what this feature's contributed-overlap
+  tests need. D5 asserted this in four places and cited it in none — which, in a feature about
+  claims resting on unexamined evidence, was worth fixing.
 
 ---
 
@@ -399,9 +409,10 @@ anything.
   `generated < 500` sanity floor, and MUST keep failing loudly on any sentence matching two
   built-ins. Its recorded role becomes an independent cross-check of the decider (D3), not the
   evidence for disjointness.
-- **FR-006**: A breach of disjointness introduced by a future built-in MUST redden a gate that
-  **decides** the property over the pattern pair. Neither documentation nor a sentence-corpus check
-  alone satisfies this — a corpus can only miss what it does not contain.
+- **FR-006**: *Folded into FR-013 — it stated the same obligation.* Its surviving clause is kept
+  there as rationale: neither documentation nor a sentence-corpus check alone satisfies the gate
+  requirement, because a corpus can only miss what it does not contain. Retained as a numbered
+  stub so FR numbering stays stable across the spec's own cross-references.
 - **FR-007**: Any new guard added by this feature MUST be rehearsed against a deliberately
   introduced collision, and the rehearsal — including confirmation that the mutation actually
   landed — MUST be recorded beside the guard.
@@ -416,7 +427,9 @@ anything.
   error naming the pattern and the construct. Reporting "disjoint" for such a pattern is
   PROHIBITED: it is the silent fallback the gate exists to remove (D2a, Constitution IV).
 - **FR-013**: The built-in pattern set MUST be decided pairwise by an automated gate, which fails
-  on any non-empty intersection and names both patterns and the witness.
+  on any non-empty intersection and names both patterns and the witness. A breach introduced by a
+  future built-in MUST redden this gate. **Neither documentation nor a sentence-corpus check alone
+  satisfies it** — a corpus can only miss what it does not contain (absorbed from FR-006).
 - **FR-014**: Contributed patterns MUST be decided in **`EngineStepChecks`**
   (`internal/steps/phrase.go`), beside `stepPatternsFor`, and an overlap — with a built-in or with
   another contributed phrase — MUST be surfaced as a finding carrying its witness. That path MUST
@@ -425,10 +438,17 @@ anything.
   **Named as a function, not as "at composition", because "composition" denotes three different
   points in this repo and two of them are wrong.** An earlier draft of this FR said
   `resolvePhrases`, which has **three** callers — `steps.go:101` (**scenario init, the run path**),
-  `phrase.go:519` (`EngineStepDocs`) and `phrase.go:612` (`EngineStepChecks`). Implementing it
+  `phrase.go:518` (`EngineStepDocs`) and `phrase.go:611` (`EngineStepChecks`). Implementing it
   there would put a findings path on the run path, which FR-017 prohibits. `stepPatternsFor`
   (`phrase.go:565`) has exactly **one** caller, inside `EngineStepChecks` — which is why FR-017 is
   satisfied by location rather than by discipline (research.md R6).
+
+  **And the helper MUST be unexported, with the findings returned from `EngineStepChecks`.** An
+  exported `PatternOverlapFindings` in `internal/steps` would be callable from `steps.go:101` —
+  so FR-017 would rest on "`run.go` happens to be its only caller today", which is discipline
+  wearing the word structural. Unexported, invoked from inside the one function scenario init does
+  not call, and surfaced to `mentat.Validate` as a return value: then the run path cannot reach
+  these findings even by a future mistake, which is the whole claim R6 makes.
 
   Not at `engine.Build` either: `internal/steps` imports `internal/engine`, so the reverse is a
   cycle and a findings-producing check cannot live in the engine. Same constraint 012 recorded when
@@ -491,8 +511,14 @@ anything.
   Prototype baseline, 2026-09-11: 780 pairs, 0 intersecting, max 74 product states, 0.36s.
 - **SC-008**: Each mutation of the decider named in US3's Independent Test reddens at least one
   test, with each mutation confirmed to have landed before its red is trusted.
-- **SC-009**: Given two overlapping contributed phrases, composition **succeeds** and exactly one
-  finding reports the overlap with a verified witness (FR-014).
+- **SC-009**: Given two overlapping contributed phrases, **`mentat.Validate` returns a nil error**
+  and exactly one `pattern-overlap` finding with a verified witness, positioned inside the sorted
+  finding list (FR-014).
+
+  Not "composition succeeds": FR-014 declared that word ambiguous between three functions, and
+  worse, the check runs at Validate time — so `engine.Build` never sees the overlap and
+  "composition succeeds" would be **vacuously true**, measuring nothing. A success criterion that
+  cannot fail is the defect this feature exists to remove.
 - **SC-010**: No pattern containing an unmodelled construct is ever reported disjoint; each yields
   an error naming the pattern and the construct (FR-012).
 - **SC-011**: With two overlapping contributed phrases registered, a suite whose steps fall outside
