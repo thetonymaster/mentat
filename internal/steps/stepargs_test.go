@@ -404,3 +404,189 @@ func TestCheckBuiltinArityExplainsEachDirectionDifferently(t *testing.T) {
 		})
 	}
 }
+
+// TestStepArgumentDefersWhenTwoBuiltinsMatch is US1 / FR-002 for the built-in half.
+//
+// matchBuiltin returned the FIRST matching row as though it were the only one, so a
+// sentence two built-ins both match was diagnosed against whichever registered first.
+// That message is not merely misdirecting, it is false: under Strict godog binds
+// NEITHER definition and reports every matching expression at match time, so the step
+// never runs and no argument of it is ever read.
+//
+// # Both rows must produce a diagnosis, and the first version of this test got that wrong
+//
+// Mutation rehearsal for SC-002, run twice. The mutation removes BOTH halves of the
+// count-based deferral (the `n != 1` guard in stepProblem and the one in
+// matchingDefinitions) and was confirmed present by diff each time.
+//
+// FIRST ATTEMPT: mutation confirmed landed, and both tests still PASSED. The cause was
+// in the test, not the guard. Row B declared `want: "docstring"` and the step carried a
+// docstring, so when the mutated matchingDefinitions selected the LAST match — its loop
+// overwrites b on every hit — the selected row wanted exactly what the step had and
+// nothing was reported. The test therefore caught FIRST-match resolution only, while
+// claiming to catch positional resolution.
+//
+// SECOND ATTEMPT: with row B changed to `want: "data table"`, EVERY candidate produces a
+// diagnosis, so any positional pick reports something and only a deferral returns "".
+// Both tests then went RED, and green again on restore.
+//
+// The lesson is the one this whole feature is about: a guard's coverage is a property to
+// measure, not to infer. "The mutation didn't fire" and "the guard is real" are
+// indistinguishable from a green run — and here a third case hid behind them, "the
+// mutation fired and the test was too weak to notice".
+func TestStepArgumentDefersWhenTwoBuiltinsMatch(t *testing.T) {
+	t.Parallel()
+
+	reA := regexp.MustCompile(overlappingPair[0])
+	reB := regexp.MustCompile(overlappingPair[1])
+
+	// Fixture sanity: if the witness stopped matching both, this test would pass for
+	// the wrong reason — one pattern matching is exactly the case that SHOULD diagnose.
+	if !reA.MatchString(overlappingWitness) || !reB.MatchString(overlappingWitness) {
+		t.Fatalf("fixture broken: %q must match BOTH %q and %q",
+			overlappingWitness, overlappingPair[0], overlappingPair[1])
+	}
+
+	sa := StepArguments{builtins: []builtinArg{
+		{re: reA, pattern: overlappingPair[0], want: ""},
+		{re: reB, pattern: overlappingPair[1], want: "data table"},
+	}}
+	st := &messages.PickleStep{
+		Text:     overlappingWitness,
+		Argument: &messages.PickleStepArgument{DocString: &messages.PickleDocString{Content: "{}"}},
+	}
+
+	if got := sa.stepProblem(st); got != "" {
+		t.Errorf("two built-in patterns match %q, so under Strict neither binds and the\n"+
+			"argument check must defer to the ambiguity report; it instead diagnosed:\n  %s",
+			overlappingWitness, got)
+	}
+}
+
+// TestStepArgumentDefersWhenTwoPhrasesMatch is US1 / FR-002 for the contributed half.
+//
+// The identical defect, one function over: matchPhrase also returned its first match.
+// It is arguably worse there than in matchBuiltin — nothing ever claimed contributed
+// phrases were pairwise disjoint, and V3/V4 reject only IDENTICAL pattern strings, so
+// two distinct-but-overlapping phrases coexist legally. Positional resolution resting
+// on no measurement at all.
+//
+// No built-ins are registered here, so only the phrases can match: the deferral must
+// come from the match COUNT, not from "one of each source matched".
+func TestStepArgumentDefersWhenTwoPhrasesMatch(t *testing.T) {
+	t.Parallel()
+
+	const (
+		patA    = `^the widget is "([^"]*)"$`
+		patB    = `^the widget is "gold"$`
+		witness = `the widget is "gold"`
+	)
+	reA, reB := regexp.MustCompile(patA), regexp.MustCompile(patB)
+	if !reA.MatchString(witness) || !reB.MatchString(witness) {
+		t.Fatalf("fixture broken: %q must match BOTH %q and %q", witness, patA, patB)
+	}
+
+	// Different wantsDoc, so first-match resolution is observable: phrase A takes no
+	// docstring and would be diagnosed against; phrase B declares one.
+	sa := StepArguments{phrases: []contributedPhrase{
+		{comparator: "widgets", phrase: core.ContributedPhrase{Pattern: patA}, re: reA, arity: 1},
+		{comparator: "widgets", phrase: core.ContributedPhrase{Pattern: patB}, re: reB, arity: 0},
+	}}
+	st := &messages.PickleStep{
+		Text:     witness,
+		Argument: &messages.PickleStepArgument{DocString: &messages.PickleDocString{Content: "{}"}},
+	}
+
+	if got := sa.stepProblem(st); got != "" {
+		t.Errorf("two contributed phrases match %q, so under Strict neither binds and the\n"+
+			"argument check must defer; it instead diagnosed:\n  %s", witness, got)
+	}
+}
+
+// TestStepArgumentDefersWhenBuiltinAndPhraseMatch is US1's T007: a REGRESSION GUARD,
+// not a red test. It passes before the count-based deferral and must keep passing.
+//
+// It pins the one multiplicity case the pre-013 code already handled — and handled for
+// exactly the right reason, which is why 013 generalises that reason rather than adding
+// a second one beside it. The pair is the example the production comment already cites:
+// V4 rejects only identical pattern strings, so a contributed `(.+)` coexists with the
+// built-in `([^"]*)` and both match the same sentence.
+func TestStepArgumentDefersWhenBuiltinAndPhraseMatch(t *testing.T) {
+	t.Parallel()
+
+	const (
+		builtinPat = `^the result contains "([^"]*)"$`
+		phrasePat  = `^the result contains "(.+)"$`
+		witness    = `the result contains "revenue"`
+	)
+	reB, reP := regexp.MustCompile(builtinPat), regexp.MustCompile(phrasePat)
+	if !reB.MatchString(witness) || !reP.MatchString(witness) {
+		t.Fatalf("fixture broken: %q must match BOTH %q and %q", witness, builtinPat, phrasePat)
+	}
+
+	sa := StepArguments{
+		builtins: []builtinArg{{re: reB, pattern: builtinPat, want: ""}},
+		phrases: []contributedPhrase{
+			{comparator: "results", phrase: core.ContributedPhrase{Pattern: phrasePat}, re: reP, wantsDoc: true},
+		},
+	}
+	st := &messages.PickleStep{
+		Text:     witness,
+		Argument: &messages.PickleStepArgument{DocString: &messages.PickleDocString{Content: "{}"}},
+	}
+
+	if got := sa.stepProblem(st); got != "" {
+		t.Errorf("a built-in and a contributed phrase both match %q; this already deferred\n"+
+			"before 013 and must continue to. Got:\n  %s", witness, got)
+	}
+}
+
+// TestStepArgumentSingleMatchIsUnchanged is US1's T008 and pins FR-003 / SC-005: this
+// feature ADDS a branch for multiplicity, it does not alter existing diagnosis.
+//
+// Full string equality, not substring containment. SC-005 promises byte-identical
+// findings for every existing suite, and a substring check would pass while the message
+// drifted around the fragment it looked for.
+func TestStepArgumentSingleMatchIsUnchanged(t *testing.T) {
+	t.Parallel()
+
+	const (
+		builtinPat = `^the result contains "([^"]*)"$`
+		phrasePat  = `^the widget is "([^"]*)"$`
+	)
+	doc := &messages.PickleStepArgument{DocString: &messages.PickleDocString{Content: "{}"}}
+
+	tests := []struct {
+		name string
+		sa   StepArguments
+		text string
+		want string
+	}{
+		{
+			name: "exactly one built-in matches",
+			sa: StepArguments{builtins: []builtinArg{
+				{re: regexp.MustCompile(builtinPat), pattern: builtinPat, want: ""},
+			}},
+			text: `the result contains "revenue"`,
+			want: `step "the result contains \"revenue\"" carries a docstring, but the built-in step "^the result contains \"([^\"]*)\"$" cannot receive one — it would be silently discarded and the step would report a verdict that never read it`,
+		},
+		{
+			name: "exactly one contributed phrase matches",
+			sa: StepArguments{phrases: []contributedPhrase{
+				{comparator: "widgets", phrase: core.ContributedPhrase{Pattern: phrasePat}, re: regexp.MustCompile(phrasePat), arity: 1},
+			}},
+			text: `the widget is "gold"`,
+			want: `step "the widget is \"gold\"" carries a docstring, but the phrase "^the widget is \"([^\"]*)\"$" contributed by comparator "widgets" cannot receive one — it would be silently discarded and the step would report a verdict that never read it`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := tt.sa.stepProblem(&messages.PickleStep{Text: tt.text, Argument: doc})
+			if got != tt.want {
+				t.Errorf("single-match diagnosis changed.\n got: %s\nwant: %s", got, tt.want)
+			}
+		})
+	}
+}

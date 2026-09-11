@@ -34,9 +34,9 @@ Single Go module at repository root. Feature code lives in `internal/steps/`; on
 
 **Purpose**: Capture the "before" state that two success criteria compare against.
 
-- [ ] T001 Record the pre-change baseline into `specs/013-builtin-pattern-disjointness/baseline.txt`: full `go test ./... 2>&1` output, `go tool cover -func=cover.out` per-package figures, and `go.mod`'s require block — SC-005 and SC-006 are diffs against this, and it cannot be reconstructed after the first edit
-- [ ] T002 [P] Confirm the starting point is clean in the worktree: `gofmt -l .` empty, `go vet ./...` clean, `golangci-lint run ./...` clean, `make ci` green — record the result in `baseline.txt`
-- [ ] T003 [P] Confirm the e2e lane is green BEFORE any change: `make harness-up && go test -tags e2e ./... && make harness-down`, appending to `baseline.txt` — research.md R8: `make ci` never compiles this lane, so a post-change failure is otherwise unattributable
+- [X] T001 Record the pre-change baseline into `specs/013-builtin-pattern-disjointness/baseline.txt`: full `go test ./... 2>&1` output, `go tool cover -func=cover.out` per-package figures, and `go.mod`'s require block — SC-005 and SC-006 are diffs against this, and it cannot be reconstructed after the first edit
+- [X] T002 [P] Confirm the starting point is clean in the worktree: `gofmt -l .` empty, `go vet ./...` clean, `golangci-lint run ./...` clean, `make ci` green — record the result in `baseline.txt`
+- [X] T003 [P] Confirm the e2e lane is green BEFORE any change: `make harness-up && go test -tags e2e ./... && make harness-down`, appending to `baseline.txt` — research.md R8: `make ci` never compiles this lane, so a post-change failure is otherwise unattributable
 
 **Checkpoint**: The "before" side of SC-005, SC-006 and SC-011 exists on disk.
 
@@ -48,7 +48,7 @@ Single Go module at repository root. Feature code lives in `internal/steps/`; on
 fixture. US1 and US2 share no production code — but they share a **Go package**, and that is what
 makes this phase blocking rather than thin.
 
-- [ ] T004 In `internal/steps/disjoint.go`, land a COMPILING stub: the `Intersection` type (NOT `Verdict` — `core.Verdict` is already in this package's scope at `steps.go:163`, data-model.md §2) and `func Intersects(a, b string) (Intersection, error)` returning a `fmt.Errorf("intersection decider: not implemented")`. Then add the shared fixture — a deliberately overlapping pattern pair (`^the result contains "([^"]*)"$` vs `^the result contains "revenue"$`, the exact-vs-general case from spec.md Edge Cases) plus a known-disjoint pair — in a NEUTRAL file, `internal/steps/patternfixtures_test.go`, not in either story's test file
+- [X] T004 In `internal/steps/disjoint.go`, land a COMPILING stub: the `Intersection` type (NOT `Verdict` — `core.Verdict` is already in this package's scope at `steps.go:163`, data-model.md §2) and `func Intersects(a, b string) (Intersection, error)` returning a `fmt.Errorf("intersection decider: not implemented")`. Then add the shared fixture — a deliberately overlapping pattern pair (`^the result contains "([^"]*)"$` vs `^the result contains "revenue"$`, the exact-vs-general case from spec.md Edge Cases) plus a known-disjoint pair — in a NEUTRAL file, `internal/steps/patternfixtures_test.go`, not in either story's test file
 
 > **Why the stub is mandatory and not a shortcut.** `internal/steps` is ONE Go package. A test
 > referencing an undeclared `Intersects` is a **package-wide compile error**, so
@@ -76,23 +76,23 @@ against the first. Delivers the Constitution IV guarantee with no other story im
 
 > Write these FIRST and observe each one FAIL. T007 is the exception and is labelled as such.
 
-- [ ] T005 [US1] Test in `internal/steps/stepargs_test.go`: a sentence matched by TWO built-in patterns makes the step-argument check defer (zero argument diagnoses) rather than diagnose against the first — MUST FAIL against current `matchBuiltin`
-- [ ] T006 [US1] Test in `internal/steps/stepargs_test.go`: a sentence matched by TWO contributed phrases, with no built-in matching, defers for the identical reason — MUST FAIL against current `matchPhrase`
-- [ ] T007 [US1] Characterization test in `internal/steps/stepargs_test.go`: a sentence matched by one built-in AND one contributed phrase still defers — this one PASSES before the change and must keep passing; it pins the behaviour the new count branch generalises, so label it a regression guard, not a red test
-- [ ] T008 [US1] Test in `internal/steps/stepargs_test.go`: exactly one matching pattern (each source, separately) produces a diagnosis byte-identical to the pre-change message — MUST PASS before and after (FR-003, SC-005)
-- [ ] T009 [P] [US1] Test in `internal/steps/precheck_test.go`: each of the two colliding suites from T005/T006 yields exactly ONE `ambiguous-step` finding naming every matching pattern (SC-001)
+- [X] T005 [US1] Test in `internal/steps/stepargs_test.go`: a sentence matched by TWO built-in patterns makes the step-argument check defer (zero argument diagnoses) rather than diagnose against the first — MUST FAIL against current `matchBuiltin`
+- [X] T006 [US1] Test in `internal/steps/stepargs_test.go`: a sentence matched by TWO contributed phrases, with no built-in matching, defers for the identical reason — MUST FAIL against current `matchPhrase`
+- [X] T007 [US1] Characterization test in `internal/steps/stepargs_test.go`: a sentence matched by one built-in AND one contributed phrase still defers — this one PASSES before the change and must keep passing; it pins the behaviour the new count branch generalises, so label it a regression guard, not a red test
+- [X] T008 [US1] Test in `internal/steps/stepargs_test.go`: exactly one matching pattern (each source, separately) produces a diagnosis byte-identical to the pre-change message — MUST PASS before and after (FR-003, SC-005)
+- [X] T009 [P] [US1] Test in `internal/steps/precheck_test.go`: each of the two colliding suites from T005/T006 yields exactly ONE `ambiguous-step` finding naming every matching pattern (SC-001)
 
 ### Implementation for User Story 1
 
-- [ ] T010 [US1] Change `matchBuiltin` in `internal/steps/stepargs.go` to report every matching built-in (count plus one representative), not the first
-- [ ] T011 [US1] Change `matchPhrase` in `internal/steps/stepargs.go` to report every matching contributed phrase, not the first
-- [ ] T012 [US1] Rewrite `stepProblem` in `internal/steps/stepargs.go` to branch on the TOTAL match count across both sources — 0 → no finding, 1 → diagnose, >1 → defer — with no per-source case analysis (FR-002; a per-source switch is how a third source added later reintroduces the positional path by omission)
-- [ ] T013 [US1] Replace the deferral comment in `internal/steps/stepargs.go` with the single count-based reason (under `Strict` neither definition binds), deleting the two-source framing that no longer describes the code (FR-002)
+- [X] T010 [US1] Change `matchBuiltin` in `internal/steps/stepargs.go` to report every matching built-in (count plus one representative), not the first
+- [X] T011 [US1] Change `matchPhrase` in `internal/steps/stepargs.go` to report every matching contributed phrase, not the first
+- [X] T012 [US1] Rewrite `stepProblem` in `internal/steps/stepargs.go` to branch on the TOTAL match count across both sources — 0 → no finding, 1 → diagnose, >1 → defer — with no per-source case analysis (FR-002; a per-source switch is how a third source added later reintroduces the positional path by omission)
+- [X] T013 [US1] Replace the deferral comment in `internal/steps/stepargs.go` with the single count-based reason (under `Strict` neither definition binds), deleting the two-source framing that no longer describes the code (FR-002)
 
 ### Verification for User Story 1
 
-- [ ] T014 [US1] Mutation rehearsal for SC-002: remove the `>1` deferral, CONFIRM THE EDIT IS PRESENT in `internal/steps/stepargs.go`, then run `go test ./internal/steps/` and confirm RED for BOTH the built-in and the contributed combination; record the rehearsal and the mutation-landed confirmation in `stepargs_test.go` — "the mutation didn't fire" and "the guard is real" are indistinguishable from test output alone
-- [ ] T015 [US1] Confirm `internal/steps` is at or above the 80% coverage floor (FR-009) via `go test ./internal/steps/ -coverprofile=cover.out && go tool cover -func=cover.out`
+- [X] T014 [US1] Mutation rehearsal for SC-002: remove the `>1` deferral, CONFIRM THE EDIT IS PRESENT in `internal/steps/stepargs.go`, then run `go test ./internal/steps/` and confirm RED for BOTH the built-in and the contributed combination; record the rehearsal and the mutation-landed confirmation in `stepargs_test.go` — "the mutation didn't fire" and "the guard is real" are indistinguishable from test output alone
+- [X] T015 [US1] Confirm `internal/steps` is at or above the 80% coverage floor (FR-009) via `go test ./internal/steps/ -coverprofile=cover.out && go tool cover -func=cover.out`
 
 **Checkpoint**: US1 is complete and shippable alone. The Constitution IV exposure is closed.
 
