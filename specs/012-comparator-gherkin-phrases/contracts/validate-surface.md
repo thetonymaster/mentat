@@ -104,6 +104,30 @@ scope by D7/FR-011a, and the distinction is load-bearing rather than pedantic.
 > same sentence a reader is told to write in `phrases.md` fails the binary's check. 013 is
 > CLI/`mentatctl` UX and inherits this contract, so it is corrected here rather than footnoted.
 
+> **Extended at convergence (Phase 10 / T090, measured 2026-09-11).** The agreement above was
+> one-directional in a second way, and this closes it. A step matching BOTH a built-in and a
+> contributed phrase was reported CLEAN by `mentat.Validate` while `Run` fails it as ambiguous
+> under `Strict` — a validator certifying a suite the runner refuses, which is the drift D7
+> exists to remove.
+>
+> `StepBindingFindings` now classifies every step by how many patterns in the set match it —
+> `0` → `unbound-step`, `1` → clean, `>1` → a new **`ambiguous-step`** finding naming every
+> match. One function answers all three because it is one question; keeping ambiguity in a
+> separate check is how the two would drift apart again.
+>
+> This is godog's own predicate, not an approximation of it. Measured against the pinned
+> `godog v0.15.1`: `matchStepTextAndType` (`suite.go:511-556`) returns `ErrAmbiguous` under
+> `Strict` when more than one registered expression matches, and its `keywordMatches` filter is
+> inert for every Mentat step because `ScenarioContext.Step` registers with `formatters.None`
+> (`test_context.go:255-257`) and `registerSteps` uses `reg.Step` for both halves
+> (`metadata.go:107,110`). `SuiteCheck.Patterns` is that same set in the same registration
+> order, so the matches are even listed in the same order.
+>
+> It decides **nothing** about regex overlap in general, which neither Mentat nor the runner
+> computes. Both classify per sentence, so a collision on a sentence the corpus does not
+> contain is reported by nobody — the limit is stated rather than left for a reader to assume
+> the stronger guarantee.
+
 Consumers reach SC-005's guarantee through `mentat.Validate`, which builds their engine — that
 is the whole reason D7 published it.
 
@@ -120,5 +144,16 @@ taken: it would have weakened the gate for everyone to accommodate a case the bi
   validate's lightweight `checker` (`precheck.go:64-70`); comparators still never see a store or
   driver (Constitution I).
 - `mentat validate`'s exit-code semantics and its other finding classes (`bad-cel`,
-  `unknown-target`, `unknown-shape`, `bad-runs-tag`). Convergence Phase 9 ADDED one,
-  `step-argument`, for built-in rows only — see the note in §2.
+  `unknown-target`, `unknown-shape`, `bad-runs-tag`). Convergence ADDED two. Phase 9 added
+  `step-argument`, for built-in rows only — see the note in §2. Phase 10 added
+  `ambiguous-step` — see the note in §3. It reaches suites through `mentat.Validate`. From
+  the binary it is unreachable **as measured**, not structurally: the binary's pattern set is
+  the built-ins, and `TestBuiltinStepPatternsArePairwiseDisjoint` finds no sentence matching
+  two of them — but it substitutes nine fixed fillers into captures, so two built-ins
+  overlapping only on a string no filler produces would pass it. "Disjoint" here means "no
+  generated sentence matches two", which is evidence, not proof, and the distinction is the
+  kind this feature has been wrong about before.
+
+  That is also why the class is kept in the shared `SuiteCheck` walk rather than gated to the
+  library path: it costs nothing there, and it becomes a live witness over real corpora for
+  exactly the overlap the generated-sentence test could miss.

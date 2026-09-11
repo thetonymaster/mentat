@@ -119,26 +119,73 @@ func BuiltinStepPatterns() StepPatterns {
 	return out
 }
 
-// StepBindingFindings reports every pickle step whose text matches no pattern in
-// pats — the static equivalent of godog's runtime "undefined step".
+// StepBindingFindings classifies every pickle step by HOW MANY patterns in pats
+// match its text. The count has exactly three answers and each gets one:
+//
+//	0  -> "unbound-step", the static equivalent of godog's runtime "undefined step"
+//	1  -> no finding; that definition is what binds
+//	>1 -> "ambiguous-step", naming every matching pattern
+//
+// One function answers all three because it is one question. They were two checks —
+// binding here, ambiguity nowhere — and the gap between them was a validator that
+// reported CLEAN on a suite the runner refuses.
+//
+// # The >1 case is godog's own predicate, not an approximation of it
+//
+// Measured against the pinned godog v0.15.1:
+//
+//   - matchStepTextAndType (godog suite.go:511-556) loops every registered definition,
+//     tests h.Expr.FindStringSubmatch(text), collects each matching h.Expr.String()
+//     into matchingExpressions, and under Strict returns ErrAmbiguous when
+//     len(matchingExpressions) > 1. mentat.Run sets Strict (run.go).
+//   - the keywordMatches filter inside that loop is INERT for every Mentat step:
+//     ScenarioContext.Step registers with formatters.None (godog test_context.go:255-257),
+//     which keywordMatches short-circuits to true, and registerSteps (metadata.go:107,110)
+//     uses reg.Step for both built-ins and contributed phrases.
+//
+// So godog's predicate reduces to "how many registered patterns match this sentence",
+// and SuiteCheck.Patterns is that same set in the same registration order
+// (stepPatternsFor, phrase.go: built-ins then contributed). Same predicate, same
+// inputs, same order — which is why the patterns are listed in pattern-set order here
+// too, lining up with godog's own matchingExpressions output.
+//
+// This decides nothing about regex OVERLAP in general, which mentat does not compute.
+// It is per-sentence multi-match, scoped to the sentences the corpus actually contains:
+// two patterns that could collide but that no step in the corpus reaches are not
+// reported, and neither runner nor validator has an opinion about them.
 //
 // pats is a parameter, not package state, so the answer is always about the engine
 // the caller means. See StepPatterns.
 func StepBindingFindings(pats StepPatterns, steps []*messages.PickleStep, src Source) []Finding {
 	var out []Finding
 	for _, st := range steps {
-		bound := false
+		var matched []string
 		for _, re := range pats {
 			if re.MatchString(st.Text) {
-				bound = true
-				break
+				matched = append(matched, re.String())
 			}
 		}
-		if !bound {
+		switch {
+		case len(matched) == 0:
 			out = append(out, stepFinding(src, st, "unbound-step", fmt.Sprintf("no step matches %q", st.Text)))
+		case len(matched) > 1:
+			out = append(out, stepFinding(src, st, "ambiguous-step", ambiguousStepMessage(st.Text, matched)))
 		}
 	}
 	return out
+}
+
+// ambiguousStepMessage renders one line: findings print one per line
+// (cmd/mentat/validate.go renderText), so a multi-line message would break the
+// format. Patterns are quoted with strconv.Quote (what %q does for a string), matching
+// how argumentProblem quotes step definitions.
+func ambiguousStepMessage(text string, matched []string) string {
+	quoted := make([]string, 0, len(matched))
+	for _, p := range matched {
+		quoted = append(quoted, strconv.Quote(p))
+	}
+	return fmt.Sprintf("step %q matches %d step definitions and the runner refuses it as ambiguous: %s",
+		text, len(matched), strings.Join(quoted, ", "))
 }
 
 // TargetFindings reports every `the (agent|service) target "X"` step whose X is

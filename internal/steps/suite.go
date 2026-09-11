@@ -60,12 +60,18 @@ type SuiteCheck struct {
 	// corpus, including ones a run's tag expression would skip, so an argument defect
 	// cannot hide behind a tag filter until the day someone runs that tag.
 	//
-	// That breadth claim is about TAGS and nothing more. There is one case where Validate
-	// is the more permissive of the two: a step matching both a built-in and a contributed
-	// phrase is skipped here (see StepArguments.stepProblem) and reported CLEAN, while Run
-	// fails it as ambiguous under Strict. Nothing static detects pattern overlap today —
-	// closing it means an `ambiguous-step` finding class over Patterns, which is its own
-	// change.
+	// That breadth claim is about TAGS and nothing more. A step matching both a built-in
+	// and a contributed phrase is still skipped by THIS check, and correctly (see
+	// StepArguments.stepProblem: under Strict neither definition binds, so naming an
+	// argument the step never reads would send the author somewhere the defect is not).
+	// It is no longer skipped by the SuiteCheck: StepBindingFindings classifies it as
+	// `ambiguous-step` over Patterns, which is the finding Run's own ambiguity failure
+	// corresponds to. The two answer the same way about the same suite.
+	//
+	// What neither answers is regex OVERLAP in the abstract — mentat does not compute it,
+	// and the runner does not either. Both classify per sentence, so two patterns that
+	// could collide on a sentence no scenario in the corpus contains are reported by
+	// nobody, and nothing here should be read as claiming otherwise.
 	Arguments StepArguments
 }
 

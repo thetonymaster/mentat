@@ -544,6 +544,221 @@ func TestInspectionEntryPointsRejectBadInput(t *testing.T) {
 	})
 }
 
+// --- the ambiguous-step finding, through the facade ---
+
+// exactFloorPhrase contributes a NARROWER sentence than phraseRevenue's, which the
+// same text satisfies: `the revenue floor is 4 USD` matches both patterns.
+//
+// Two comparators claiming one sentence is the collision engine build cannot catch.
+// V3/V4 (phrase.go) reject only IDENTICAL pattern strings, so these two coexist
+// legally — which is exactly why the case is reachable and why it has to be caught
+// per-sentence, against a corpus, rather than at registration.
+type exactFloorPhrase struct{}
+
+// Both seams are discovered by TYPE ASSERTION, so a signature drift would make this type
+// silently stop contributing its phrase — and the test below would then fail with "want
+// exactly 1 ambiguous-step finding, got 0", pointing at the ambiguity check for what is
+// actually a compile-time defect in this file. These witnesses turn that into a build
+// error, matching phraseRevenue above.
+var (
+	_ mentat.Comparator        = (*exactFloorPhrase)(nil)
+	_ mentat.PhraseContributor = (*exactFloorPhrase)(nil)
+	_ mentat.CaptureParser     = (*exactFloorPhrase)(nil)
+)
+
+func (c *exactFloorPhrase) Name() string { return "revenue-shape-exact" }
+
+func (c *exactFloorPhrase) ContributedPhrases() []mentat.ContributedPhrase {
+	return []mentat.ContributedPhrase{{
+		Pattern: `^the revenue floor is 4 (\w+)$`,
+		Group:   "Revenue",
+		Summary: "Asserts the revenue floor is exactly 4 in the named currency.",
+		Example: `Then the revenue floor is 4 USD`,
+	}}
+}
+
+func (c *exactFloorPhrase) ParseCaptures(caps []string) (mentat.Expectation, error) {
+	if len(caps) != 1 {
+		return nil, fmt.Errorf("revenue-shape-exact: expected 1 capture, got %d: %q", len(caps), caps)
+	}
+	return facadeRevenueExpectation{Min: 4, Currency: caps[0]}, nil
+}
+
+// Compare is unreachable from the test below — Validate inspects a suite, it never
+// executes one. It returns an error rather than a passing verdict so that a future
+// test which does run this comparator cannot collect an unearned green from a type
+// written only to collide.
+func (c *exactFloorPhrase) Compare(_ context.Context, _ mentat.Evidence, _ mentat.Expectation) (mentat.Verdict, error) {
+	return mentat.Verdict{}, fmt.Errorf("revenue-shape-exact: Compare must not run; this comparator exists to collide with revenue-shape statically")
+}
+
+// TestValidateReportsAnAmbiguousStepNamingBothPatterns is the facade half of the
+// `ambiguous-step` finding class, and the reason it exists is that the class was
+// asserted only where it is computed.
+//
+// `TestStepBindingFindingsAgreesWithTheRunnerOnAmbiguity` (internal/steps) hand-appends
+// two patterns onto a pattern set and calls StepBindingFindings directly — no
+// .feature file, no SuiteCheck.Feature, no DedupeSortFindings, no engine that actually
+// contributes a colliding phrase, and no mentat.Validate. `docs/extending/phrases.md`
+// promises authors the collision is reported STATICALLY, naming every matching pattern
+// in registration order, and that promise spans all of those. This drives the whole
+// path an author does.
+//
+// Registration order is asserted rather than set membership, and it is the load-bearing
+// half. It is deterministic only because Engine.ContributedPhrases iterates the SORTED
+// reg.Comparators() (internal/engine/engine.go), so "revenue-shape" resolves before
+// "revenue-shape-exact" and the broad pattern is listed first. A change to that sort, or
+// to how the message is built, would otherwise reorder what the docs promise with
+// nothing going red.
+//
+// # Mutation rehearsals (2026-09-11)
+//
+// The ambiguous-step branch predates this test, so there is no honest red→green pair to
+// show from writing it. Its red was produced by mutation instead — twice, because the
+// two halves of the claim fail independently and one rehearsal proves only its own half.
+// Both mutations were confirmed applied by re-reading the mutated file before running,
+// then reverted and the test re-run green.
+//
+//  1. THE FINDING. `case len(matched) > 1:` -> `case len(matched) > 2:` in
+//     internal/steps/precheck.go StepBindingFindings. Observed:
+//
+//     want exactly 1 ambiguous-step finding, got 0: []
+//
+//     i.e. Validate certified as clean a suite whose sentence binds no definition at
+//     all under Strict.
+//
+//  2. THE ORDER. `sort.Strings(names)` -> `sort.Sort(sort.Reverse(sort.StringSlice(names)))`
+//     in internal/registry/registry.go Comparators — the sort the whole ordering claim
+//     rests on. Observed: the finding still fires, and the message names the two
+//     patterns the other way round, failing with "lists the patterns out of
+//     registration order". Mutation 1 cannot reach this: it deletes the finding
+//     wholesale, so it says nothing about the order within it.
+//
+// Stating both is the point: "the mutation didn't fire" and "the guard is real" look
+// identical from a passing test.
+func TestValidateReportsAnAmbiguousStepNamingBothPatterns(t *testing.T) {
+	// Safe to parallelise: own bus, own TempDir, and Validate touches no shared
+	// mutable state (see the note in mentat_run_test.go).
+	t.Parallel()
+
+	// Taken from the comparators themselves, never re-typed here: a test that
+	// hand-copies the pattern can go on asserting about a sentence nobody contributes.
+	broad := (&phraseRevenue{}).ContributedPhrases()[0].Pattern
+	exact := (&exactFloorPhrase{}).ContributedPhrases()[0].Pattern
+	if broad == exact {
+		t.Fatalf("both comparators contribute the pattern %q; engine build rejects identical patterns (V3), so the ambiguity this test is about would never be reached", broad)
+	}
+
+	const stepText = "the revenue floor is 4 USD"
+	const wantLine = 5 // the Then line, 1-based, in the body below
+	body := `Feature: two comparators claim one sentence
+  Scenario: a narrower phrase overlaps a broader one
+    Given the agent target "bot"
+    When I run scenario "any"
+    Then ` + stepText + "\n"
+	path := filepath.Join(t.TempDir(), "ambiguous.feature")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write feature: %v", err)
+	}
+
+	cfg := mentat.Config{
+		Store: phraseRegistryName,
+		Targets: map[string]mentat.Target{
+			"bot": {Adapter: phraseRegistryName, Command: []string{"noop"}, MaxConcurrency: 1},
+		},
+		Poll: mentat.PollSpec{Interval: "1ms", StableFor: 1},
+	}
+	b := newBus()
+	findings, err := mentat.Validate(context.Background(), cfg,
+		mentat.WithFeatures(path),
+		mentat.WithDriver(phraseRegistryName, func(mentat.Config) (mentat.Driver, error) {
+			return busDriver{bus: b, answer: "ok"}, nil
+		}),
+		mentat.WithStore(phraseRegistryName, func(mentat.Config) (mentat.TraceStore, error) {
+			return busStore{bus: b}, nil
+		}),
+		// Registered in REVERSE alphabetical call order, deliberately. The message
+		// order asserted below is then proof of the SORT, not an echo of the order
+		// these two options happen to appear in.
+		mentat.WithComparator("revenue-shape-exact", func(mentat.Config) (mentat.Comparator, error) {
+			return &exactFloorPhrase{}, nil
+		}),
+		mentat.WithComparator("revenue-shape", func(mentat.Config) (mentat.Comparator, error) {
+			return &phraseRevenue{}, nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Validate returned an error: %v — two overlapping-but-distinct patterns are legal at build time, so the collision must surface as a FINDING, not as a refusal to validate", err)
+	}
+
+	var ambiguous []mentat.Finding
+	for _, f := range findings {
+		if f.Class == "ambiguous-step" {
+			ambiguous = append(ambiguous, f)
+		}
+	}
+	if len(ambiguous) != 1 {
+		t.Fatalf("want exactly 1 ambiguous-step finding, got %d: %+v", len(ambiguous), findings)
+	}
+	got := ambiguous[0]
+
+	if got.File != path {
+		t.Errorf("finding File = %q, want %q", got.File, path)
+	}
+	if got.Line != wantLine {
+		t.Errorf("finding Line = %d, want %d — an author fixes the line the collision is ON", got.Line, wantLine)
+	}
+	if !strings.Contains(got.Message, strconv.Quote(stepText)) {
+		t.Errorf("message %q does not quote the offending sentence", got.Message)
+	}
+
+	// Patterns are rendered with strconv.Quote, so `\w` reaches the message as `\\w`.
+	// Building the expected substrings with strconv.Quote rather than hand-escaping is
+	// deliberate: hand-escaping has been got wrong in this repo before, and a wrong
+	// escape makes this assertion fail for a reason that has nothing to do with the
+	// behaviour under test.
+	quotedBroad, quotedExact := strconv.Quote(broad), strconv.Quote(exact)
+	atBroad := strings.Index(got.Message, quotedBroad)
+	atExact := strings.Index(got.Message, quotedExact)
+	if atBroad < 0 {
+		t.Fatalf("message %q does not name the broad pattern %s", got.Message, quotedBroad)
+	}
+	if atExact < 0 {
+		t.Fatalf("message %q does not name the narrow pattern %s", got.Message, quotedExact)
+	}
+	if atBroad > atExact {
+		t.Errorf("message %q lists the patterns out of registration order: %s must precede %s, because Engine.ContributedPhrases iterates comparators sorted by name and %q sorts before %q",
+			got.Message, quotedBroad, quotedExact, "revenue-shape", "revenue-shape-exact")
+	}
+
+	// The count is the one part of the message the docs quote that nothing else pins. A
+	// THIRD pattern joining the match — a future stepDefs row colliding with this sentence
+	// — satisfies every assertion above without this one.
+	if !strings.Contains(got.Message, "matches 2 step definitions") {
+		t.Errorf("message %q does not state how many definitions matched", got.Message)
+	}
+
+	// Nothing else is wrong with this file, so anything else reported is a second,
+	// unexplained diagnosis of one defect — which is what sends an author to the wrong
+	// place.
+	//
+	// The step-argument check does stay silent here, but NOT by deferral, and the
+	// difference matters because the obvious reading is wrong. stepProblem
+	// (internal/steps/stepargs.go) defers only when a built-in AND a contributed phrase
+	// both match. Both matches here are CONTRIBUTED, so b == nil, control reaches the
+	// `cp != nil` arm, and the step is diagnosed against the first matching phrase like
+	// any other. It returns "" only because neither phrase declares a docstring and the
+	// sentence carries no argument — argument-kind agreement, not deferral.
+	//
+	// Measured (go-reviewer, 2026-09-11): two contributed phrases both ending `:$`, both
+	// matching one sentence written without a docstring, produce TWO findings — an
+	// ambiguous-step AND a step-argument. So this asserts a property of THIS file, not a
+	// general guarantee that an ambiguous step is ever reported only once.
+	if len(findings) != 1 {
+		t.Errorf("want the ambiguity to be the only finding, got %d: %+v", len(findings), findings)
+	}
+}
+
 // TestInspectionDoesNotMutateTheCallersConfig pins the same defence Run makes. cfg
 // arrives by value but Targets is a map, so config.Resolve would otherwise write
 // resolved targets into the CALLER's Config — and inspecting a suite must not change

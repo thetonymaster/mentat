@@ -272,6 +272,11 @@ func (s StepArguments) Findings(steps []*messages.PickleStep, src Source) []Find
 // contributed `^the result contains "(.+)"$` coexists with the built-in
 // `^the result contains "([^"]*)"$` and both match the same sentence.
 //
+// Left alone HERE does not mean unreported. StepBindingFindings classifies that same
+// step as `ambiguous-step` over the full pattern set, naming every pattern that
+// matched — the finding the author should act on, and the one the runner's own failure
+// corresponds to. This skip is a deferral to the better-placed check, not silence.
+//
 // Otherwise the one source that matches decides. Built-ins are checked first because
 // they register first (metadata.go), so where only a built-in matches, its handler is
 // what will bind.

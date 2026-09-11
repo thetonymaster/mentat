@@ -152,6 +152,29 @@ the other never runs, and the scenario reports **passed** — a green verdict no
 wrote. Built-ins register before contributed phrases, so the silently-swallowed one
 would always be yours.
 
+You do not have to run the suite to find out. `mentat.Validate` reports the same collision
+statically, as an `ambiguous-step` `Finding` naming every pattern that matched. Rendered the
+way `mentat validate` prints findings — `File`, `Line`, `Class`, `Message`:
+
+```
+features/reading.feature:7: [ambiguous-step] step "the alpha reading is fine" matches 2 step definitions and the runner refuses it as ambiguous: "^the (\\w+) reading is fine$", "^the alpha reading is fine$"
+```
+
+`Validate` hands you the `Finding` values themselves and has no renderer of its own, so the
+layout above is the CLI's rather than something the library prints. `Message` is a single line
+whatever your terminal does with it, and the patterns are listed in registration order — the
+same order the runner lists them in.
+
+The two agree because they ask the same question: how many registered patterns match this
+sentence. What neither does is decide whether two patterns *could* overlap — that is a
+question about the patterns, and Mentat does not answer it. Both answer per sentence, so a
+collision that no step in your suite actually writes is reported by neither, and will
+surface the day someone writes that sentence. Anchoring, rule 4 and rule 5 are what keep
+that day from arriving; this is the net beneath them.
+
+`mentat validate` (the binary) cannot report this for your phrases, for the same reason it
+reports them as unbound — it cannot reach your registrations. Use the library entry point.
+
 ## Scope: phrases belong to one engine
 
 Contributed phrases are resolved per engine and are invisible to every other engine in
