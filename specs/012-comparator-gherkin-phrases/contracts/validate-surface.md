@@ -38,9 +38,18 @@ means validation sees **exactly** the engine the run will use.
 
 ## 2. The binary keeps its strictness and documents its limit (FR-011a)
 
-`mentat validate` keeps its current behaviour for built-in steps, and its documentation states
-plainly that contributed phrases are outside what a compiled binary can see, pointing at the
-library entry point.
+`mentat validate` keeps its strictness for built-in steps, and its documentation states plainly
+that contributed phrases are outside what a compiled binary can see, pointing at the library
+entry point.
+
+> **Extended at convergence (Phase 9, 2026-09-11).** "Keeps its current behaviour" was true when
+> written and is no longer. The binary now also enforces the **step-argument** check for built-in
+> rows (`steps.BuiltinStepArguments()`), emitting a `step-argument` finding. That is not a
+> widening of what a binary can see — each built-in row's expected argument is derived by
+> reflection from the handler it registers, all of which are compiled into the binary. It is
+> strictly more strictness over exactly the steps the binary already validated, and it closes an
+> unearned green that needed no comparator to reach. Contributed phrases remain out of reach, so
+> D7 and FR-011a are unchanged.
 
 **It gains no manifest flag and no second source of phrase truth.**
 
@@ -111,4 +120,5 @@ taken: it would have weakened the gate for everyone to accommodate a case the bi
   validate's lightweight `checker` (`precheck.go:64-70`); comparators still never see a store or
   driver (Constitution I).
 - `mentat validate`'s exit-code semantics and its other finding classes (`bad-cel`,
-  `unknown-target`, `unknown-shape`, `bad-runs-tag`).
+  `unknown-target`, `unknown-shape`, `bad-runs-tag`). Convergence Phase 9 ADDED one,
+  `step-argument`, for built-in rows only — see the note in §2.

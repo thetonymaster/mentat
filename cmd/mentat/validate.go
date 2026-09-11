@@ -143,6 +143,15 @@ func runValidate(cfgPath string, paths []string) []steps.Finding {
 		Targets:      known,
 		CheckTargets: configOK,
 		CheckShapes:  expOK,
+		// The built-in half of the step-argument check. A binary cannot see a
+		// consumer's contributed phrases, but a surplus docstring on a BUILT-IN step
+		// needs no comparator to write and is discarded silently by the runner, so
+		// this is a defect the binary is fully equipped to catch.
+		//
+		// Guarded by the step-argument row in seedDefectCorpus: deleting this line
+		// reddens TestValidateCollectsAllFindings. Verified by mutation, because
+		// `make ci` exempts cmd/* from the coverage gate and would not have noticed.
+		Arguments: steps.BuiltinStepArguments(),
 	}.Paths(paths)
 	// Config/expectations findings gathered before the walk are folded in and
 	// re-sorted, so the output stays one deterministically ordered list.

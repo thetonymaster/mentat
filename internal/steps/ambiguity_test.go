@@ -39,7 +39,7 @@ const (
 //
 // Read the first line carefully: the broad pattern ran, the specific one never did, and
 // the scenario PASSED. Because the After hook is verdict-authoritative
-// (`Pass: stepErr == nil`, steps.go:127), Mentat records a green verdict nobody wrote.
+// (`Pass: stepErr == nil`, steps.go:163), Mentat records a green verdict nobody wrote.
 //
 // This test could NOT be written as a failing-first TDD pair, and saying so is more
 // useful than pretending otherwise:

@@ -352,14 +352,14 @@ func TestEngineStepChecksResolvesOnceForBothDerivations(t *testing.T) {
 		t.Errorf("got %d patterns, want %d (built-ins + both contributed phrases)", len(pats), want)
 	}
 
-	// The argument half must actually be armed — a zero PhraseArguments would silently
+	// The argument half must actually be armed — a zero StepArguments would silently
 	// check nothing, which is exactly the failure the shared resolution prevents.
 	problem := args.stepProblem(&messages.PickleStep{
 		Text:     "the revenue floor is 4",
 		Argument: &messages.PickleStepArgument{DataTable: &messages.PickleTable{}},
 	})
 	if problem == "" {
-		t.Error("the returned PhraseArguments accepted a surplus data table; it was not armed with this engine's phrases")
+		t.Error("the returned StepArguments accepted a surplus data table; it was not armed with this engine's phrases")
 	}
 }
 
@@ -389,6 +389,6 @@ func TestEngineStepChecksPropagatesValidationFailure(t *testing.T) {
 		t.Errorf("a pattern set was returned alongside the error (%d patterns)", len(pats))
 	}
 	if len(args.phrases) != 0 {
-		t.Error("an armed PhraseArguments was returned alongside the error")
+		t.Error("an armed StepArguments was returned alongside the error")
 	}
 }

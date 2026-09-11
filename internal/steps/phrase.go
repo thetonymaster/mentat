@@ -1,7 +1,6 @@
 package steps
 
 import (
-	"errors"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -9,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/cucumber/godog"
-	messages "github.com/cucumber/messages/go/v21"
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/engine"
 )
@@ -126,7 +124,7 @@ func makeStepHandler(arity int, wantsDoc bool, fn func(caps []string, body strin
 		// An earlier version of this comment asserted the branch was unreachable,
 		// citing only the first measurement. It was wrong about the second.
 		//
-		// Mentat never reaches either case in practice because PhraseArguments
+		// Mentat never reaches either case in practice because StepArguments
 		// rejects both at scenario init, naming the comparator and the pattern where
 		// godog's own message names neither. This stays as the last line of defence.
 		var body string
@@ -490,7 +488,7 @@ func isEndAnchor(re *syntax.Regexp) bool {
 //
 // Because it is a CONVENTION an author can forget, a mismatch between what the pattern
 // declares and what a step actually carries is checked at scenario init and again by
-// the static validator — see PhraseArguments. Inferring it is convenient; trusting the
+// the static validator — see StepArguments. Inferring it is convenient; trusting the
 // inference silently would not be.
 func declaresDocstring(pattern string) bool {
 	return strings.HasSuffix(pattern, ":$")
@@ -583,139 +581,6 @@ func stepPatternsFor(phrases []contributedPhrase) (StepPatterns, error) {
 	return append(pats, extra...), nil
 }
 
-// PhraseArguments answers one question for one engine: does a step carry the argument
-// the contributed phrase it matches can actually receive?
-//
-// # Why this is about ARGUMENTS and not about docstrings
-//
-// The first version of this checked docstrings only, and review found the identical
-// hole one field over: a surplus DATA TABLE was still silently discarded and the
-// scenario still reported PASSED. That is the same mechanism twice, so the check is now
-// written against the mechanism.
-//
-// Measured against the pinned godog v0.15.1, the argument conversion loop runs
-// `i < numIn`: any argument the handler did not declare is dropped without a word. A
-// contributed phrase can receive at most a docstring — CaptureParser takes []string and
-// ExpectationParser takes string, so no seam can receive a table at all. An author who
-// writes one has written an expectation that cannot be read, and without this check
-// they are told it passed.
-//
-// stepArgumentKind therefore reports an UNRECOGNISED argument as a kind of its own
-// rather than as "none". A future godog argument type is then rejected loudly instead
-// of silently joining the list of things that vanish — which is the difference between
-// fixing this instance and fixing the mechanism.
-type PhraseArguments struct {
-	phrases  []contributedPhrase
-	builtins StepPatterns
-}
-
-func newPhraseArguments(phrases []contributedPhrase) PhraseArguments {
-	if len(phrases) == 0 {
-		// No contributed phrases: nothing to check, and the built-in patterns are not
-		// worth compiling.
-		return PhraseArguments{}
-	}
-	return PhraseArguments{phrases: phrases, builtins: BuiltinStepPatterns()}
-}
-
-// check returns the first disagreement, for the fail-fast scenario-init path.
-func (p PhraseArguments) check(steps []*messages.PickleStep) error {
-	for _, st := range steps {
-		if msg := p.stepProblem(st); msg != "" {
-			return errors.New(msg)
-		}
-	}
-	return nil
-}
-
-// Findings returns one finding per disagreement, for the collect-all static path.
-func (p PhraseArguments) Findings(steps []*messages.PickleStep, src Source) []Finding {
-	var out []Finding
-	for _, st := range steps {
-		if msg := p.stepProblem(st); msg != "" {
-			out = append(out, stepFinding(src, st, "phrase-argument", msg))
-		}
-	}
-	return out
-}
-
-// stepProblem returns "" when st is fine, or a message naming the comparator, the
-// pattern and the offending argument.
-//
-// # Steps that also match a built-in are skipped, and what that leaves open
-//
-// Built-ins register first, so such a step either binds the built-in or collides with
-// it, and a collision is an ambiguity the strict matcher reports by naming every
-// matching expression. Complaining "the body would be silently discarded" about a step
-// whose built-in handler consumes the body would send the author to the wrong place.
-//
-// What this does NOT do — stated because an earlier version of this comment implied
-// otherwise by saying "the built-in's own rules apply", and no such rules exist:
-// **built-in steps have no argument-agreement check of their own.** Measured on godog
-// v0.15.1, a surplus docstring on a built-in step is discarded by the same `i < numIn`
-// loop and the scenario reports PASSED. That is a pre-existing defect on `main`,
-// unrelated to contributed phrases, and deliberately out of this feature's scope — but
-// it is a real unearned green and it is not handled here. Closing it means deriving
-// each stepDefs row's expected argument from its handler signature; see the spec's R12.
-func (p PhraseArguments) stepProblem(st *messages.PickleStep) string {
-	if len(p.phrases) == 0 {
-		return ""
-	}
-	for _, re := range p.builtins {
-		if re.MatchString(st.Text) {
-			return ""
-		}
-	}
-	for _, cp := range p.phrases {
-		if !cp.re.MatchString(st.Text) {
-			continue
-		}
-		got := stepArgumentKind(st)
-		want := ""
-		if cp.wantsDoc {
-			want = "docstring"
-		}
-		if got == want {
-			return ""
-		}
-		switch {
-		case want == "docstring" && got == "":
-			return fmt.Sprintf("step %q matches the phrase %q contributed by comparator %q, which expects a docstring body, but the step carries none",
-				st.Text, cp.phrase.Pattern, cp.comparator)
-		case want == "docstring":
-			return fmt.Sprintf("step %q carries a %s, but the phrase %q contributed by comparator %q expects a docstring body",
-				st.Text, got, cp.phrase.Pattern, cp.comparator)
-		case got == "docstring":
-			return fmt.Sprintf("step %q carries a docstring, but the phrase %q contributed by comparator %q takes none — the body would be silently discarded and the step would report a verdict that never read it",
-				st.Text, cp.phrase.Pattern, cp.comparator)
-		default:
-			return fmt.Sprintf("step %q carries a %s, but the phrase %q contributed by comparator %q cannot receive one — no contributed-phrase seam takes anything but a docstring, so it would be silently discarded and the step would report a verdict that never read it",
-				st.Text, got, cp.phrase.Pattern, cp.comparator)
-		}
-	}
-	return ""
-}
-
-// stepArgumentKind names what a step carries: "" for nothing, otherwise a human name.
-//
-// The default branch is deliberate and load-bearing. An argument type this code does
-// not recognise must be reported as SOMETHING, because the runner will discard it
-// silently; returning "" would quietly re-open the exact hole this function exists to
-// close, for the next argument kind godog adds.
-func stepArgumentKind(st *messages.PickleStep) string {
-	if st.Argument == nil {
-		return ""
-	}
-	switch {
-	case st.Argument.DocString != nil:
-		return "docstring"
-	case st.Argument.DataTable != nil:
-		return "data table"
-	default:
-		return "step argument of an unrecognised kind"
-	}
-}
-
 // EngineStepChecks resolves this engine's contributed phrases ONCE and returns both
 // derivations a static validator needs: the pattern set feature text is bound against,
 // and the step-argument agreement check.
@@ -731,11 +596,11 @@ func stepArgumentKind(st *messages.PickleStep) string {
 // paragraph above forbids. Adding one back re-opens it.
 //
 // The ARGUMENT half cannot drift from what Run enforces, because both reach it the same
-// way: resolvePhrases, then newPhraseArguments — the same two calls scenario init makes
-// (steps.go:101-106).
+// way: resolvePhrases, then newStepArguments — the same two calls scenario init makes
+// (steps.go:101 and :107).
 //
 // The PATTERN half has no scenario-init counterpart to drift from. godog owns matching at
-// runtime: registerSteps hands it the patterns directly (steps.go:127) and no StepPatterns
+// runtime: registerSteps hands it the patterns directly (steps.go:128) and no StepPatterns
 // set is built there at all. So the shared root of the guarantee is resolvePhrases, not
 // stepPatternsFor — whose only caller is this function.
 //
@@ -743,14 +608,14 @@ func stepArgumentKind(st *messages.PickleStep) string {
 // with scenario init, which was false for the pattern half. That is the same defect T073
 // deleted one function over (EnginePhraseArguments claimed a sharing that did not exist),
 // re-introduced in the text written to explain the deletion. Review measured it.
-func EngineStepChecks(eng *engine.Engine) (StepPatterns, PhraseArguments, error) {
+func EngineStepChecks(eng *engine.Engine) (StepPatterns, StepArguments, error) {
 	phrases, err := resolvePhrases(eng)
 	if err != nil {
-		return nil, PhraseArguments{}, err
+		return nil, StepArguments{}, err
 	}
 	pats, err := stepPatternsFor(phrases)
 	if err != nil {
-		return nil, PhraseArguments{}, err
+		return nil, StepArguments{}, err
 	}
-	return pats, newPhraseArguments(phrases), nil
+	return pats, newStepArguments(phrases), nil
 }

@@ -498,23 +498,35 @@ func TestMatchingDocstringUsageStillRuns(t *testing.T) {
 // about a step whose built-in handler consumes the body sends the author to the wrong
 // place entirely.
 func TestStepArgumentGuardSkipsStepsMatchingABuiltin(t *testing.T) {
-	// Overlaps the built-in `^the run satisfies:$`, which DOES take a docstring.
-	cmp := &docPhrase{pattern: `^the run (\w+):$`}
+	// # This test was mutation-dead until 2026-09-11, and the fix is the overlap it picks
+	//
+	// It used to pair contributed `^the run (\w+):$` with built-in `^the run satisfies:$`
+	// and a step carrying a docstring. Both sources want a docstring, so argumentProblem
+	// saw got == want and returned "" whether the skip existed or not. Measured: deleting
+	// `case b != nil && cp != nil: return ""` left the ENTIRE suite green, including this
+	// test — written specifically to pin that branch.
+	//
+	// The overlap below makes the skip observable, because the step carries an argument
+	// the BUILT-IN cannot receive: contributed `^the agent target "(\w+)"$` (no `:$`, so
+	// it declares no docstring) overlaps built-in `^the (?:agent|service) target
+	// "([^"]+)"$` (which takes no argument), and the step carries a docstring. Without the
+	// skip the want=="" branch fires and claims the body is "silently discarded"; with it,
+	// the ambiguity is left to the strict matcher, which is the true diagnosis.
+	cmp := &docPhrase{pattern: `^the agent target "(\w+)"$`}
 	res, out, err := runIsolatedFeature(t, cmp, `Feature: overlap
-  Scenario: a built-in step that takes a body
+  Scenario: a built-in step carrying an argument it cannot receive
     Given the agent target "bot"
+      """
+      body
+      """
     When I run scenario "any"
-    Then the run satisfies:
-      """
-      tokens < 5000
-      """
 `)
 	if err != nil {
 		t.Fatalf("harness error: %v\n%s", err, out)
 	}
 	reasons := strings.Join(res.Scenarios[0].Reasons, " ")
 	if strings.Contains(reasons, "silently discarded") {
-		t.Errorf("the step-argument guard claimed the body would be discarded, but the BUILT-IN step consumes it; the real defect is the overlap, which the strict matcher reports\ngot: %s", reasons)
+		t.Errorf("the step-argument guard diagnosed an argument problem, but this step matches two patterns and binds NEITHER under Strict — so the body is not discarded, the step never runs. The real defect is the overlap, which the strict matcher reports by naming every matching expression\ngot: %s", reasons)
 	}
 	// It still fails — the patterns genuinely collide — but for the right reason.
 	if !strings.Contains(reasons, "ambiguous") {
@@ -566,7 +578,7 @@ func TestValidateAgreesWithRunOnStepArguments(t *testing.T) {
 	}
 	var found bool
 	for _, f := range findings {
-		if f.Class == "phrase-argument" {
+		if f.Class == "step-argument" {
 			found = true
 			if f.Line == 0 {
 				t.Errorf("finding has no source line: %+v", f)
@@ -574,7 +586,7 @@ func TestValidateAgreesWithRunOnStepArguments(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("Validate reported no phrase-argument finding for a suite Run rejects; the two paths must agree about the same file\ngot: %+v", findings)
+		t.Fatalf("Validate reported no step-argument finding for a suite Run rejects; the two paths must agree about the same file\ngot: %+v", findings)
 	}
 
 	// And the run really does reject it, or the agreement is vacuous.

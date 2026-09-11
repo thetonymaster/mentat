@@ -6,6 +6,32 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING (authoring): a step carrying an argument its definition cannot receive is
+  now rejected.** godog discards any argument a step handler did not declare — the
+  conversion loop runs `i < numIn` — so a docstring or data table written under a step
+  that takes neither was dropped in silence and the scenario reported **PASSED** with the
+  expectation never read. Measured on the pinned `godog v0.15.1`: `the result contains
+  "hi"` with a surplus docstring gave suite status 0, `1 scenarios (1 passed)`.
+
+  This applies to all 40 built-in steps and to comparator-contributed phrases. A built-in
+  row's expected argument is derived by reflection from the handler it registers, never
+  from a list kept beside it; a contributed phrase declares its own through the `:$`
+  pattern convention. Rejection happens at scenario init, before any SUT is driven, and
+  statically in `mentat.Validate` and `mentat validate` (a new `step-argument` finding
+  class).
+
+  The opposite direction moved earlier too: a step that OMITS a docstring its definition
+  requires used to fail when the step ran, with godog's own
+  `func expected more arguments than given`. It is now caught at scenario init, naming the
+  step and what it expects.
+
+  **A suite that passed before may now fail.** That is the point: the step it fails on was
+  reporting a verdict that never read your expectation. The fix is to move the argument to
+  the step that takes it, or remove it. `docs/steps.md` shows the argument every built-in
+  step accepts, and `mentat validate` names the file, the line and the step.
+
 ### Added
 
 - **Custom comparators are drivable from a `.feature` file.** A comparator registered

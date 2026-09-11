@@ -112,9 +112,11 @@ error names your comparator and the offending value.
    so a duplicate would be permanently shadowed and its assertion would never run.
 
 6. **A step must carry exactly the argument its phrase declares.** Checked at scenario
-   init, before any SUT is driven, and by `mentat.Validate`. This is the rule you are
-   most likely to trip, because docstring-ness is inferred from that `:$` and the
-   convention is easy to forget:
+   init, before any SUT is driven, and by `mentat.Validate`. Built-in steps follow the
+   same rule, checked the same way — their expected argument is derived from the handler
+   each one registers — so this is one rule about Gherkin, not a restriction that applies
+   only to your phrases. This is the rule you are most likely to trip, because
+   docstring-ness is inferred from that `:$` and the convention is easy to forget:
    - A body on a phrase that declares none would be **silently discarded** by the
      runner and the step would report a verdict that never read it.
    - A **data table** can never be received: `CaptureParser` takes `[]string` and

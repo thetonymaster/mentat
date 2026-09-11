@@ -593,7 +593,7 @@ func Validate(ctx context.Context, cfg Config, opts ...Option) ([]Finding, error
 	// One resolution feeding both derivations. Resolving twice recompiled every
 	// contributed pattern for no benefit, and left two places that could disagree
 	// about which phrases this engine has.
-	pats, phraseArgs, err := steps.EngineStepChecks(eng)
+	pats, stepArgs, err := steps.EngineStepChecks(eng)
 	if err != nil {
 		return nil, fmt.Errorf("mentat: %w", err)
 	}
@@ -609,7 +609,7 @@ func Validate(ctx context.Context, cfg Config, opts ...Option) ([]Finding, error
 		Targets:      known,
 		CheckTargets: true,
 		CheckShapes:  true,
-		Phrases:      phraseArgs,
+		Arguments:    stepArgs,
 	}.Paths(ro.featurePaths), nil
 }
 

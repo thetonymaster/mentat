@@ -117,7 +117,13 @@ const stepsIntro = "Mentat scenarios are written in Gherkin. This page is the ge
 	"`WithComparator` may also contribute its own Gherkin phrases; those are scoped to\n" +
 	"the engine that registered them, so a compiled `mentat` binary cannot see them and\n" +
 	"they cannot appear here. Render the reference for your own engine — built-ins plus\n" +
-	"your contributed phrases — from your own test binary instead.\n"
+	"your contributed phrases — from your own test binary instead.\n" +
+	"\n" +
+	"**Each step takes exactly the argument shown in its example** — a docstring, a data\n" +
+	"table, or neither. A step carrying one it does not take is rejected before the run\n" +
+	"starts, by `mentat validate` and again at scenario init. The runner would otherwise\n" +
+	"discard it without a word and report the step as passed, so an expectation written\n" +
+	"under the wrong step would read as a green nobody earned.\n"
 
 // grammarMarkdown is the cross-cutting grammar in Markdown. It is a raw string
 // (so the tables and quotes stay readable), and @BT@ stands in for a backtick —

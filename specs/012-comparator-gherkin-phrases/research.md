@@ -341,7 +341,7 @@ independently before acting; both held.
 
 | Finding | Measured | Fix |
 |---|---|---|
-| A comment claimed godog passes a typed nil for a missing declared docstring, so the nil branch was "real rather than defensive" | **Partly false, and the correction was itself partly false** — see R13 | The error moved to `PhraseArguments` at scenario init, where it IS reachable; the nil check stays, because R13 shows it is load-bearing after all |
+| A comment claimed godog passes a typed nil for a missing declared docstring, so the nil branch was "real rather than defensive" | **Partly false, and the correction was itself partly false** — see R13 | The error moved to the step-argument check at scenario init, where it IS reachable; the nil check stays, because R13 shows it is load-bearing after all |
 | A step carrying an argument the matched phrase cannot receive | **`status=0, handlerCalled=true`, argument discarded, scenario PASSES.** A green verdict from a comparator that never read the author's expectation — reachable through the public surface, because docstring-ness is inferred from a `:$` convention an author can forget | Rejected at scenario init AND in `mentat.Validate`, before any SUT is driven, for every argument kind |
 | The `ExpectationParser` (docstring) route | **Zero test coverage.** Mutating the body to a constant left the whole suite green. The lint-cleanup commit had deleted the only stub built for it | Route test added, asserting the body arrives VERBATIM; the reviewer's exact mutation now goes red |
 | `isAnchored` (V2) | **Defeated by top-level alternation**: `^the alpha reading\|the beta reading$` passes a string-level check and matches inside "I check the beta reading", because the runner matches with an unanchored `FindStringSubmatch` | Rewritten as a structural check over the parsed syntax tree: an alternation is anchored only if EVERY branch is |
@@ -365,11 +365,15 @@ Two further findings from the same audit, both fixed:
 
 - `mentat.Validate` reported **clean** on a feature file `mentat.Run` rejects at scenario
   init. A validator that certifies a suite the runner then refuses spends the author's
-  trust to tell them something false. Both paths now run the same `PhraseArguments`
-  check, one as a fail-fast error and one as a `phrase-argument` finding.
+  trust to tell them something false. Both paths now run the same `StepArguments` check
+  (named `PhraseArguments` until R14 widened it to built-ins), one as a fail-fast error
+  and one as a `step-argument` finding.
 - The guard **misdiagnosed** a step matching both a built-in and a contributed phrase,
-  claiming a body would be discarded when the built-in consumes it. Such steps are now
-  skipped and left to the strict matcher, which names every matching expression.
+  claiming a body would be discarded when the built-in consumes it. Such steps are
+  skipped and left to the strict matcher, which names every matching expression — a
+  property R14 deliberately preserved when it added built-in checking, because under
+  `Strict` an ambiguous step binds NEITHER definition, so any argument message about it
+  would be false as well as misdirecting.
 
 ### R13 — the correction that was itself wrong
 
@@ -394,25 +398,105 @@ Three rounds, three versions of the same claim, each measured only against the c
 previous evidence happened to cover. The comment now enumerates BOTH measurements and
 says which one each conclusion rests on.
 
-### Known gap this feature does NOT close
+### R14 — the gap this feature first declined to close, then closed
 
-`PhraseArguments` skips steps matching a built-in, on the reasoning that the built-in
+The check (then named `PhraseArguments`) skipped steps matching a built-in, on the reasoning that the built-in
 binds them. An earlier comment said "the built-in's own rules apply" — **no such rules
-exist.** Measured: a surplus docstring on `^the result contains "([^"]*)"$` gives suite
+existed.** Measured: a surplus docstring on `^the result contains "([^"]*)"$` gave suite
 status 0 with the body never read. The same `i < numIn` discard, for all 40 built-in
-steps.
+steps, reachable without writing any comparator at all.
 
-Pre-existing on `main` and genuinely outside 012's scope, but recorded here rather than
-left implied, because the commit message for the phrase fix said "written against the
-mechanism" and that overstates it. Closing it means deriving each `stepDefs` row's
-expected argument from its handler signature via reflection, and belongs in its own
-change with its own goldens.
+This was first recorded as out of scope, on the grounds that it is pre-existing on `main`.
+That framing was accepted and then **reversed on the maintainer's instruction** — and the
+reversal was right, because the scope argument was about where the defect was *found*
+rather than what it *was*. Read together with the two audits before it, the sequence is
+the finding:
 
-**The lesson worth carrying**: this feature corrected four inherited premises (R10, R11, and the
-two above) and every one had the same signature — *a claim about behaviour, asserted in a comment,
-with no test able to contradict it*. The tests that caught nothing were not absent; they were
-adjacent. `TestContributedPhraseSeamRouting` tested the routing FUNCTION and never the route;
+| Round | Fixed | Left open | Found by |
+|---|---|---|---|
+| 1 | docstrings on contributed phrases | data tables, one struct field over | review |
+| 2 | every argument kind, on contributed phrases | all 40 built-ins | review |
+| 3 | both sources, one mechanism | — | maintainer |
+
+Each round's fix was scoped to where the defect had last been seen. "Written against the
+mechanism" was said after round 2 and was not yet true.
+
+**Closed by** `StepArguments` (`internal/steps/stepargs.go`), which derives each built-in
+row's expected argument **by reflection from the handler that row registers** —
+`*godog.DocString` → docstring, `*godog.Table` → data table, anything else → none.
+Derived, never listed: a hand-kept table would be a second source of truth for exactly
+what `stepDefs` exists to be the only source of, and its drift would restore the unearned
+green silently. Enforced at scenario init, in `mentat.Validate`, and — new — in the
+`mentat validate` binary, which cannot see contributed phrases (D7) but can see every
+built-in and so is fully equipped to catch this class.
+
+Measured after: the repo's entire feature corpus produces zero `step-argument` findings
+(no false positives), and the end-to-end guard was rehearsed against the pre-fix state.
+
+**Two rounds of review on the fix itself, both finding the same thing again:**
+
+- The check's own comment claimed godog delivers a step argument only into
+  `*godog.DocString` or `*godog.Table`. **Measured false** — `shouldBeString`
+  (`stepdef.go:285-296`) routes it into a plain `string` too, so a built-in drifting to
+  `func(s, body string) error` would be classified argument-free and every scenario using
+  it would be **REJECTED**. A false red, strictly worse than the unearned green being
+  closed. The count test (9/2/29) stays green through exactly that drift, so the guarantee
+  is now an arity invariant (`checkBuiltinArity`), not a tally.
+- The shared message builder then claimed a mismatched argument "would be silently
+  discarded and the step would report a verdict that never read it". **True only when the
+  step definition takes NO argument.** Measured with the check disabled: a table on
+  `the run satisfies:` fails with "expected a docstring expression, got none"; a docstring
+  on `the agent calls tools in order:` **panicked** on a typed-nil `*godog.Table`. Neither
+  reports a verdict. The message now says what each case actually does — and the panic was
+  a real pre-existing hole, since the two table handlers lacked the nil guard all nine
+  docstring handlers have. Both now have it.
+
+**A third round found two more, and one was a guard I had just written to satisfy round two:**
+
+- The both-match skip — restored in round two with a 14-line rationale — was
+  **mutation-dead**. Deleting `case b != nil && cp != nil: return ""` left the ENTIRE
+  suite green, including `TestStepArgumentGuardSkipsStepsMatchingABuiltin`, written
+  specifically to pin it. Cause: the overlap it chose had both sources wanting a
+  docstring and the step carrying one, so `argumentProblem` returned "" either way. The
+  test now overlaps a contributed `^the agent target "(\w+)"$` with the built-in target
+  step and puts a docstring on it, so the two DISAGREE and the skip is observable.
+- `checkBuiltinArity`'s too-few explanation was false when the handler declares an
+  argument. That fix then claimed "three shapes, three consequences" — and a **fourth**
+  round measured a fourth shape, which had inherited an explanation false in all three of
+  its clauses. Asking R14's own closing question of the guard written to answer R14 is
+  what found it. The direction alone does not decide the consequence; whether the row
+  declares an argument changes it, so all four are now measured and separately explained:
+
+  A **fifth** round then found the split itself keyed on the wrong thing. godog can supply
+  at most `NumSubexp()+1` arguments — one per capture group plus at most one step argument
+  — so the boundary is the parameter count against that ceiling. "Declares an argument"
+  correlates with it without being it, and the gap (two surplus parameters on a row
+  declaring none) fell inside the routing arm and was explained as routing, which it is
+  not. The four measured shapes:
+
+  | parameters | measured on godog v0.15.1 |
+  |---|---|
+  | above the ceiling (`> NumSubexp()+1`) | `status=1 ran=false`, `func expected more arguments than given` — godog refuses on arity; nothing is routed, and a step carrying the argument is not rejected by this check at all |
+  | exactly at the ceiling, no declared argument | `called=true seen="PAYLOAD"` — the step argument lands in the surplus string; scenarios carrying it would be false-RED by this check |
+  | short, no declared argument | `ran=true seen="one"` — the surplus capture is discarded in silence |
+  | short, argument declared | `status=1 ran=false`, `cannot convert argument 1 … to *messages.PickleDocString` — handler never runs |
+
+So the fix for "a claim no test can contradict" contained two of them; the fix for THOSE
+exposed a panic and a dead guard. **The pattern does not end by being named.** It ends
+per-claim, when someone runs the mutation that would make that specific claim fail — which
+is why every guard added here has its rehearsal recorded next to it, and why the one that
+did not have a real one is the one that turned out to be decoration.
+
+**The lesson worth carrying**: this feature corrected five inherited premises (R10, R11, R14 and
+the two above) and every one had the same signature — *a claim about behaviour, asserted in a
+comment, with no test able to contradict it*. The tests that caught nothing were not absent; they
+were adjacent. `TestContributedPhraseSeamRouting` tested the routing FUNCTION and never the route;
 the dedupe test named a property its assertions could not observe.
+
+R14 adds a second, sharper shape: *a defect fixed where it was found rather than where it came
+from*. Three rounds went by with the same `i < numIn` discard open somewhere else each time, and
+every round ended with a comment asserting the fix was general. The question that would have
+closed it on round one is not "is this fixed?" but **"what else does this mechanism reach?"**
 
 Ask of any guard: **what mutation would make this fail?** If the answer is "none that matters",
 the guard is decoration. Two of the six rows above were found by running exactly that experiment.

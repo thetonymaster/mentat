@@ -80,7 +80,7 @@ type ContributedPhrase = core.ContributedPhrase
 
 // Finding is one located authoring defect a static check found: which file and line,
 // its class (a stable machine key such as "unbound-step", "bad-cel" or
-// "phrase-argument"), and a human message. Validate returns these.
+// "step-argument"), and a human message. Validate returns these.
 type Finding = steps.Finding
 
 // StepDoc is one row of the step reference: the group it belongs under, the registered

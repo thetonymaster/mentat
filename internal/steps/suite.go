@@ -42,9 +42,14 @@ type SuiteCheck struct {
 	// CheckShapes is likewise false when the expectations dir could not be read, so
 	// an unavailable source is never mistaken for "every reference is unknown".
 	CheckShapes bool
-	// Phrases carries the engine's contributed-phrase step-argument expectations. Its
-	// zero value checks nothing, which is correct for a compiled binary: it cannot see
-	// a consumer's phrases, so it must not guess about their arguments.
+	// Arguments carries the step-argument expectations this check enforces: every
+	// built-in row's, derived from its handler signature, plus any contributed phrases
+	// the engine resolved.
+	//
+	// A compiled binary cannot see a consumer's phrases, so it supplies
+	// BuiltinStepArguments() — the built-in half is exactly what it CAN check, and that
+	// half needs no comparator to reach. Its zero value checks nothing, which is only
+	// correct for a caller that has deliberately opted out.
 	//
 	// It exists so a statically-validated suite and a run agree. Without it Validate
 	// reported CLEAN on a feature file that Run rejects at scenario init — the two
@@ -52,10 +57,16 @@ type SuiteCheck struct {
 	// supposed to prevent.
 	//
 	// The agreement is one-directional by design: this walks EVERY scenario in the
-	// corpus, including ones a run's tag expression would skip. Validate is therefore
-	// stricter than Run, never more permissive, so a defect cannot hide behind a tag
-	// filter until the day someone runs that tag.
-	Phrases PhraseArguments
+	// corpus, including ones a run's tag expression would skip, so an argument defect
+	// cannot hide behind a tag filter until the day someone runs that tag.
+	//
+	// That breadth claim is about TAGS and nothing more. There is one case where Validate
+	// is the more permissive of the two: a step matching both a built-in and a contributed
+	// phrase is skipped here (see StepArguments.stepProblem) and reported CLEAN, while Run
+	// fails it as ambiguous under Strict. Nothing static detects pattern overlap today —
+	// closing it means an `ambiguous-step` finding class over Patterns, which is its own
+	// change.
+	Arguments StepArguments
 }
 
 // Paths resolves paths (directories walked recursively, files taken as-is) into
@@ -103,7 +114,7 @@ func (s SuiteCheck) Feature(path string) []Finding {
 		if s.CheckTargets {
 			out = append(out, TargetFindings(s.Targets, pk.Steps, src)...)
 		}
-		out = append(out, s.Phrases.Findings(pk.Steps, src)...)
+		out = append(out, s.Arguments.Findings(pk.Steps, src)...)
 		out = append(out, CELFindings(s.Engine, pk.Steps, src)...)
 		if s.CheckShapes {
 			out = append(out, ShapePatternFindings(s.Engine, pk.Steps, src)...)

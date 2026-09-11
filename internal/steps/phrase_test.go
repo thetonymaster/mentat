@@ -1002,10 +1002,10 @@ func TestStepArgumentKindNamesEveryArgument(t *testing.T) {
 	}
 }
 
-// TestPhraseArgumentsProblemMessages covers every branch of the disagreement matrix and
+// TestStepArgumentsProblemMessages covers every branch of the disagreement matrix and
 // asserts each message names the comparator, the pattern and the offending argument —
 // the three things an author needs to locate the mistake.
-func TestPhraseArgumentsProblemMessages(t *testing.T) {
+func TestStepArgumentsProblemMessages(t *testing.T) {
 	t.Parallel()
 
 	captures := contributedPhrase{
@@ -1020,7 +1020,7 @@ func TestPhraseArgumentsProblemMessages(t *testing.T) {
 		re:         regexp.MustCompile(`^the revenue matches:$`),
 		wantsDoc:   true,
 	}
-	pa := newPhraseArguments([]contributedPhrase{captures, docstring})
+	pa := newStepArguments([]contributedPhrase{captures, docstring})
 
 	docArg := &messages.PickleStepArgument{DocString: &messages.PickleDocString{Content: "x"}}
 	tableArg := &messages.PickleStepArgument{DataTable: &messages.PickleTable{}}
@@ -1040,7 +1040,7 @@ func TestPhraseArgumentsProblemMessages(t *testing.T) {
 		},
 		{
 			name: "captures phrase, surplus data table", text: "the revenue matches quarterly", arg: tableArg,
-			wantSubs: []string{"cap-cmp", "data table", "cannot receive one"},
+			wantSubs: []string{"cap-cmp", "data table", "cannot receive one", "no contributed-phrase seam"},
 		},
 		{
 			name: "docstring phrase, missing body", text: "the revenue matches:",
@@ -1075,19 +1075,38 @@ func TestPhraseArgumentsProblemMessages(t *testing.T) {
 	}
 }
 
-// TestPhraseArgumentsIsInertWithoutPhrases pins SC-009 for this check: an engine with
-// no contributed phrases must do no work and reject nothing, so the common path is
-// unchanged by a feature it does not use.
-func TestPhraseArgumentsIsInertWithoutPhrases(t *testing.T) {
+// TestStepArgumentsAcceptsWhatEachStepActuallyDeclares pins that the check is an
+// agreement test, not a ban on arguments: a step carrying exactly what its definition
+// declares must pass, and a sentence matching no definition at all is not this check's
+// business (it is an unbound step, reported by StepBindingFindings).
+//
+// This REPLACED a test asserting that an engine with no contributed phrases compiles no
+// built-in patterns and rejects nothing — "the common path must cost nothing". That
+// property was deliberately given up: the surplus-argument defect needs no comparator to
+// reach, so the engine that contributes nothing is the one that most needs the check.
+// SC-009 is unaffected, being about byte-identical golden OUTPUT rather than work done.
+func TestStepArgumentsAcceptsWhatEachStepActuallyDeclares(t *testing.T) {
 	t.Parallel()
 
-	pa := newPhraseArguments(nil)
-	if len(pa.builtins) != 0 {
-		t.Errorf("built-in patterns were compiled for an engine with no phrases (%d); the common path must cost nothing", len(pa.builtins))
+	pa := newStepArguments(nil)
+	if len(pa.builtins) != len(stepDefs) {
+		t.Errorf("derived %d built-in expectations for %d rows; an engine with no phrases must still check every built-in", len(pa.builtins), len(stepDefs))
+	}
+
+	ok := []*messages.PickleStep{
+		// Declares a docstring, carries one.
+		{Text: "the run satisfies:", Argument: &messages.PickleStepArgument{DocString: &messages.PickleDocString{Content: "true"}}},
+		// Declares none, carries none.
+		{Text: `the agent target "bot"`},
+		// Matches no step definition at all: an unbound step, not an argument problem.
+		{Text: "the moon is made of green cheese", Argument: &messages.PickleStepArgument{DataTable: &messages.PickleTable{}}},
+	}
+	if err := pa.check(ok); err != nil {
+		t.Errorf("a step carrying exactly what it declares was rejected: %v", err)
 	}
 	st := &messages.PickleStep{Text: "anything", Argument: &messages.PickleStepArgument{DataTable: &messages.PickleTable{}}}
 	if err := pa.check([]*messages.PickleStep{st}); err != nil {
-		t.Errorf("an engine with no contributed phrases rejected a step: %v", err)
+		t.Errorf("a sentence matching no step definition was rejected: %v", err)
 	}
 	if got := pa.Findings([]*messages.PickleStep{st}, Source{}); len(got) != 0 {
 		t.Errorf("want no findings, got %+v", got)

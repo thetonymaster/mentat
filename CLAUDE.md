@@ -261,14 +261,34 @@ someone had previously asserted without testing:
 - **godog SILENTLY DISCARDS any step argument the handler did not declare** — the
   conversion loop runs `i < numIn`, so a step carrying a docstring **or a data table**,
   matched by a phrase that takes none, runs on its captures alone and the scenario
-  reports **PASSED** with the argument never read. Found by review twice: the first fix
-  handled docstrings and left tables open, one struct field away. Closed for contributed
-  phrases by `PhraseArguments` at scenario init and in `mentat.Validate`, with an
-  unrecognised argument kind rejected by default.
-  **Still open for BUILT-IN steps** (measured: surplus docstring on `the result contains`
-  → suite status 0, body never read). Pre-existing on `main`, out of 012's scope, and
-  the obvious follow-up — closing it means deriving each `stepDefs` row's expected
-  argument from its handler signature.
+  reports **PASSED** with the argument never read. **Now closed for BOTH sources** by
+  `StepArguments` (`internal/steps/stepargs.go`) at scenario init, in `mentat.Validate`
+  and in the `mentat validate` binary, with an unrecognised argument kind rejected by
+  default so the next argument type godog adds is refused rather than silently joining
+  the list of things that vanish.
+
+  It took **three** attempts, each aimed at an instance rather than the mechanism, and
+  review found the same hole one step over every time: docstrings on phrases → data
+  tables on phrases (one struct field away) → **all 40 built-in steps** (no comparator
+  needed to reach it at all). The built-in half is the one worth remembering: it was
+  pre-existing on `main`, reachable by anyone who types a docstring under the wrong step,
+  and it survived two rounds of fixing *this exact defect* because each fix was scoped to
+  where the defect had been found rather than to what caused it.
+
+  The expected argument is **derived by reflection from each `stepDefs` row's handler
+  signature**, never listed beside it — a hand-kept list would be a second source of truth
+  for the thing `stepDefs` exists to be the only source of, and it would drift silently
+  back into the same unearned green. Pinned end-to-end by
+  `TestBuiltinStepWithSurplusArgumentMakesTheRunRed`, rehearsed against the pre-fix state
+  (`stepArgs := StepArguments{}` → suite status 0, "1 scenarios (1 passed)").
+
+  Two review rounds on the FIX found the same defect class inside it, twice: the comment
+  claiming godog delivers an argument only into `*godog.DocString`/`*godog.Table`
+  (**false** — a plain `string` parameter receives it too, so a drifting handler would
+  false-RED every scenario using its step; now an arity invariant, `checkBuiltinArity`),
+  and a message promising a silent pass in cases that actually fail loudly. Chasing the
+  second exposed a real panic: `toolsInOrder`/`servicesInOrder` dereferenced a typed-nil
+  `*godog.Table`, unlike all nine docstring handlers. Both now nil-guard.
 - **Enabling `Strict` churns zero goldens**, measured on both surfaces (`go test ./...`
   and `go test -tags e2e` with the harness up). `make ci` does not compile the e2e lane,
   so it is not evidence for this on its own.

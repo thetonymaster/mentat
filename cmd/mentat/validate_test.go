@@ -25,7 +25,7 @@ func mustMkdir(t *testing.T, dir string) {
 	}
 }
 
-// defectsFeature seeds four authoring defect references at known lines:
+// defectsFeature seeds five authoring defect references at known lines:
 //
 //	line 3: unknown target ("ghost" is not a configured target)
 //	line 5: unbound step  ("the moon is made of cheese" matches no metadata pattern)
@@ -33,6 +33,14 @@ func mustMkdir(t *testing.T, dir string) {
 //	line 7: unknown shape ("missing") — flagged unknown-shape ONLY when the
 //	        expectations dir loads; when expectations fails to load the shape check
 //	        is skipped (a load failure must not balloon into false unknown-shapes).
+//	line 8: step argument  (a bound step carrying a docstring it does not declare)
+//
+// The last step is BOUND and its assertion is fine — the defect is that it carries a
+// docstring the step's handler never declared. The runner would discard it in silence and
+// report the step as passed, so a binary that did not check this would certify a suite
+// containing an expectation nobody reads. It needs no custom comparator to write, which
+// is exactly why the binary can and must catch it (contributed phrases it genuinely
+// cannot see — D7).
 const defectsFeature = `Feature: defects
   Scenario: many problems
     Given the agent target "ghost"
@@ -40,6 +48,10 @@ const defectsFeature = `Feature: defects
     Then the moon is made of cheese
     And the run satisfies "tokens <"
     And the run matches shape "missing"
+    And the result contains "hi"
+      """
+      never read by the step above
+      """
 `
 
 // cleanTagged is defect-free: known target, valid @runs tag, valid aggregate CEL.
@@ -53,7 +65,7 @@ Feature: tagged
 `
 
 // seedDefectCorpus writes a valid config, a MALFORMED expectations file (the
-// config/expectations defect class), and the four-defect feature. It returns the
+// config/expectations defect class), and the five-defect feature. It returns the
 // config path and the features dir. The Tempo endpoint is deliberately
 // unreachable — validate must never dial it (no network by construction).
 func seedDefectCorpus(t *testing.T) (cfgPath, featuresDir, expDir string) {
@@ -97,7 +109,7 @@ func classesIn(out string) map[string]bool {
 }
 
 // TestValidateCollectsAllFindings proves a single validate run reports every
-// authoring defect class it can — three feature defects plus the malformed
+// authoring defect class it can — four feature defects plus the malformed
 // expectations file — with exit 1, never stopping at the first finding. Because
 // the seeded expectations dir fails to load, the shape check is (correctly) skipped
 // here; genuine unknown-shape is covered by TestValidateUnavailableSourceDoesNotBalloon.
@@ -115,7 +127,7 @@ func TestValidateCollectsAllFindings(t *testing.T) {
 	}
 
 	got := classesIn(out.String())
-	for _, class := range []string{"unbound-step", "bad-cel", "unknown-target", "expectations"} {
+	for _, class := range []string{"unbound-step", "bad-cel", "unknown-target", "expectations", "step-argument"} {
 		if !got[class] {
 			t.Errorf("missing finding class %q in output:\n%s", class, out.String())
 		}
@@ -131,6 +143,11 @@ func TestValidateCollectsAllFindings(t *testing.T) {
 		"unknown-target": 3,
 		"unbound-step":   5,
 		"bad-cel":        6,
+		// The bound step carrying a docstring its handler never declared. This is the
+		// binary's half of the step-argument check: it cannot see contributed phrases,
+		// but every built-in row's declared argument is derived from the handler it
+		// registers, so this class is fully within its reach.
+		"step-argument": 8,
 	}
 	for class, line := range wantLines {
 		if !hasFindingAtLine(out.String(), featuresDir, class, line) {

@@ -102,8 +102,9 @@ func InitializerWithBudget(eng *engine.Engine, col *report.Collector, budget *re
 	if err != nil {
 		return nil, err
 	}
-	// Prepared once: the step-argument agreement check for this engine's phrases.
-	phraseArgs := newPhraseArguments(resolved)
+	// Prepared once: the step-argument agreement check for every built-in row plus
+	// this engine's contributed phrases.
+	stepArgs := newStepArguments(resolved)
 
 	return func(sc *godog.ScenarioContext) {
 		w := &world{eng: eng, col: col, budget: budget, abort: abort}
@@ -147,11 +148,12 @@ func InitializerWithBudget(eng *engine.Engine, col *report.Collector, budget *re
 			if err := w.precheckShapePatterns(scenario.Steps); err != nil {
 				return ctx, err
 			}
-			// A step carrying an argument the contributed phrase it matches cannot
-			// receive is rejected here, before any SUT is driven. The surplus
+			// A step carrying an argument its step definition cannot receive —
+			// built-in row or contributed phrase alike — is rejected here, before
+			// any SUT is driven. The surplus
 			// direction is the important one: the runner discards the argument
 			// silently and the scenario reports PASSED on an expectation nobody read.
-			if err := phraseArgs.check(scenario.Steps); err != nil {
+			if err := stepArgs.check(scenario.Steps); err != nil {
 				return ctx, fmt.Errorf("scenario-init: %w", err)
 			}
 			return ctx, nil
@@ -337,6 +339,14 @@ func addJudge(acc, add *core.JudgeUsage) *core.JudgeUsage {
 }
 
 func (w *world) toolsInOrder(tbl *godog.Table) error {
+	// Measured on godog v0.15.1: a step declaring a data table but carrying a DOCSTRING
+	// reaches this handler with a typed-nil *godog.Table, and dereferencing tbl.Rows is
+	// a panic in library code — forbidden by Constitution IV. StepArguments rejects that
+	// step at scenario init, so this is the last line of defence rather than the first,
+	// which is exactly how the nine docstring handlers already treat their own nil.
+	if tbl == nil {
+		return fmt.Errorf("tools-in-order: expected a data table, got none")
+	}
 	var order []string
 	for i, row := range tbl.Rows {
 		if len(row.Cells) == 0 {
@@ -553,6 +563,14 @@ func (w *world) responseStatus(code int) error {
 }
 
 func (w *world) servicesInOrder(tbl *godog.Table) error {
+	// Measured on godog v0.15.1: a step declaring a data table but carrying a DOCSTRING
+	// reaches this handler with a typed-nil *godog.Table, and dereferencing tbl.Rows is
+	// a panic in library code — forbidden by Constitution IV. StepArguments rejects that
+	// step at scenario init, so this is the last line of defence rather than the first,
+	// which is exactly how the nine docstring handlers already treat their own nil.
+	if tbl == nil {
+		return fmt.Errorf("services-in-order: expected a data table, got none")
+	}
 	var order []string
 	for i, row := range tbl.Rows {
 		if len(row.Cells) == 0 {

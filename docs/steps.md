@@ -15,6 +15,12 @@ the engine that registered them, so a compiled `mentat` binary cannot see them a
 they cannot appear here. Render the reference for your own engine — built-ins plus
 your contributed phrases — from your own test binary instead.
 
+**Each step takes exactly the argument shown in its example** — a docstring, a data
+table, or neither. A step carrying one it does not take is rejected before the run
+starts, by `mentat validate` and again at scenario init. The runner would otherwise
+discard it without a word and report the step as passed, so an expectation written
+under the wrong step would read as a green nobody earned.
+
 ## Steps
 
 ### Drive
