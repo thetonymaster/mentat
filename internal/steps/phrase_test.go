@@ -1094,17 +1094,9 @@ func TestPhraseArgumentsIsInertWithoutPhrases(t *testing.T) {
 	}
 }
 
-// TestEnginePhraseArgumentsPropagatesValidationFailure pins that the static path cannot
-// silently fall back to "no phrases" when an engine's phrases are malformed — that
-// would make Validate report clean on a suite whose engine cannot even be built.
-func TestEnginePhraseArgumentsPropagatesValidationFailure(t *testing.T) {
-	t.Parallel()
-
-	eng := customComparatorEngine(t, withComparator("bad", &validationComparator{
-		name:    "bad",
-		phrases: []core.ContributedPhrase{wellFormed(`unanchored`)},
-	}))
-	if _, err := EnginePhraseArguments(eng); err == nil {
-		t.Fatal("EnginePhraseArguments accepted an unanchored phrase")
-	}
-}
+// The static path's refusal to fall back to "no phrases" on a malformed engine — which
+// would make Validate report clean on a suite whose engine cannot even be built — is
+// pinned by TestEngineStepChecksPropagatesValidationFailure in suite_test.go. This file
+// asserted the argument half through EnginePhraseArguments until convergence (T073)
+// removed that accessor; that test already covered both halves, so the assertion was
+// absorbed rather than lost.

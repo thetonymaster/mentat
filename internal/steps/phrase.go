@@ -557,23 +557,13 @@ func EngineStepDocs(eng *engine.Engine) ([]StepDoc, error) {
 	return out, nil
 }
 
-// EngineStepPatterns compiles the step-pattern set ONE engine binds against: the
-// built-in rows plus that engine's contributed phrases, in registration order.
+// stepPatternsFor compiles the step-pattern set ONE engine binds against: the built-in
+// rows plus that engine's contributed phrases, in registration order.
 //
 // This is what makes an engine-aware "unbound-step" finding trustworthy. The
 // built-in-only set answers a different question — "does any BUILT-IN step match?" —
 // and using it on a suite written in contributed phrases reports a valid file as
 // broken.
-func EngineStepPatterns(eng *engine.Engine) (StepPatterns, error) {
-	phrases, err := resolvePhrases(eng)
-	if err != nil {
-		return nil, err
-	}
-	return stepPatternsFor(phrases)
-}
-
-// stepPatternsFor is the pattern-set half of EngineStepChecks, shared so the two entry
-// points cannot build different sets from the same phrases.
 func stepPatternsFor(phrases []contributedPhrase) (StepPatterns, error) {
 	pats := BuiltinStepPatterns()
 	if len(phrases) == 0 {
@@ -617,17 +607,6 @@ func stepPatternsFor(phrases []contributedPhrase) (StepPatterns, error) {
 type PhraseArguments struct {
 	phrases  []contributedPhrase
 	builtins StepPatterns
-}
-
-// EnginePhraseArguments prepares the step-argument check for eng. It is exported so the
-// static validate path runs the SAME check the scenario-init path runs, rather than a
-// second one that can drift.
-func EnginePhraseArguments(eng *engine.Engine) (PhraseArguments, error) {
-	phrases, err := resolvePhrases(eng)
-	if err != nil {
-		return PhraseArguments{}, err
-	}
-	return newPhraseArguments(phrases), nil
 }
 
 func newPhraseArguments(phrases []contributedPhrase) PhraseArguments {
@@ -744,6 +723,26 @@ func stepArgumentKind(st *messages.PickleStep) string {
 // Callers wanting both must not resolve twice. Beyond the wasted regex compilation, two
 // resolutions are two chances to disagree about which phrases an engine has — and the
 // whole point of the engine-aware path is that it answers about exactly one engine.
+//
+// It is the ONLY engine-scoped entry point for the static path, which is the other half
+// of that guarantee. Two single-derivation accessors stood here until convergence
+// (T073): both were exported, neither was ever called outside a test, and a caller
+// wanting both halves had no way to take them but to resolve twice — the exact shape the
+// paragraph above forbids. Adding one back re-opens it.
+//
+// The ARGUMENT half cannot drift from what Run enforces, because both reach it the same
+// way: resolvePhrases, then newPhraseArguments — the same two calls scenario init makes
+// (steps.go:101-106).
+//
+// The PATTERN half has no scenario-init counterpart to drift from. godog owns matching at
+// runtime: registerSteps hands it the patterns directly (steps.go:127) and no StepPatterns
+// set is built there at all. So the shared root of the guarantee is resolvePhrases, not
+// stepPatternsFor — whose only caller is this function.
+//
+// Stated at this length because the comment removed here claimed both halves were shared
+// with scenario init, which was false for the pattern half. That is the same defect T073
+// deleted one function over (EnginePhraseArguments claimed a sharing that did not exist),
+// re-introduced in the text written to explain the deletion. Review measured it.
 func EngineStepChecks(eng *engine.Engine) (StepPatterns, PhraseArguments, error) {
 	phrases, err := resolvePhrases(eng)
 	if err != nil {

@@ -249,11 +249,11 @@ func TestDedupeSortFindingsIsDeterministic(t *testing.T) {
 	}
 }
 
-// TestEngineStepPatternsIncludesContributedPhrases is what makes an engine-aware
+// TestEngineStepChecksIncludesContributedPhrases is what makes an engine-aware
 // unbound-step finding trustworthy: the pattern set must be built-ins PLUS this
 // engine's phrases. Built-ins alone answer a different question and report a valid
 // file as broken.
-func TestEngineStepPatternsIncludesContributedPhrases(t *testing.T) {
+func TestEngineStepChecksIncludesContributedPhrases(t *testing.T) {
 	t.Parallel()
 
 	eng := customComparatorEngine(t, withComparator("revenue-shape", &validationComparator{
@@ -261,9 +261,9 @@ func TestEngineStepPatternsIncludesContributedPhrases(t *testing.T) {
 		phrases: []core.ContributedPhrase{wellFormed(`^the revenue floor is (\d+)$`)},
 	}))
 
-	pats, err := EngineStepPatterns(eng)
+	pats, _, err := EngineStepChecks(eng)
 	if err != nil {
-		t.Fatalf("EngineStepPatterns: %v", err)
+		t.Fatalf("EngineStepChecks: %v", err)
 	}
 	if len(pats) != len(BuiltinStepPatterns())+1 {
 		t.Fatalf("got %d patterns, want %d built-in + 1 contributed", len(pats), len(BuiltinStepPatterns()))
@@ -290,34 +290,17 @@ func TestEngineStepPatternsIncludesContributedPhrases(t *testing.T) {
 	}
 }
 
-// TestEngineStepPatternsWithoutContributionsIsBuiltinsOnly is SC-009 for the pattern
+// TestEngineStepChecksWithoutContributionsIsBuiltinsOnly is SC-009 for the pattern
 // set: the common engine must allocate and bind exactly what it did before.
-func TestEngineStepPatternsWithoutContributionsIsBuiltinsOnly(t *testing.T) {
+func TestEngineStepChecksWithoutContributionsIsBuiltinsOnly(t *testing.T) {
 	t.Parallel()
 
-	pats, err := EngineStepPatterns(customComparatorEngine(t))
+	pats, _, err := EngineStepChecks(customComparatorEngine(t))
 	if err != nil {
-		t.Fatalf("EngineStepPatterns: %v", err)
+		t.Fatalf("EngineStepChecks: %v", err)
 	}
 	if len(pats) != len(BuiltinStepPatterns()) {
 		t.Errorf("got %d patterns, want the %d built-ins exactly", len(pats), len(BuiltinStepPatterns()))
-	}
-}
-
-// TestEngineStepPatternsRejectsAMalformedPhrase pins that the pattern set refuses to
-// build over an invalid phrase rather than quietly omitting it — an omitted phrase
-// would make every sentence using it report as unbound, which is the false red this
-// whole surface exists to prevent.
-func TestEngineStepPatternsRejectsAMalformedPhrase(t *testing.T) {
-	t.Parallel()
-
-	eng := customComparatorEngine(t, withComparator("bad", &validationComparator{
-		name:    "bad",
-		phrases: []core.ContributedPhrase{wellFormed(`unanchored`)},
-	}))
-
-	if _, err := EngineStepPatterns(eng); err == nil {
-		t.Fatal("EngineStepPatterns accepted an unanchored phrase")
 	}
 }
 
@@ -325,6 +308,23 @@ func TestEngineStepPatternsRejectsAMalformedPhrase(t *testing.T) {
 // validator uses. Both derivations must come from ONE resolution: two resolutions are
 // two chances to disagree about which phrases an engine has, and the entire value of
 // the engine-aware path is that it answers about exactly one engine.
+//
+// # Mutation rehearsal (convergence T073, observed 2026-09-11)
+//
+// The pattern assertion below REPLACED a comparison against a second exported accessor,
+// so it had to be seen failing before it could be trusted — replacing a guard that
+// could not fail with another that cannot would be no change at all.
+//
+// Mutated `stepPatternsFor` (phrase.go) with `phrases = phrases[:1]`, dropping every
+// contributed phrase after the first. Verified the edit landed by grepping for the
+// marker before running, because 011 hit a rehearsal that silently failed to apply and
+// "the mutation didn't fire" is indistinguishable from "the guard is real" from test
+// output alone.
+//
+// RED, and only here: `got 41 patterns, want 42 (built-ins + both contributed phrases)`.
+// The single-phrase tests above stayed green, which is the expected result rather than a
+// gap — `phrases[:1]` preserves a lone phrase, so only a test supplying two can observe
+// the drop. Reverted and re-observed green.
 func TestEngineStepChecksResolvesOnceForBothDerivations(t *testing.T) {
 	t.Parallel()
 
@@ -341,13 +341,15 @@ func TestEngineStepChecksResolvesOnceForBothDerivations(t *testing.T) {
 		t.Fatalf("EngineStepChecks: %v", err)
 	}
 
-	// The pattern half must agree with the standalone accessor.
-	standalone, err := EngineStepPatterns(eng)
-	if err != nil {
-		t.Fatalf("EngineStepPatterns: %v", err)
-	}
-	if len(pats) != len(standalone) {
-		t.Errorf("EngineStepChecks returned %d patterns, EngineStepPatterns %d; the two must not build different sets from the same phrases", len(pats), len(standalone))
+	// The pattern half must carry BOTH of this engine's phrases, not merely the first.
+	//
+	// The old form of this check compared against a second exported accessor. That
+	// accessor delegated to the same stepPatternsFor this one does, so the comparison
+	// could only ever fail if someone edited one of two wrappers — and one of them had
+	// no production caller at all. Counting against the built-in floor cannot pass on a
+	// partial resolution, which is the failure actually worth catching.
+	if want := len(BuiltinStepPatterns()) + 2; len(pats) != want {
+		t.Errorf("got %d patterns, want %d (built-ins + both contributed phrases)", len(pats), want)
 	}
 
 	// The argument half must actually be armed — a zero PhraseArguments would silently
@@ -364,6 +366,13 @@ func TestEngineStepChecksResolvesOnceForBothDerivations(t *testing.T) {
 // TestEngineStepChecksPropagatesValidationFailure pins that neither derivation is
 // returned when the phrases are malformed — a caller must not get a usable pattern set
 // alongside a broken argument check, or it would validate against half an engine.
+//
+// The two halves fail differently, which is why both are asserted here: an omitted
+// PATTERN makes every sentence using that phrase report as unbound (the false red this
+// surface exists to prevent), while a silently inert ARGUMENT check makes Validate
+// report clean on a suite whose engine cannot even be built. Until convergence (T073)
+// each half also had its own test against its own exported accessor; removing those
+// accessors left this test covering both, so nothing lapsed with them.
 func TestEngineStepChecksPropagatesValidationFailure(t *testing.T) {
 	t.Parallel()
 
