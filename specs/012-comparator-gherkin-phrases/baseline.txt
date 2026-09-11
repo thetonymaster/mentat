@@ -91,13 +91,46 @@ SC-009 should be read as **byte-identical after the golden's own normalization**
 already how it treats the trailing duration line (`<DURATION>`). This is a clarification of an
 existing convention rather than a new exemption.
 
+### A SECOND caveat: the golden clause holds, the behavioural clause no longer does
+
+Found at convergence (Phase 10 / T089, 2026-09-11). SC-009 carries two claims, and after
+Phase 9 they have different answers.
+
+**The golden clause still holds — measured.** With zero contributed phrases, `make ci` and an
+uncached `go test -tags e2e` are both green and no golden churns.
+
+**"Proving the feature costs nothing when unused" is no longer true of BEHAVIOUR.** Phase 9
+closed the built-in half of the step-argument gap, and that check runs for EVERY engine,
+including one that contributes nothing:
+
+    a suite that PASSED at 0f9dcea with a surplus docstring on a built-in step now FAILS.
+
+That is not a regression and it is not an accident. The scenario that used to pass was
+reporting a verdict that never read the expectation its author wrote — godog discarded the
+argument in silence. Failing it is the entire point. But it means the honest reading of SC-009
+is now:
+
+> An engine with zero contributed phrases produces byte-identical output *after normalization*
+> for every suite that was **already correct**. Suites relying on an argument being silently
+> discarded change verdict, deliberately.
+
+Recorded rather than reverted: this was a deliberate, maintainer-approved scope change, made
+after convergence surfaced that the defect reached all 40 built-in steps and not just
+contributed phrases. The alternative — scoping the fix to phrases to protect the letter of
+SC-009 — would have left the larger half of the defect in place to satisfy a success criterion,
+which is the tail wagging the dog. The CHANGELOG marks it **BREAKING (authoring)** for the same
+reason.
+
 ---
 
 ## 3b. Final coverage (T064) — measured at the committed state
 
-Two earlier versions of this section recorded numbers that **did not reproduce**. Review
-caught both. That is the same failure this feature kept finding in itself, so the
-process is recorded alongside the result:
+THREE earlier versions of this section recorded numbers that **did not reproduce**. Review
+caught the first two; convergence caught the third, after Phases 8-9 moved two packages and
+this section still showed the pre-Phase-8 figures. That is the same failure this feature kept
+finding in itself — and the section documenting how to avoid stale measurements went stale
+three times, which is worth more than the numbers it holds. The process is therefore recorded
+alongside the result:
 
 - measured with `-count=1` (a cached run reports the PREVIOUS code's figures — that is
   how the first set survived);
@@ -110,11 +143,19 @@ process is recorded alongside the result:
 |---|---|---|---|
 | `github.com/thetonymaster/mentat` | 99.1% | **96.6%** | ≥ 80% ✓ |
 | `internal/core` | 100.0% | 100.0% | ≥ 80% ✓ |
-| `internal/engine` | 95.2% | 93.6% | ≥ 80% ✓ |
-| `internal/steps` | 88.9% | **89.2%** | ≥ 80% ✓, above baseline |
+| `internal/engine` | 95.2% | **95.0%** | ≥ 80% ✓ |
+| `internal/steps` | 88.9% | **89.5%** | ≥ 80% ✓, above baseline |
 | `cmd/mentat` | 69.4% | **62.0%** | below baseline — arithmetic, see below |
 
 Commands: `go test -count=1 ./... -coverprofile=…` here; the same in a `main` worktree.
+
+Re-measured at convergence (Phase 10 / T088, 2026-09-11) after Phases 8-10 landed. `internal/
+engine` 93.6% -> 95.0% and `internal/steps` 89.2% -> 89.5%; `cmd/mentat` and the facade are
+unchanged, so the arithmetic explanation below still stands as written. Taken at the final
+branch content with every code change complete — the only edits after this measurement are to
+documentation, which cannot move a coverage figure. Both numbers reproduced across two
+independent uncached runs before being written down, which is the check the first stale set
+failed.
 
 ### Why `cmd/mentat` fell — measured, not asserted
 

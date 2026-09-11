@@ -142,6 +142,46 @@ nothing would pass the first assertion too.
 `mentat validate --help` states the limit a compiled binary cannot escape; a test asserts the
 help text actually says so.
 
+#### The other two finding classes this feature added
+
+`unbound-step` alone does not walk you past either check convergence added, so exercise both.
+
+**`step-argument` — on BOTH surfaces.** Add a built-in step carrying an argument its handler
+cannot receive, e.g. a docstring under a step that declares none:
+
+```gherkin
+    Then the result contains "hi"
+      """
+      this body is read by nobody
+      """
+```
+
+```bash
+go run ./cmd/mentat validate features/     # -> [step-argument] …, exit 1
+```
+
+The binary catches this one: each built-in row's expected argument is derived by reflection
+from the handler it registers, and all 40 are compiled in. Before this check the scenario
+reported **PASSED** with the docstring silently discarded, so confirm it fails now. The same
+file through `mentat.Validate` must produce the same finding — that agreement is the point.
+
+**`ambiguous-step` — library path only.** Register two comparators whose contributed phrases
+both match one sentence (legal: only *identical* patterns are rejected at build):
+
+```go
+// ^the revenue floor is (\d+) (\w+)$   and   ^the revenue floor is 4 (\w+)$
+findings, err := mentat.Validate(ctx, cfg,
+	mentat.WithFeatures("features/"),
+	mentat.WithComparator("revenue-shape", newRevenueShape),
+	mentat.WithComparator("revenue-shape-exact", newExactFloor),
+)
+```
+
+Assert exactly one `ambiguous-step` naming **both** patterns, in registration order. Then run
+the same suite — it must fail under `Strict` for the same reason, which is what makes the
+validator's answer worth trusting. The binary cannot reach this case: it sees built-in
+patterns only, and no two of those are known to match one sentence.
+
 ### 3.6 L3 meta-test (FR-016, SC-007, Constitution V)
 
 A scenario using a contributed phrase whose assertion is **false** must make the run RED with the

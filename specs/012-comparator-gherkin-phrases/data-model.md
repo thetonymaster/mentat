@@ -37,7 +37,37 @@ must be renderable through the same path (FR-012, FR-014).
 | V5 | `Group`, `Summary`, `Example` are all non-blank | contributor, the missing field |
 
 V3/V4 catch only *identical* patterns. Genuine overlap between two well-formed anchored
-patterns is caught at match time by godog's strict matcher (R1) — see `Collision` below.
+patterns cannot be caught here at all — see `Collision` below for the two places it is.
+
+### The argument-agreement rule — a different subject, a different time
+
+**A step must carry exactly the argument the definition it binds can receive.** This is *not*
+a V6. Every rule above is a statement about a **phrase declaration**, checkable when the engine
+is built from the declarations alone. This one is a statement about a **step in a feature
+file**, so there is nothing to check until a corpus exists, and it is enforced wherever one
+does:
+
+| Surface | When | Sees |
+|---|---|---|
+| Scenario init (`StepArguments.check`) | before any SUT is driven, fail-fast | built-ins + this engine's phrases |
+| `mentat.Validate` (`StepArguments.Findings`) | statically, collect-all | built-ins + this engine's phrases |
+| `mentat validate` binary | statically, collect-all | built-ins only (D7) |
+
+It applies to **built-in rows and contributed phrases alike**, which is what makes it one rule
+about Gherkin rather than a restriction on extensions. The two halves derive their expectation
+differently and that asymmetry is structural, not an oversight:
+
+- a **built-in**'s expected argument is derived by reflection from the handler its `stepDefs`
+  row registers — derived, never listed beside it, because a hand-kept list would be a second
+  source of truth for the thing `stepDefs` exists to be the only source of;
+- a **contributed phrase** declares its own through the `:$` pattern convention, and can never
+  receive a data table: `CaptureParser` takes `[]string` and `ExpectationParser` takes `string`,
+  so no seam accepts one.
+
+The rule exists because godog **silently discards** any argument the handler did not declare
+(the conversion loop runs `i < numIn`), so the step would otherwise report a verdict that never
+read the expectation the author wrote. The binary enforces the built-in half despite seeing no
+phrases, because that half needs no comparator to reach.
 
 ---
 
@@ -122,16 +152,28 @@ FR-014).
 
 ## 5. `Collision`
 
-Two entries in one `EngineStepSet` whose patterns can match the same sentence. Detected in two
-places, deliberately (D8):
+Two entries in one `EngineStepSet` whose patterns can match the same sentence. Detected in
+three places, deliberately (D8):
 
 | Kind | When | Mechanism |
 |---|---|---|
 | Identical patterns (V3/V4) | engine build | Mentat's own check, naming both contributors |
-| Genuine overlap between well-formed anchored patterns | step match | godog's strict matcher, naming **every** matching expression |
+| Genuine overlap, on a sentence the corpus contains | static validate | `StepBindingFindings`, one `ambiguous-step` finding naming **every** matching pattern |
+| Genuine overlap, on a sentence being run | step match | godog's strict matcher, naming **every** matching expression |
 
-The second exists because overlap is not cheaply decidable in general, and because R1 proved
-godog's matcher does it exactly once `Strict` is on. The measured message shape:
+Rows two and three exist because overlap between two well-formed anchored patterns is **not
+decided anywhere** — neither by Mentat nor by godog. Both classify per *sentence*, so a
+collision on a sentence no scenario contains is reported by nobody. Nothing in this feature
+computes regex intersection, and no row above should be read as claiming otherwise.
+
+Row two was added at convergence (Phase 10 / T090). Without it `mentat.Validate` certified a
+suite the runner refuses — the drift D7 exists to remove. It is the **same predicate** as row
+three rather than an approximation of it: godog's matcher reduces to "how many registered
+patterns match this text" (its keyword filter is inert because every Mentat step registers via
+`reg.Step`, i.e. `formatters.None`), and `SuiteCheck.Patterns` is that same set in the same
+registration order — so the two even list the matches in the same order.
+
+Row three was proved by R1 to work exactly once `Strict` is on. The measured message shape:
 
 ```
 ambiguous step definition, step text: the widget is green
