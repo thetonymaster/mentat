@@ -164,23 +164,23 @@ build fails naming both, and that no scenario executes.
 
 ### Tests for User Story 3 (REQUIRED — Test-First) ⚠️
 
-- [ ] T035 [P] [US3] Write FAILING table-driven validation tests in `internal/steps/phrase_test.go` for rules V1–V5 ([data-model.md](./data-model.md) §1): uncompilable pattern; unanchored pattern; identical contributed patterns; pattern identical to a built-in's; blank `Group`/`Summary`/`Example`. One row per rule, each asserting the error names the contributor and the offending value (go-test-writer, red)
-- [ ] T036 [P] [US3] Write the FAILING test asserting **no scenario executes** when validation fails — the failure is at engine build, not mid-suite (go-test-writer, red)
-- [ ] T037 [P] [US3] Write the FAILING test for the anchoring rule's edge case: a pattern ending in an **escaped** `\$` is not anchored and must be rejected (R8) (go-test-writer, red)
-- [ ] T038 [US3] Write the FAILING end-to-end collision test: two contributed phrases whose anchored patterns both match one sentence produce a FAILED scenario naming every matching expression (FR-007b). Confirm it fails against the pre-T005 non-strict configuration first — this is the phrase-level counterpart of T004 (go-test-writer, red)
+- [X] T035 [P] [US3] Write FAILING table-driven validation tests in `internal/steps/phrase_test.go` for rules V1–V5 ([data-model.md](./data-model.md) §1): uncompilable pattern; unanchored pattern; identical contributed patterns; pattern identical to a built-in's; blank `Group`/`Summary`/`Example`. One row per rule, each asserting the error names the contributor and the offending value (go-test-writer, red)
+- [X] T036 [P] [US3] Write the FAILING test asserting **no scenario executes** when validation fails — the failure is at engine build, not mid-suite (go-test-writer, red)
+- [X] T037 [P] [US3] Write the FAILING test for the anchoring rule's edge case: a pattern ending in an **escaped** `\$` is not anchored and must be rejected (R8) (go-test-writer, red)
+- [X] T038 [US3] Write the FAILING end-to-end collision test: two contributed phrases whose anchored patterns both match one sentence produce a FAILED scenario naming every matching expression (FR-007b). Confirm it fails against the pre-T005 non-strict configuration first — this is the phrase-level counterpart of T004 (go-test-writer, red)
 
 ### Implementation for User Story 3
 
-- [ ] T039 [P] [US3] Implement V1 (regex compiles) and V2 (anchored `^…$`, unescaped terminal `$`) in `internal/steps/phrase.go`; confirm the T035/T037 rows green (go-test-writer, green)
-- [ ] T040 [US3] Implement V3 (duplicate contributed patterns, naming **both** contributors) and V4 (collision with a `stepDefs` row, naming the built-in step) in `internal/steps/phrase.go` (go-test-writer, green)
-- [ ] T041 [US3] Implement V5 (non-blank `Group`/`Summary`/`Example`) in `internal/steps/phrase.go`, matching the bar `TestStepMetadataFieldsPresent` sets for built-in rows (D5) (go-test-writer, green)
-- [ ] T042 [US3] Wire validation into the engine build path so failures surface before any scenario runs; confirm T036 green (go-test-writer, green)
-- [ ] T043 [US3] Confirm T038 green on T005's `Strict: true`; assert the reason text names every matching expression (go-test-writer, green)
-- [ ] T044 [US3] Assert built-ins register **before** contributed phrases, and contributed phrases in sorted comparator-name order — godog returns the first match, so ordering decides collision resolution and map order would make it vary between runs of an unchanged suite (R3) (go-test-writer)
-- [ ] T045 [US3] Record a mutation rehearsal per rejection path (SC-003), naming what was mutated (go-test-writer)
-- [ ] T046 [P] [US3] Add the edge-case tests the spec lists and Phase 5 has not yet covered: the same comparator registered under two names contributing the same phrase; a phrase contributed after the registry is sealed (`registry.go:71-79`); a contributed pattern matching a step the engine's tag expression never selects (go-test-writer)
+- [X] T039 [P] [US3] Implement V1 (regex compiles) and V2 (anchored `^…$`, unescaped terminal `$`) in `internal/steps/phrase.go`; confirm the T035/T037 rows green (go-test-writer, green)
+- [X] T040 [US3] Implement V3 (duplicate contributed patterns, naming **both** contributors) and V4 (collision with a `stepDefs` row, naming the built-in step) in `internal/steps/phrase.go` (go-test-writer, green)
+- [X] T041 [US3] Implement V5 (non-blank `Group`/`Summary`/`Example`) in `internal/steps/phrase.go`, matching the bar `TestStepMetadataFieldsPresent` sets for built-in rows (D5) (go-test-writer, green)
+- [X] T042 [US3] Wire validation into the engine build path so failures surface before any scenario runs; confirm T036 green (go-test-writer, green)
+- [X] T043 [US3] Confirm T038 green on T005's `Strict: true`; assert the reason text names every matching expression (go-test-writer, green)
+- [X] T044 [US3] Assert built-ins register **before** contributed phrases, and contributed phrases in sorted comparator-name order — godog returns the first match, so ordering decides collision resolution and map order would make it vary between runs of an unchanged suite (R3) (go-test-writer)
+- [X] T045 [US3] Record a mutation rehearsal per rejection path (SC-003), naming what was mutated (go-test-writer)
+- [X] T046 [P] [US3] Add the edge-case tests the spec lists and Phase 5 has not yet covered: the same comparator registered under two names contributing the same phrase; a phrase contributed after the registry is sealed (`registry.go:71-79`); a contributed pattern matching a step the engine's tag expression never selects (go-test-writer)
 
-- [ ] T047 [P] [US3] Pin the assumption V4 rests on: assert the 40 built-in `stepDefs` patterns are **pairwise disjoint** — no sentence matches two of them — in `internal/steps/metadata_test.go`. Generate sentences from each pattern's parsed syntax tree expanding every alternation branch. Nothing asserted this before R10 measured it, and V4 (a contributed pattern identical to a built-in's) is only meaningful if the built-in set is itself unambiguous (go-test-writer)
+- [X] T047 [P] [US3] Pin the assumption V4 rests on: assert the 40 built-in `stepDefs` patterns are **pairwise disjoint** — no sentence matches two of them — in `internal/steps/metadata_test.go`. Generate sentences from each pattern's parsed syntax tree expanding every alternation branch. Nothing asserted this before R10 measured it, and V4 (a contributed pattern identical to a built-in's) is only meaningful if the built-in set is itself unambiguous (go-test-writer)
 
 **Checkpoint**: Every collision and malformed-phrase path is loud and named.
 

@@ -2,6 +2,8 @@ package steps
 
 import (
 	"os"
+	"regexp"
+	"regexp/syntax"
 	"sort"
 	"strings"
 	"testing"
@@ -268,4 +270,112 @@ func sortedKeys(m map[string]struct{}) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// TestBuiltinStepPatternsArePairwiseDisjoint pins the assumption V4 rests on.
+//
+// V4 rejects a contributed pattern identical to a built-in's, on the grounds that
+// built-ins register first and would permanently shadow it. That rule is only
+// meaningful if the built-in set is itself unambiguous — and until this test, nothing
+// asserted that. It was measured while investigating the ambiguity defect (012 R10)
+// and turned out to be TRUE, which corrected a spec claim that the ambiguous branch was
+// already reachable between two built-ins.
+//
+// Sentences are generated from each pattern's own syntax tree, expanding every
+// alternation branch, so the check does not depend on anyone hand-listing examples.
+func TestBuiltinStepPatternsArePairwiseDisjoint(t *testing.T) {
+	t.Parallel()
+
+	docs := StepDocs()
+	pats := make([]*regexp.Regexp, len(docs))
+	for i, d := range docs {
+		pats[i] = regexp.MustCompile(d.Pattern)
+	}
+
+	// Fillers stand in for capture groups and character classes. They are varied
+	// deliberately: a single filler could miss an overlap that only appears for, say,
+	// a numeric capture.
+	fillers := []string{"x", "", "a b", "1", "2nd", "true", "0.5", "tool-name", "a/b.c"}
+
+	seen := map[string]bool{}
+	generated := 0
+	for _, d := range docs {
+		re, err := syntax.Parse(d.Pattern, syntax.Perl)
+		if err != nil {
+			t.Fatalf("parse %q: %v", d.Pattern, err)
+		}
+		for _, f := range fillers {
+			for _, sentence := range expandPattern(re.Simplify(), f, 0) {
+				if seen[sentence] {
+					continue
+				}
+				seen[sentence] = true
+				generated++
+
+				var matched []int
+				for j, p := range pats {
+					if p.MatchString(sentence) {
+						matched = append(matched, j)
+					}
+				}
+				if len(matched) > 1 {
+					names := make([]string, 0, len(matched))
+					for _, j := range matched {
+						names = append(names, docs[j].Pattern)
+					}
+					t.Errorf("sentence %q matches %d built-in patterns, which makes the built-in grammar ambiguous:\n\t%s",
+						sentence, len(matched), strings.Join(names, "\n\t"))
+				}
+			}
+		}
+	}
+
+	// A generator that silently produced nothing would report success forever.
+	if generated < 500 {
+		t.Fatalf("only %d sentences generated from %d patterns; the generator has likely broken rather than the grammar having shrunk", generated, len(docs))
+	}
+}
+
+// expandPattern generates candidate sentences from a parsed pattern, taking EVERY
+// alternation branch and substituting filler for anything variable.
+func expandPattern(re *syntax.Regexp, filler string, depth int) []string {
+	if depth > 12 {
+		return []string{""}
+	}
+	switch re.Op {
+	case syntax.OpLiteral:
+		return []string{string(re.Rune)}
+	case syntax.OpConcat:
+		out := []string{""}
+		for _, sub := range re.Sub {
+			subs := expandPattern(sub, filler, depth+1)
+			next := make([]string, 0, len(out)*len(subs))
+			for _, pre := range out {
+				for _, s := range subs {
+					next = append(next, pre+s)
+				}
+			}
+			if len(next) > 4000 {
+				next = next[:4000]
+			}
+			out = next
+		}
+		return out
+	case syntax.OpAlternate:
+		var out []string
+		for _, sub := range re.Sub {
+			out = append(out, expandPattern(sub, filler, depth+1)...)
+		}
+		return out
+	case syntax.OpCapture:
+		return expandPattern(re.Sub[0], filler, depth+1)
+	case syntax.OpQuest:
+		return append([]string{""}, expandPattern(re.Sub[0], filler, depth+1)...)
+	case syntax.OpStar, syntax.OpPlus, syntax.OpRepeat,
+		syntax.OpCharClass, syntax.OpAnyChar, syntax.OpAnyCharNotNL:
+		return []string{filler}
+	default:
+		// Anchors, empty matches and word boundaries contribute no characters.
+		return []string{""}
+	}
 }

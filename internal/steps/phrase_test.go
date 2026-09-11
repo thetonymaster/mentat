@@ -10,6 +10,7 @@ import (
 
 	"github.com/cucumber/godog"
 	"github.com/thetonymaster/mentat/internal/core"
+	"github.com/thetonymaster/mentat/internal/engine"
 )
 
 // --- T019: the godog handler bridge ---
@@ -531,5 +532,335 @@ func TestContributedPhraseGoesRedOnAFalseClaim(t *testing.T) {
 				t.Errorf("output does not carry the comparator's own reason %q; a generic failure message would hide WHY the assertion failed\n%s", tt.wantReason, out)
 			}
 		})
+	}
+}
+
+// --- T035/T036/T037: validation rules V1–V5 ---
+
+// validationComparator contributes whatever phrases a test hands it.
+type validationComparator struct {
+	name    string
+	phrases []core.ContributedPhrase
+	noSeam  bool
+}
+
+func (c *validationComparator) Name() string { return c.name }
+func (c *validationComparator) Compare(_ context.Context, _ core.Evidence, _ core.Expectation) (core.Verdict, error) {
+	return core.Verdict{Pass: true}, nil
+}
+func (c *validationComparator) ContributedPhrases() []core.ContributedPhrase { return c.phrases }
+
+// seamless contributes phrases but implements NO parser seam — declared standalone so
+// embedding cannot promote one in by accident.
+type seamless struct {
+	name    string
+	phrases []core.ContributedPhrase
+}
+
+func (c *seamless) Name() string { return c.name }
+func (c *seamless) Compare(_ context.Context, _ core.Evidence, _ core.Expectation) (core.Verdict, error) {
+	return core.Verdict{Pass: true}, nil
+}
+func (c *seamless) ContributedPhrases() []core.ContributedPhrase { return c.phrases }
+
+func (c *validationComparator) ParseCaptures(caps []string) (core.Expectation, error) {
+	return strings.Join(caps, ","), nil
+}
+
+// Implements BOTH parser seams so a validation test can use docstring-routed and
+// capture-routed phrases from one stub. Tests that need a MISSING seam use `seamless`.
+func (c *validationComparator) ParseExpectation(text string) (core.Expectation, error) {
+	return text, nil
+}
+
+func wellFormed(pattern string) core.ContributedPhrase {
+	return core.ContributedPhrase{
+		Pattern: pattern,
+		Group:   "Custom",
+		Summary: "A contributed phrase.",
+		Example: "Then something happens",
+	}
+}
+
+// TestPhraseValidationRules pins V1–V5 ([data-model.md] §1). Every rule fails the
+// ENGINE BUILD and names the contributor and the offending value.
+//
+// Naming both is the whole point. A consumer may register a dozen comparators from
+// several modules; "invalid pattern" tells them a defect exists, not which of their
+// dependencies shipped it.
+//
+// # Mutation rehearsals, one per rejection path (2026-09-11)
+//
+// Each guard was disabled in turn, under an assertion that the source edit applied,
+// and the rows that went red were recorded:
+//
+//	guard disabled          rows red
+//	V1 (compiles)           1  — "pattern does not compile"
+//	V2 (anchored)           3  — start, end, and the escaped-dollar edge case
+//	V3 (duplicate phrase)   1  — "naming BOTH"
+//	V4 (built-in clash)     1  — "identical to a built-in step's"
+//	V5 (non-blank fields)   3  — Group, Summary, Example
+//	seam present            1  — "implements no capture parser"
+//
+// Each mutation reddened ONLY its own rows. That is the stronger result: it shows no
+// rule is redundant with another, and no row is passing for a reason other than the
+// one it names. All reverted; re-observed green.
+func TestPhraseValidationRules(t *testing.T) {
+	t.Parallel()
+
+	// A real built-in pattern, for the V4 collision row.
+	builtin := StepDocs()[0].Pattern
+
+	tests := []struct {
+		name     string
+		cmps     []core.Comparator
+		wantSubs []string
+	}{
+		{
+			name:     "V1: pattern does not compile",
+			cmps:     []core.Comparator{&validationComparator{name: "bad-regex", phrases: []core.ContributedPhrase{wellFormed(`^the (unclosed$`)}}},
+			wantSubs: []string{"bad-regex", "^the (unclosed$"},
+		},
+		{
+			name:     "V2: pattern is not anchored at the start",
+			cmps:     []core.Comparator{&validationComparator{name: "unanchored-start", phrases: []core.ContributedPhrase{wellFormed(`the revenue is fine$`)}}},
+			wantSubs: []string{"unanchored-start", "anchored"},
+		},
+		{
+			name:     "V2: pattern is not anchored at the end",
+			cmps:     []core.Comparator{&validationComparator{name: "unanchored-end", phrases: []core.ContributedPhrase{wellFormed(`^the revenue is fine`)}}},
+			wantSubs: []string{"unanchored-end", "anchored"},
+		},
+		{
+			name: "V2: a trailing ESCAPED dollar is not an anchor",
+			// `\$` matches a literal dollar sign; the pattern is unanchored and can
+			// swallow a neighbouring step. This is the edge case R8 calls out.
+			cmps:     []core.Comparator{&validationComparator{name: "escaped-dollar", phrases: []core.ContributedPhrase{wellFormed(`^the price is 5\$`)}}},
+			wantSubs: []string{"escaped-dollar", "anchored"},
+		},
+		{
+			name: "V3: two comparators contribute an identical pattern, naming BOTH",
+			cmps: []core.Comparator{
+				&validationComparator{name: "alpha-cmp", phrases: []core.ContributedPhrase{wellFormed(`^the reading is fine$`)}},
+				&validationComparator{name: "zeta-cmp", phrases: []core.ContributedPhrase{wellFormed(`^the reading is fine$`)}},
+			},
+			wantSubs: []string{"alpha-cmp", "zeta-cmp", "^the reading is fine$"},
+		},
+		{
+			name:     "V4: pattern is identical to a built-in step's",
+			cmps:     []core.Comparator{&validationComparator{name: "shadower", phrases: []core.ContributedPhrase{wellFormed(builtin)}}},
+			wantSubs: []string{"shadower", strconv.Quote(builtin), "built-in"},
+		},
+		{
+			name: "V5: blank Group",
+			cmps: []core.Comparator{&validationComparator{name: "blank-group", phrases: []core.ContributedPhrase{
+				{Pattern: `^ok$`, Group: "  ", Summary: "s", Example: "e"}}}},
+			wantSubs: []string{"blank-group", "Group"},
+		},
+		{
+			name: "V5: blank Summary",
+			cmps: []core.Comparator{&validationComparator{name: "blank-summary", phrases: []core.ContributedPhrase{
+				{Pattern: `^ok$`, Group: "g", Summary: "", Example: "e"}}}},
+			wantSubs: []string{"blank-summary", "Summary"},
+		},
+		{
+			name: "V5: blank Example",
+			cmps: []core.Comparator{&validationComparator{name: "blank-example", phrases: []core.ContributedPhrase{
+				{Pattern: `^ok$`, Group: "g", Summary: "s", Example: ""}}}},
+			wantSubs: []string{"blank-example", "Example"},
+		},
+		{
+			name:     "contributes a phrase but implements no capture parser",
+			cmps:     []core.Comparator{&seamless{name: "no-parser", phrases: []core.ContributedPhrase{wellFormed(`^the reading is (\w+)$`)}}},
+			wantSubs: []string{"no-parser", "CaptureParser"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			opts := make([]engine.Option, 0, len(tt.cmps))
+			for _, c := range tt.cmps {
+				opts = append(opts, withComparator(c.Name(), c))
+			}
+			eng := customComparatorEngine(t, opts...)
+
+			_, err := resolvePhrases(eng)
+			if err == nil {
+				t.Fatal("validation accepted a malformed phrase; every rule must fail the engine build")
+			}
+			for _, sub := range tt.wantSubs {
+				if !strings.Contains(err.Error(), sub) {
+					t.Errorf("error %q does not mention %q", err.Error(), sub)
+				}
+			}
+		})
+	}
+}
+
+// TestPhraseValidationAcceptsWellFormedPhrases is the other side: validation must not
+// be so eager that nothing passes. A test suite where every row is a rejection cannot
+// distinguish "correctly strict" from "rejects everything".
+func TestPhraseValidationAcceptsWellFormedPhrases(t *testing.T) {
+	t.Parallel()
+
+	eng := customComparatorEngine(t, withComparator("good-cmp", &validationComparator{
+		name: "good-cmp",
+		phrases: []core.ContributedPhrase{
+			wellFormed(`^the reading is (\w+)$`),
+			wellFormed(`^the reading is:$`),
+			wellFormed(`^the reading holds$`),
+		},
+	}))
+
+	got, err := resolvePhrases(eng)
+	if err != nil {
+		t.Fatalf("validation rejected well-formed phrases: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("resolved %d phrases, want 3", len(got))
+	}
+	// Arity and docstring-ness are derived from the pattern, not declared.
+	wantArity := []int{1, 0, 0}
+	wantDoc := []bool{false, true, false}
+	for i := range got {
+		if got[i].arity != wantArity[i] {
+			t.Errorf("phrase %d arity = %d, want %d", i, got[i].arity, wantArity[i])
+		}
+		if got[i].wantsDoc != wantDoc[i] {
+			t.Errorf("phrase %d wantsDoc = %v, want %v", i, got[i].wantsDoc, wantDoc[i])
+		}
+	}
+}
+
+// TestAnchoredPatternEdgeCases pins the anchoring predicate directly, including the
+// escaped-dollar case that a naive HasSuffix("$") check gets wrong.
+func TestAnchoredPatternEdgeCases(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		pattern string
+		want    bool
+	}{
+		{`^ok$`, true},
+		{`^the price is (\d+)$`, true},
+		{`ok$`, false},
+		{`^ok`, false},
+		{`^the price is 5\$`, false},   // escaped dollar: a literal $, not an anchor
+		{`^the price is 5\\$`, true},   // escaped BACKSLASH then a real anchor
+		{`^the price is 5\\\$`, false}, // escaped backslash then escaped dollar
+		{`$`, false},                   // no start anchor
+		{`^$`, true},                   // degenerate but genuinely anchored
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.pattern, func(t *testing.T) {
+			t.Parallel()
+			if got := isAnchored(tt.pattern); got != tt.want {
+				t.Errorf("isAnchored(%q) = %v, want %v", tt.pattern, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- T046: edge cases the spec lists ---
+
+// TestSameComparatorUnderTwoNamesCollidesWithItself covers the case an author is most
+// likely to create by accident: one comparator instance registered under two names.
+//
+// It is a genuine collision even though only one object is involved — the sentence
+// would match two registered step definitions — and the error must name both
+// REGISTERED NAMES, since that is what the author has to reconcile. Naming the
+// comparator's own Name() twice would be useless.
+func TestSameComparatorUnderTwoNamesCollidesWithItself(t *testing.T) {
+	t.Parallel()
+
+	shared := &validationComparator{name: "shared", phrases: []core.ContributedPhrase{wellFormed(`^the reading is fine$`)}}
+	eng := customComparatorEngine(t,
+		withComparator("first-name", shared),
+		withComparator("second-name", shared),
+	)
+
+	_, err := resolvePhrases(eng)
+	if err == nil {
+		t.Fatal("one comparator registered under two names contributed the same pattern twice without complaint")
+	}
+	for _, want := range []string{"first-name", "second-name"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not name the registered name %q; the author reconciles REGISTRATIONS, not object identity", err.Error(), want)
+		}
+	}
+}
+
+// mutatingContributor hands out a phrase slice and then mutates it, modelling a
+// comparator that tries to add phrases after the engine is built.
+type mutatingContributor struct {
+	phrases []core.ContributedPhrase
+}
+
+func (c *mutatingContributor) Name() string { return "mutating" }
+func (c *mutatingContributor) Compare(_ context.Context, _ core.Evidence, _ core.Expectation) (core.Verdict, error) {
+	return core.Verdict{Pass: true}, nil
+}
+func (c *mutatingContributor) ContributedPhrases() []core.ContributedPhrase { return c.phrases }
+func (c *mutatingContributor) ParseCaptures(caps []string) (core.Expectation, error) {
+	return strings.Join(caps, ","), nil
+}
+
+// TestPhrasesAddedAfterResolutionDoNotAffectTheBuiltEngine pins that the resolved set
+// is a snapshot.
+//
+// A comparator mutating its phrase list after the engine is built has NO effect, and
+// that is the correct outcome rather than a limitation: the engine's seam registry is
+// sealed, and a step set that could grow mid-run would mean the drift partition and the
+// binding precheck were both computed against a set that no longer exists.
+func TestPhrasesAddedAfterResolutionDoNotAffectTheBuiltEngine(t *testing.T) {
+	t.Parallel()
+
+	c := &mutatingContributor{phrases: []core.ContributedPhrase{wellFormed(`^the reading is (\w+)$`)}}
+	eng := customComparatorEngine(t, withComparator("mutating", c))
+
+	before, err := resolvePhrases(eng)
+	if err != nil {
+		t.Fatalf("resolvePhrases: %v", err)
+	}
+	if len(before) != 1 {
+		t.Fatalf("resolved %d phrases, want 1", len(before))
+	}
+
+	// The comparator tries to add a phrase after the fact.
+	c.phrases = append(c.phrases, wellFormed(`^the reading is definitely (\w+)$`))
+
+	if len(before) != 1 {
+		t.Errorf("the already-resolved set grew to %d; it must be a snapshot", len(before))
+	}
+	// Re-resolving DOES see it — resolution is a function of the engine's comparators
+	// at call time. What must never happen is the previously-built binding changing
+	// underneath a running suite, which the snapshot above proves.
+	after, err := resolvePhrases(eng)
+	if err != nil {
+		t.Fatalf("re-resolve: %v", err)
+	}
+	if len(after) != 2 {
+		t.Errorf("re-resolution saw %d phrases, want 2; resolution must reflect the comparators as they are when called", len(after))
+	}
+}
+
+// TestContributedPhraseNeverSelectedByTagsIsStillValidated pins that validation is
+// unconditional. A phrase belonging to a scenario the tag expression filters out is
+// still registered and still validated: deferring validation to first use would mean a
+// malformed phrase lay dormant until someone happened to run the right tag, which is
+// the least useful moment to discover it.
+func TestContributedPhraseNeverSelectedByTagsIsStillValidated(t *testing.T) {
+	t.Parallel()
+
+	eng := customComparatorEngine(t, withComparator("unanchored", &validationComparator{
+		name:    "unanchored",
+		phrases: []core.ContributedPhrase{wellFormed(`the never selected reading$`)},
+	}))
+
+	if _, err := resolvePhrases(eng); err == nil {
+		t.Fatal("a phrase no scenario would select was accepted; validation must not depend on whether a phrase is reached")
 	}
 }

@@ -60,7 +60,7 @@ func (c *isolationComparator) Compare(_ context.Context, _ mentat.Evidence, _ me
 
 // runIsolated builds ONE engine (one mentat.Run) registering only cmp, over a feature
 // written in the given sentence.
-func runIsolated(t *testing.T, cmp *isolationComparator, sentence string) (mentat.Results, string, error) {
+func runIsolated(t *testing.T, cmp mentat.Comparator, sentence string) (mentat.Results, string, error) {
 	t.Helper()
 	b := newBus()
 	var buf bytes.Buffer
@@ -208,5 +208,116 @@ func TestContributedPhrasesAreScopedUnderConcurrency(t *testing.T) {
 			t.Errorf("[%s] concurrent run did not bind its own phrase: passed=%d failed=%d\n%s",
 				token, results[i].Passed, results[i].Failed, outs[i])
 		}
+	}
+}
+
+// --- T036/T038: composition-time rejection and match-time collision ---
+
+// brokenPhrase contributes a single malformed phrase and records whether it was ever
+// asked to parse anything.
+type brokenPhrase struct {
+	pattern string
+	parsed  bool
+}
+
+func (c *brokenPhrase) Name() string { return "broken" }
+func (c *brokenPhrase) ContributedPhrases() []mentat.ContributedPhrase {
+	return []mentat.ContributedPhrase{{
+		Pattern: c.pattern, Group: "Broken", Summary: "s", Example: "e",
+	}}
+}
+func (c *brokenPhrase) ParseCaptures(caps []string) (mentat.Expectation, error) {
+	c.parsed = true
+	return "x", nil
+}
+func (c *brokenPhrase) Compare(_ context.Context, _ mentat.Evidence, _ mentat.Expectation) (mentat.Verdict, error) {
+	return mentat.Verdict{Pass: true}, nil
+}
+
+// TestMalformedPhraseFailsBeforeAnyScenarioRuns is T036/SC-003: a phrase defect stops
+// the run at COMPOSITION, not partway through a suite.
+//
+// The distinction is not pedantic. A defect surfacing mid-suite means some scenarios
+// already drove a real SUT — spending time, tokens and money — before the run was
+// abandoned for a reason that was knowable before any of it started.
+func TestMalformedPhraseFailsBeforeAnyScenarioRuns(t *testing.T) {
+	cmp := &brokenPhrase{pattern: `the reading is fine`} // unanchored: violates V2
+
+	res, out, err := runIsolated(t, cmp, "the reading is fine")
+
+	if err == nil {
+		t.Fatalf("Run accepted an unanchored contributed pattern; it must fail the build\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "broken") || !strings.Contains(err.Error(), "anchored") {
+		t.Errorf("error %q must name the contributing comparator and the rule it broke", err)
+	}
+	// The decisive assertions: nothing ran.
+	if res.Total != 0 || res.Passed != 0 || res.Failed != 0 {
+		t.Errorf("scenarios executed despite a composition failure: total=%d passed=%d failed=%d", res.Total, res.Passed, res.Failed)
+	}
+	if cmp.parsed {
+		t.Error("the comparator was asked to parse a sentence even though the engine build failed")
+	}
+}
+
+// overlapComparator contributes TWO well-formed, anchored patterns that both match one
+// sentence. Neither V3 nor V4 can catch this: the patterns are not identical, and
+// deciding regex overlap in general is not something Mentat should attempt.
+type overlapComparator struct{ ran []string }
+
+func (c *overlapComparator) Name() string { return "overlap" }
+func (c *overlapComparator) ContributedPhrases() []mentat.ContributedPhrase {
+	return []mentat.ContributedPhrase{
+		{Pattern: `^the (\w+) reading is fine$`, Group: "Overlap", Summary: "broad", Example: "Then the alpha reading is fine"},
+		{Pattern: `^the alpha reading is fine$`, Group: "Overlap", Summary: "specific", Example: "Then the alpha reading is fine"},
+	}
+}
+func (c *overlapComparator) ParseCaptures(caps []string) (mentat.Expectation, error) {
+	c.ran = append(c.ran, strings.Join(caps, ","))
+	return "x", nil
+}
+func (c *overlapComparator) Compare(_ context.Context, _ mentat.Evidence, _ mentat.Expectation) (mentat.Verdict, error) {
+	return mentat.Verdict{Pass: true}, nil
+}
+
+// TestGenuinelyOverlappingPhrasesFailLoudly is T038/SC-011 — the END-TO-END counterpart
+// of internal/steps' characterization test, and the first point in this repo's history
+// where the ambiguous branch is reachable through the public surface.
+//
+// Two anchored, well-formed, non-identical patterns both match one sentence. Anchoring
+// does not prevent this and was never claimed to; Strict is the backstop, and the
+// build-time rules are the fast feedback for the cases that ARE cheaply decidable.
+//
+// Before Strict this scenario reported PASSED with the broad pattern silently
+// swallowing the specific one — a green verdict nobody wrote. That is precisely what
+// this test would catch if the flag were ever removed, which makes it the behavioural
+// guard for run.go that the internal characterization test structurally could not be.
+func TestGenuinelyOverlappingPhrasesFailLoudly(t *testing.T) {
+	cmp := &overlapComparator{}
+	res, out, err := runIsolated(t, cmp, "the alpha reading is fine")
+	if err != nil {
+		t.Fatalf("Run returned a harness error: %v\n%s", err, out)
+	}
+
+	if res.Passed != 0 {
+		t.Fatalf("an ambiguous step PASSED; the first-registered pattern silently swallowed the other and the scenario reported a verdict nobody wrote\n%s", out)
+	}
+	if res.Failed != 1 {
+		t.Fatalf("failed=%d, want 1\n%s", res.Failed, out)
+	}
+
+	reasons := strings.Join(res.Scenarios[0].Reasons, "\n")
+	if !strings.Contains(reasons, "ambiguous") {
+		t.Errorf("reason %q does not report the ambiguity", reasons)
+	}
+	// Naming EVERY matching expression is what makes the failure actionable: the
+	// author has to know which two patterns to reconcile.
+	for _, want := range []string{`^the (\w+) reading is fine$`, `^the alpha reading is fine$`} {
+		if !strings.Contains(reasons, want) {
+			t.Errorf("reason does not name the matching expression %q; an ambiguity error that does not list the candidates leaves the author guessing\ngot: %s", want, reasons)
+		}
+	}
+	if len(cmp.ran) != 0 {
+		t.Errorf("a handler ran despite the ambiguity (%q); neither side of an ambiguous match may execute", cmp.ran)
 	}
 }
