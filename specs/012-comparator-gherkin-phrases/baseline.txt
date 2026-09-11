@@ -68,6 +68,31 @@ The packages 012 actually changes and their floors to hold:
 
 ---
 
+## 3a. SC-009's "byte-identical" needs one caveat (found 2026-09-11)
+
+SC-009 says an engine with zero contributed phrases must produce **byte-identical** output to
+`0f9dcea` across every existing golden. Taken literally that is unachievable, and not for any
+behavioural reason.
+
+godog's pretty formatter annotates each step with the **source location** of the step definition
+it bound:
+
+    Given the agent target "bot"        # metadata.go:75 -> *world
+
+`testdata/golden-hermetic.txt` captured that verbatim, so adding a comment anywhere above the
+`reg.Step` loop in `metadata.go` churns the golden — `metadata.go:75` became `metadata.go:107`
+with the rendered output otherwise identical.
+
+**Resolution**: `normalizeGoldenStdout` now rewrites the line number to `<LINE>`, keeping the
+filename. Registration moving to a different file still churns the golden (a real change to the
+single registration path); the line within that file does not.
+
+SC-009 should be read as **byte-identical after the golden's own normalization** — which is
+already how it treats the trailing duration line (`<DURATION>`). This is a clarification of an
+existing convention rather than a new exemption.
+
+---
+
 ## 4. Environment
 
 - Go 1.25.0
