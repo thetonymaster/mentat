@@ -5,7 +5,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 
 	messages "github.com/cucumber/messages/go/v21"
 	"github.com/thetonymaster/mentat/internal/comparator"
@@ -73,27 +72,59 @@ var _ PrecheckEngine = (*engine.Engine)(nil)
 // target name to check it against the configured targets.
 var reTarget = regexp.MustCompile(`^the (?:agent|service) target "([^"]+)"$`)
 
-var (
-	stepPatternsOnce sync.Once
-	stepPatterns     []*regexp.Regexp
-)
+// StepPatterns is the compiled step-pattern set ONE engine binds against: the
+// built-in stepDefs rows plus whatever comparator-contributed phrases that engine
+// resolved.
+//
+// It is a value derived from an engine, deliberately NOT package state. This file
+// previously held a sync.Once cache (stepPatternsOnce/stepPatterns) that compiled
+// the pattern set once per process. That fixes the first-compiled set for every
+// later caller, so a second engine would be checked against the first engine's
+// patterns and report a valid feature file as broken — the same defect class 007
+// closed for registries, and the property US2 exists to prove.
+//
+// The cache never bit because its only consumer was `mentat validate`, a
+// single-shot CLI process. The library validate entry point, which a consumer can
+// call repeatedly in one process against different engines, is what makes it live.
+type StepPatterns []*regexp.Regexp
 
-// compiledStepPatterns compiles every registered step pattern once. The patterns
-// come from the same stepDefs metadata table godog registers, so a step that
-// binds no pattern here binds none at runtime either (StepBindingFindings).
-func compiledStepPatterns() []*regexp.Regexp {
-	stepPatternsOnce.Do(func() {
-		for _, d := range StepDocs() {
-			stepPatterns = append(stepPatterns, regexp.MustCompile(d.Pattern))
+// CompileStepPatterns compiles each pattern in order, returning an error that names
+// the offending pattern. It returns an error rather than panicking because
+// comparator-contributed patterns are author input: a bad regex must surface as a
+// descriptive engine-build failure, never a crash (Constitution IV).
+func CompileStepPatterns(patterns []string) (StepPatterns, error) {
+	out := make(StepPatterns, 0, len(patterns))
+	for _, p := range patterns {
+		re, err := regexp.Compile(p)
+		if err != nil {
+			return nil, fmt.Errorf("compiling step pattern %q: %w", p, err)
 		}
-	})
-	return stepPatterns
+		out = append(out, re)
+	}
+	return out, nil
 }
 
-// StepBindingFindings reports every pickle step whose text matches no registered
-// step pattern — the static equivalent of godog's runtime "undefined step".
-func StepBindingFindings(steps []*messages.PickleStep, src Source) []Finding {
-	pats := compiledStepPatterns()
+// BuiltinStepPatterns compiles the built-in stepDefs patterns, in table order.
+//
+// MustCompile is correct here and nowhere else in this file: these are literals in
+// the stepDefs table, guarded by the drift tests, so a failure is an unreachable
+// invariant violation rather than user input. This preserves exactly the contract
+// the deleted cache had — it only stops memoizing it.
+func BuiltinStepPatterns() StepPatterns {
+	docs := StepDocs()
+	out := make(StepPatterns, 0, len(docs))
+	for _, d := range docs {
+		out = append(out, regexp.MustCompile(d.Pattern))
+	}
+	return out
+}
+
+// StepBindingFindings reports every pickle step whose text matches no pattern in
+// pats — the static equivalent of godog's runtime "undefined step".
+//
+// pats is a parameter, not package state, so the answer is always about the engine
+// the caller means. See StepPatterns.
+func StepBindingFindings(pats StepPatterns, steps []*messages.PickleStep, src Source) []Finding {
 	var out []Finding
 	for _, st := range steps {
 		bound := false

@@ -114,7 +114,18 @@ func runValidate(cfgPath string, paths []string) []steps.Finding {
 	// comparators (constructed directly — no registry, no store, no driver) and the
 	// tolerantly-loaded shape patterns. This is the exact interface the scenario-init
 	// prechecks consume, so validate reuses their logic verbatim.
-	chk := checker{cel: comparator.NewCEL(nil), agg: comparator.NewAggregateCEL(nil), pats: pats}
+	// stepPats is compiled once per invocation and threaded through, replacing the
+	// package-level sync.Once cache precheck.go used to hold. A compiled binary can
+	// only ever see the BUILT-IN patterns: a consumer's WithComparator calls live in
+	// their module and cannot reach this process, so contributed phrases are
+	// structurally out of reach here. That limit is documented rather than papered
+	// over — see the library validate entry point.
+	chk := checker{
+		cel:      comparator.NewCEL(nil),
+		agg:      comparator.NewAggregateCEL(nil),
+		pats:     pats,
+		stepPats: steps.BuiltinStepPatterns(),
+	}
 
 	files, pathFindings := featureFiles(paths)
 	findings = append(findings, pathFindings...)
@@ -140,6 +151,11 @@ type checker struct {
 	cel  core.Comparator
 	agg  core.AggregateComparator
 	pats expectations.Patterns
+	// stepPats is the compiled step-pattern set this invocation binds against —
+	// built-ins only, for the reason given where it is constructed. It is carried
+	// here so it is compiled once per run rather than once per feature file, and so
+	// the set is an explicit input to the checks rather than package state.
+	stepPats steps.StepPatterns
 }
 
 func (c checker) Comparator(name string) (core.Comparator, bool) {
@@ -182,7 +198,7 @@ func checkFeature(path string, known map[string]bool, chk checker, configOK, exp
 	var out []steps.Finding
 	for _, pk := range gherkin.Pickles(*doc, path, gen) {
 		out = append(out, steps.RunsTagFindings(pk.Tags, src)...)
-		out = append(out, steps.StepBindingFindings(pk.Steps, src)...)
+		out = append(out, steps.StepBindingFindings(chk.stepPats, pk.Steps, src)...)
 		if configOK {
 			out = append(out, steps.TargetFindings(known, pk.Steps, src)...)
 		}

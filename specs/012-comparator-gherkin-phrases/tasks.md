@@ -77,9 +77,9 @@ after phrases exist), and this work is a prerequisite of 012, not a separable bu
 
 ### Remove package-level step state (R6, FR-010)
 
-- [ ] T008 Write FAILING tests in `internal/steps/precheck_test.go` proving two different pattern sets yield different `unbound-step` findings **in both evaluation orders** — the assertion the `sync.Once` cache cannot satisfy (go-test-writer, red)
-- [ ] T009 Delete `stepPatternsOnce` and `stepPatterns` (`internal/steps/precheck.go:76-91`) and re-shape `StepBindingFindings` (`precheck.go:95`) to take a compiled pattern set instead of reading package state; confirm T008 green (go-test-writer, green)
-- [ ] T010 Update the two `StepBindingFindings` call sites for the new signature: the scenario-init precheck path in `internal/steps/steps.go`, and `cmd/mentat/validate.go:185` (go-coder)
+- [X] T008 Write FAILING tests in `internal/steps/precheck_test.go` proving two different pattern sets yield different `unbound-step` findings **in both evaluation orders** — the assertion the `sync.Once` cache cannot satisfy (go-test-writer, red)
+- [X] T009 Delete `stepPatternsOnce` and `stepPatterns` (`internal/steps/precheck.go:76-91`) and re-shape `StepBindingFindings` (`precheck.go:95`) to take a compiled pattern set instead of reading package state; confirm T008 green (go-test-writer, green)
+- [X] T010 Update the `StepBindingFindings` call site for the new signature. **Corrected 2026-09-11**: there is exactly **one** non-test caller, `cmd/mentat/validate.go:185` — not two. The scenario-init path (`steps.go:117-122`) runs `CELFindings` and `precheckShapePatterns` and never calls `StepBindingFindings`; godog reports an undefined step at runtime instead. This is also why the `sync.Once` has never bitten: its only consumer is a single-shot CLI process. It becomes a live hazard when D7's library validate entry point (T054) can be called repeatedly in-process against different engines (go-coder)
 
 ### Per-engine registration (R5, FR-002, FR-005)
 

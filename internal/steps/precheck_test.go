@@ -45,6 +45,76 @@ func lineSrc(file string, line int) Source {
 	return Source{File: file, Line: func(string) int { return line }}
 }
 
+// TestStepBindingFindingsIsPerPatternSet proves step-binding checks are a function of
+// the pattern set handed to them, not of package state.
+//
+// This is the assertion the deleted sync.Once cache (precheck.go's stepPatternsOnce)
+// could not satisfy: it fixed the first-compiled pattern set for the life of the
+// process, so whichever set was evaluated FIRST would answer for every later one.
+//
+// Both orders are exercised deliberately. A first-writer-wins cache passes one ordering
+// and fails the other, so a single-order test would have reported the bug as fixed
+// roughly half the time — the same defect class 007 closed for registries
+// (mentat_run_reentrancy_test.go exists because it already bit once).
+//
+// It matters now rather than in the abstract: with comparator-contributed phrases the
+// pattern set differs PER ENGINE, so a second engine in one process would be validated
+// against the first engine's phrases and report a valid feature file as broken.
+//
+// Mutation rehearsal (2026-09-11): inserted `pats = BuiltinStepPatterns()` as the first
+// statement of StepBindingFindings, so the argument is accepted and then discarded —
+// the shape the sync.Once cache had. RED in both orderings, all four rows reporting
+// unbound=true against their own set. Reverted; re-observed green.
+func TestStepBindingFindingsIsPerPatternSet(t *testing.T) {
+	t.Parallel()
+
+	setA := mustCompileSet(t, `^alpha happens$`)
+	setB := mustCompileSet(t, `^beta happens$`)
+
+	// Each set binds its own sentence and rejects the other's. Nothing is shared.
+	cases := []struct {
+		set         StepPatterns
+		text        string
+		wantUnbound bool
+	}{
+		{setA, "alpha happens", false},
+		{setA, "beta happens", true},
+		{setB, "beta happens", false},
+		{setB, "alpha happens", true},
+	}
+
+	check := func(t *testing.T, order string) {
+		t.Helper()
+		for _, c := range cases {
+			got := StepBindingFindings(c.set, []*messages.PickleStep{pstep(c.text)}, lineSrc("f.feature", 1))
+			unbound := len(got) > 0
+			if unbound != c.wantUnbound {
+				t.Errorf("[%s] text %q against its set: unbound=%v, want %v (findings: %+v)",
+					order, c.text, unbound, c.wantUnbound, got)
+			}
+		}
+	}
+
+	// Evaluate A before B, then B before A. Under a package-level cache the second
+	// ordering returns the first ordering's answers.
+	t.Run("A then B", func(t *testing.T) { check(t, "A then B") })
+	t.Run("B then A", func(t *testing.T) {
+		for i := len(cases)/2 - 1; i >= 0; i-- {
+			cases[i], cases[len(cases)-1-i] = cases[len(cases)-1-i], cases[i]
+		}
+		check(t, "B then A")
+	})
+}
+
+func mustCompileSet(t *testing.T, patterns ...string) StepPatterns {
+	t.Helper()
+	set, err := CompileStepPatterns(patterns)
+	if err != nil {
+		t.Fatalf("CompileStepPatterns(%q): %v", patterns, err)
+	}
+	return set
+}
+
 func TestStepBindingFindings(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -60,7 +130,7 @@ func TestStepBindingFindings(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := StepBindingFindings([]*messages.PickleStep{pstep(tt.text)}, lineSrc("f.feature", 12))
+			got := StepBindingFindings(BuiltinStepPatterns(), []*messages.PickleStep{pstep(tt.text)}, lineSrc("f.feature", 12))
 			if tt.wantClass == "" {
 				if len(got) != 0 {
 					t.Fatalf("want no finding, got %+v", got)
