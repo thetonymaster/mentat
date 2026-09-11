@@ -228,7 +228,7 @@ written in contributed phrases and assert zero `unbound-step` findings.
 - [X] T066 Run the full [quickstart.md](./quickstart.md) validation end to end, including the e2e lane with the harness up (go-coder)
 - [X] T067 Re-run `make ci` **and** `go test -tags e2e -timeout 25m ./e2e/`; record final before/after against T002's baseline. A green `make ci` alone does not discharge SC-012 (go-coder)
 - [X] T068 Update the `<!-- SPECKIT -->` block in `CLAUDE.md`: 012 shipped, what landed, and any correction this feature made to its own artifacts — following the pattern 011 set (go-coder)
-- [ ] T069 **go-reviewer `gate`** audit of the staged diff: PASS/BLOCK. Conventional Commits, no `git add .`, no AI attribution (go-reviewer)
+- [X] T069 **go-reviewer `gate`** audit of the staged diff: PASS/BLOCK. Conventional Commits, no `git add .`, no AI attribution (go-reviewer)
 
 ---
 
