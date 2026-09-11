@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"regexp"
 	"strings"
 	"testing"
@@ -179,3 +180,122 @@ func TestExtractAnswerModes(t *testing.T) {
 		})
 	}
 }
+
+// --- 012: comparator-contributed Gherkin phrases ---
+
+// phraseStub implements Comparator plus BOTH new optional seams, standing in for a
+// consumer's comparator that wants to be driven by its own sentence.
+type phraseStub struct {
+	phrases []ContributedPhrase
+	gotCaps []string
+	exp     Expectation
+	err     error
+}
+
+func (p *phraseStub) Name() string { return "revenue-shape" }
+
+func (p *phraseStub) Compare(_ context.Context, _ Evidence, _ Expectation) (Verdict, error) {
+	return Verdict{Pass: true}, nil
+}
+
+func (p *phraseStub) ContributedPhrases() []ContributedPhrase { return p.phrases }
+
+func (p *phraseStub) ParseCaptures(caps []string) (Expectation, error) {
+	p.gotCaps = caps
+	return p.exp, p.err
+}
+
+// The seams must be satisfiable independently of each other and of Comparator.
+var (
+	_ Comparator        = (*phraseStub)(nil)
+	_ PhraseContributor = (*phraseStub)(nil)
+	_ CaptureParser     = (*phraseStub)(nil)
+)
+
+// TestPhraseSeamsAreDiscoverableByTypeAssertion pins the discovery model: both seams
+// are OPTIONAL and found by type assertion on a plain Comparator, never by
+// registration. This is the model 011 established for ExpectationParser, and it is
+// what lets a comparator that implements neither keep working untouched.
+func TestPhraseSeamsAreDiscoverableByTypeAssertion(t *testing.T) {
+	t.Parallel()
+
+	want := ContributedPhrase{
+		Pattern: `^the revenue is shaped like a (\w+) report$`,
+		Group:   "Revenue",
+		Summary: "Asserts the revenue figure matches the named report shape.",
+		Example: `Then the revenue is shaped like a quarterly report`,
+	}
+
+	var c Comparator = &phraseStub{phrases: []ContributedPhrase{want}, exp: "parsed"}
+
+	pc, ok := c.(PhraseContributor)
+	if !ok {
+		t.Fatalf("%T does not satisfy PhraseContributor; the seam must be discoverable from a plain Comparator", c)
+	}
+	got := pc.ContributedPhrases()
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("ContributedPhrases() = %+v, want exactly [%+v]", got, want)
+	}
+
+	cp, ok := c.(CaptureParser)
+	if !ok {
+		t.Fatalf("%T does not satisfy CaptureParser", c)
+	}
+	exp, err := cp.ParseCaptures([]string{"quarterly"})
+	if err != nil {
+		t.Fatalf("ParseCaptures: %v", err)
+	}
+	if exp != "parsed" {
+		t.Fatalf("ParseCaptures returned %v, want the comparator's own typed expectation", exp)
+	}
+}
+
+// TestComparatorWithoutPhraseSeamsIsUnaffected is the other half of "optional": a
+// comparator implementing neither seam must NOT satisfy them. If it did, every
+// existing comparator would silently acquire phrase behaviour it never declared.
+func TestComparatorWithoutPhraseSeamsIsUnaffected(t *testing.T) {
+	t.Parallel()
+
+	var c Comparator = plainComparatorStub{}
+	if _, ok := c.(PhraseContributor); ok {
+		t.Errorf("%T satisfies PhraseContributor without declaring it", c)
+	}
+	if _, ok := c.(CaptureParser); ok {
+		t.Errorf("%T satisfies CaptureParser without declaring it", c)
+	}
+	// 011's seam must remain independent too — a comparator can implement
+	// ExpectationParser without implementing either 012 seam, and vice versa (D6).
+	if _, ok := c.(ExpectationParser); ok {
+		t.Errorf("%T satisfies ExpectationParser without declaring it", c)
+	}
+}
+
+type plainComparatorStub struct{}
+
+func (plainComparatorStub) Name() string { return "plain" }
+func (plainComparatorStub) Compare(_ context.Context, _ Evidence, _ Expectation) (Verdict, error) {
+	return Verdict{Pass: true}, nil
+}
+
+// TestCaptureParserIsIndependentOfExpectationParser pins D6: the capture seam is a
+// SIBLING of 011's ExpectationParser, not a replacement. A comparator may implement
+// either, both, or neither, and implementing one must never imply the other.
+func TestCaptureParserIsIndependentOfExpectationParser(t *testing.T) {
+	t.Parallel()
+
+	var docOnly Comparator = docOnlyStub{}
+	if _, ok := docOnly.(ExpectationParser); !ok {
+		t.Fatalf("%T must satisfy ExpectationParser", docOnly)
+	}
+	if _, ok := docOnly.(CaptureParser); ok {
+		t.Errorf("%T satisfies CaptureParser merely by implementing ExpectationParser; the seams must be independent (D6)", docOnly)
+	}
+}
+
+type docOnlyStub struct{}
+
+func (docOnlyStub) Name() string { return "doc-only" }
+func (docOnlyStub) Compare(_ context.Context, _ Evidence, _ Expectation) (Verdict, error) {
+	return Verdict{Pass: true}, nil
+}
+func (docOnlyStub) ParseExpectation(text string) (Expectation, error) { return text, nil }

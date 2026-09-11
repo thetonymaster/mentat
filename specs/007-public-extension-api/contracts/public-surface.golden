@@ -36,6 +36,10 @@ field (Config)[08] Judge JudgeConfig
 field (Config)[09] RunTimeout string
 field (Config)[10] KillGrace string
 field (Config)[11] Budget RunBudget
+field (ContributedPhrase)[00] Pattern string
+field (ContributedPhrase)[01] Group string
+field (ContributedPhrase)[02] Summary string
+field (ContributedPhrase)[03] Example string
 field (Endpoint)[00] Endpoint string
 field (Evidence)[00] RunID string
 field (Evidence)[01] Trace *Trace
@@ -170,6 +174,7 @@ func WithReports(targets map[string]string) Option
 func WithStore(name string, f StoreFactory) Option
 func WithTags(expr string) Option
 func WithVerbosity(w io.Writer, verbose, debug bool) Option
+method (CaptureParser) ParseCaptures(caps []string) (Expectation, error)
 method (Comparator) Compare(ctx context.Context, ev Evidence, e Expectation) (Verdict, error)
 method (Comparator) Name() string
 method (Correlator) Inject(ctx context.Context, spec *RunSpec) (runID string)
@@ -179,6 +184,7 @@ method (Driver) Run(ctx context.Context, spec RunSpec) (RunResult, error)
 method (ExpectationParser) ParseExpectation(text string) (Expectation, error)
 method (ExtractConfig) Policy() ExtractPolicy
 method (Judge) Judge(ctx context.Context, req JudgeRequest) (JudgeVerdict, error)
+method (PhraseContributor) ContributedPhrases() []ContributedPhrase
 method (Reporter) Report(res Results, w io.Writer) error
 method (Results) ExitCode() int
 method (Span) Attr(k string) string
@@ -191,11 +197,13 @@ method (TraceStore) DecodePayload(id string, payload []byte) (*Trace, error)
 method (TraceStore) FetchPayload(ctx context.Context, id string) ([]byte, error)
 method (TraceStore) Query(ctx context.Context, q TraceQuery) ([]TraceRef, error)
 type AggregateDetail = core.AggregateDetail
+type CaptureParser = core.CaptureParser
 type Comparator = core.Comparator
 type ComparatorFactory = func(Config) (Comparator, error)
 type Completeness = config.Completeness
 type CompletenessContract = core.CompletenessContract
 type Config = config.Config
+type ContributedPhrase = core.ContributedPhrase
 type Correlator = core.Correlator
 type Driver = core.Driver
 type DriverFactory = func(Config) (Driver, error)
@@ -216,6 +224,7 @@ type JudgeVerdict = core.JudgeVerdict
 type ModelRate = config.ModelRate
 type Option func(*runOptions)
 type Output = core.Output
+type PhraseContributor = core.PhraseContributor
 type PollSpec = config.PollSpec
 type Pricing = config.Pricing
 type Reporter = result.Reporter

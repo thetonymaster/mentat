@@ -1802,3 +1802,127 @@ func TestEngineComparatorsListsRegisteredNames(t *testing.T) {
 		}
 	}
 }
+
+// --- 012: comparator-contributed Gherkin phrases ---
+
+// phraseStubComparator contributes Gherkin phrases; phraseless does not. Both are
+// registered so the accessor is proven to SELECT contributors rather than assume
+// every comparator is one.
+type phraseStubComparator struct {
+	name    string
+	phrases []core.ContributedPhrase
+}
+
+func (p phraseStubComparator) Name() string { return p.name }
+func (p phraseStubComparator) Compare(context.Context, core.Evidence, core.Expectation) (core.Verdict, error) {
+	return core.Verdict{Pass: true}, nil
+}
+func (p phraseStubComparator) ContributedPhrases() []core.ContributedPhrase { return p.phrases }
+
+// TestEngineContributedPhrasesResolvesInSortedComparatorOrder pins the accessor 012
+// needs, and the ORDER it must return.
+//
+// The order is a correctness requirement, not tidiness. The runner returns the FIRST
+// matching step definition, so registration order decides which pattern wins a
+// collision; map iteration order would make that vary between runs of an unchanged
+// suite. Registry.Comparators() already sorts — 011 added that for a deterministic
+// error message, and here it becomes load-bearing.
+//
+// Mutation rehearsals (2026-09-11), naming what was mutated:
+//
+//	A. Reversed the enumeration order inside ContributedPhrases (standing in for
+//	   losing the sorted accessor and iterating the registry map). RED: all three
+//	   bindings reported at the wrong index. Note the comparators are registered
+//	   zeta-first, so a correct implementation must REORDER — a test registering
+//	   them already-sorted would pass against an unsorted implementation.
+//	B. Disabled the PhraseContributor type-assertion guard (`if false && !ok`).
+//	   RED with a nil-pointer panic, proving the guard is what keeps a
+//	   non-contributing comparator from being treated as one.
+//
+// Both reverted; test re-observed green.
+func TestEngineContributedPhrasesResolvesInSortedComparatorOrder(t *testing.T) {
+	zeta := core.ContributedPhrase{
+		Pattern: `^the zeta holds$`, Group: "Zeta",
+		Summary: "zeta", Example: "Then the zeta holds",
+	}
+	alphaOne := core.ContributedPhrase{
+		Pattern: `^the alpha is (\d+)$`, Group: "Alpha",
+		Summary: "alpha one", Example: "Then the alpha is 1",
+	}
+	alphaTwo := core.ContributedPhrase{
+		Pattern: `^the alpha is at least (\d+)$`, Group: "Alpha",
+		Summary: "alpha two", Example: "Then the alpha is at least 1",
+	}
+
+	cfg := config.Config{
+		OTLPEndpoint: "http://localhost:4318",
+		Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+		Targets:      map[string]config.Target{},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	cor := correlate.New(func() string { return "run-1" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+
+	// Registered zeta-first so a correct implementation must REORDER, not merely
+	// preserve insertion order.
+	eng, err := Build(cfg, st, cor,
+		WithExtraComparator("zeta-cmp", stubComparatorFactory(phraseStubComparator{name: "zeta-cmp", phrases: []core.ContributedPhrase{zeta}})),
+		WithExtraComparator("alpha-cmp", stubComparatorFactory(phraseStubComparator{name: "alpha-cmp", phrases: []core.ContributedPhrase{alphaOne, alphaTwo}})),
+		WithExtraComparator("no-phrases", stubComparatorFactory(extraStubComparator{})),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	got := eng.ContributedPhrases()
+
+	want := []PhraseBinding{
+		{Comparator: "alpha-cmp", Phrase: alphaOne},
+		{Comparator: "alpha-cmp", Phrase: alphaTwo},
+		{Comparator: "zeta-cmp", Phrase: zeta},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ContributedPhrases() returned %d bindings, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("binding[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+
+	// A comparator that does not implement the seam must contribute nothing — the
+	// seam is opt-in, and the built-in comparators must not acquire phrases.
+	for _, b := range got {
+		if b.Comparator == "no-phrases" || b.Comparator == "result" || b.Comparator == "sequence" {
+			t.Errorf("comparator %q contributed a phrase without implementing the seam", b.Comparator)
+		}
+	}
+
+	// Within one comparator, declaration order is preserved: the comparator chose it,
+	// and reordering would make collision resolution depend on Mentat's whim.
+	if got[0].Phrase != alphaOne || got[1].Phrase != alphaTwo {
+		t.Errorf("phrases of one comparator were reordered: got %+v, %+v", got[0].Phrase, got[1].Phrase)
+	}
+}
+
+// TestEngineContributedPhrasesIsEmptyWithoutContributors pins SC-009's precondition:
+// the overwhelmingly common engine has no contributed phrases and must say so, so
+// every downstream path can stay byte-identical to the pre-feature behaviour.
+func TestEngineContributedPhrasesIsEmptyWithoutContributors(t *testing.T) {
+	cfg := config.Config{
+		OTLPEndpoint: "http://localhost:4318",
+		Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+		Targets:      map[string]config.Target{},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	cor := correlate.New(func() string { return "run-1" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+
+	eng, err := Build(cfg, st, cor)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if got := eng.ContributedPhrases(); len(got) != 0 {
+		t.Fatalf("ContributedPhrases() = %+v on an engine with no contributors, want empty", got)
+	}
+}

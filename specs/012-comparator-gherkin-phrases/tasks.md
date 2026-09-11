@@ -89,11 +89,11 @@ after phrases exist), and this work is a prerequisite of 012, not a separable bu
 
 ### The seams and the engine accessor (R2, R3)
 
-- [ ] T014 [P] Write FAILING tests in `internal/core/core_test.go` for the two new seams: a comparator implementing the phrase-contributor seam returns its phrases; one implementing the capture-parser seam returns a typed expectation. Use gomock where call verification matters (go-test-writer, red)
-- [ ] T015 Declare the contributed-phrase seam, the capture-parser seam, and the `ContributedPhrase` struct in `internal/core/core.go`, next to `ExpectationParser` (`:114-132`). **`ExpectationParser` itself must not change** — D6. See [contracts/phrase-seam.md](./contracts/phrase-seam.md) (go-test-writer, green)
-- [ ] T016 Add the facade aliases in `mentat.go` for both seams and `ContributedPhrase`. 010's D5 forbids declaring them at the facade; they must be aliased from `internal/core` (go-coder)
-- [ ] T017 Write a FAILING test in `internal/engine/engine_test.go` asserting the new accessor returns contributed phrases resolved from registered comparators, in **sorted comparator-name order** (go-test-writer, red)
-- [ ] T018 Add the accessor to `internal/engine/engine.go`, mirroring `Comparators()` (`:207`) — enumerate via the sorted `Registry.Comparators()` (`registry.go:125-137`), resolve each with `Comparator(name)`, type-assert for the phrase seam. **No new registry** (go-test-writer, green)
+- [X] T014 [P] Write FAILING tests in `internal/core/core_test.go` for the two new seams: a comparator implementing the phrase-contributor seam returns its phrases; one implementing the capture-parser seam returns a typed expectation. Use gomock where call verification matters (go-test-writer, red)
+- [X] T015 Declare the contributed-phrase seam, the capture-parser seam, and the `ContributedPhrase` struct in `internal/core/core.go`, next to `ExpectationParser` (`:114-132`). **`ExpectationParser` itself must not change** — D6. See [contracts/phrase-seam.md](./contracts/phrase-seam.md) (go-test-writer, green)
+- [X] T016 Add the facade aliases in `mentat.go` for both seams and `ContributedPhrase`. 010's D5 forbids declaring them at the facade; they must be aliased from `internal/core` (go-coder)
+- [X] T017 Write a FAILING test in `internal/engine/engine_test.go` asserting the new accessor returns contributed phrases resolved from registered comparators, in **sorted comparator-name order** (go-test-writer, red)
+- [X] T018 Add the accessor to `internal/engine/engine.go`, mirroring `Comparators()` (`:207`) — enumerate via the sorted `Registry.Comparators()` (`registry.go:125-137`), resolve each with `Comparator(name)`, type-assert for the phrase seam. **No new registry** (go-test-writer, green)
 
 **Checkpoint**: The live defect is fixed, no package-level step state remains, registration is
 per-engine, and the seams exist. User stories can now begin.
