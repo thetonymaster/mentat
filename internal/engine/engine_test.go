@@ -1874,7 +1874,10 @@ func TestEngineContributedPhrasesResolvesInSortedComparatorOrder(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 
-	got := eng.ContributedPhrases()
+	got, err := eng.ContributedPhrases()
+	if err != nil {
+		t.Fatalf("ContributedPhrases: %v", err)
+	}
 
 	want := []PhraseBinding{
 		{Comparator: "alpha-cmp", Phrase: alphaOne},
@@ -1922,7 +1925,11 @@ func TestEngineContributedPhrasesIsEmptyWithoutContributors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if got := eng.ContributedPhrases(); len(got) != 0 {
+	got, err := eng.ContributedPhrases()
+	if err != nil {
+		t.Fatalf("ContributedPhrases: %v", err)
+	}
+	if len(got) != 0 {
 		t.Fatalf("ContributedPhrases() = %+v on an engine with no contributors, want empty", got)
 	}
 }

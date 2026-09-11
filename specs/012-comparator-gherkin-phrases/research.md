@@ -100,12 +100,18 @@ status. Both rejected — the After-hook path already works and is the one 011 e
 
 **Decision**: `internal/core`, alongside `ExpectationParser`, aliased on the facade.
 
-**Rationale**: The type appears in a published seam's method set, so 010's nameability sweep
-will demand a facade alias automatically (SC-008). 010's D5 forbids declaring it *at* the
+**Rationale**: 010's D5 forbids declaring it *at* the
 facade, because root imports `internal/steps`/`internal/engine`/`internal/registry` and those
 packages consume it. `internal/core` imports only stdlib plus `internal/trace`
 (`core.go:5-13`), so it is a leaf for this purpose and adding the type creates no cycle —
 verified: neither `internal/engine` nor `internal/core` imports `internal/steps`.
+
+> **Corrected 2026-09-11 (R11)**: this entry originally added "the type appears in a published
+> seam's method set, so 010's nameability sweep will demand a facade alias automatically
+> (SC-008)". Measured false — the sweep is seeded from the aliases that already exist, so it
+> cannot notice a missing one, and both new seams are optional and referenced by no published
+> type. SC-008 still holds; the guards are the public-surface golden and the external-package
+> compile-time witnesses. See R11.
 
 **Alternatives considered**: a new `internal/phrase` package (more moving parts for one type
 group); declaring at the facade (forbidden by D5).
@@ -286,6 +292,73 @@ change can be reverted once 012 ships.
 
 ---
 
+## R11 — Does the nameability sweep demand the new aliases? **MEASURED: no. The golden does.**
+
+*Added 2026-09-11 at implementation time. It corrects R2 and SC-008's mechanism, not their
+conclusion.*
+
+**R2 claimed**: "The type appears in a published seam's method set, so 010's nameability sweep
+will demand a facade alias automatically (SC-008)."
+
+**Measured**: false for the seams themselves. With BOTH the `PhraseContributor` alias and the
+compile-time witness removed, `TestFacadeNameabilitySweep` stays **green**.
+
+**Why.** The sweep is SEEDED from the aliases that already exist and walks outward, checking that
+everything reachable from a published alias is itself nameable. It cannot discover a type that
+*should* be aliased and is not — removing the alias removes the seed. That is exactly the boundary
+010 drew, and 011 already wrote it down in `custom_comparator_facade_test.go`: "the failure mode
+the nameability sweep cannot catch, since it only walks what IS published."
+
+The premise was also wrong on its own terms: both new seams are **optional and discovered by type
+assertion**, so no published type references them. `Comparator` does not mention
+`PhraseContributor`, so there is no published method set for the sweep to reach them through.
+
+**What actually guards them** — both measured:
+
+| Guard | Removing the alias → |
+|---|---|
+| `TestPublicSurfaceGolden` | **FAILS**: "symbols in golden but NOT present now (removed/changed): type PhraseContributor …" |
+| Compile-time witnesses in `custom_phrase_facade_test.go` (`var _ mentat.PhraseContributor = …`) | **build failure** in an external test package |
+
+SC-008 holds. Its mechanism is the golden plus the external-package witnesses, which is the same
+pair 011 relied on for `ExpectationParser`. The sweep still earns its keep for what it *does*
+cover: every type reachable *from* the new aliases (including `ContributedPhrase`) must be
+nameable, and it would fire if one were not.
+
+**Lesson worth keeping**: "010 pays for itself here" was assumed rather than tested, twice in a
+row now (R1/R10, R2/R11). A gate's coverage is a property to measure, not to infer from its name.
+
+---
+
+## R12 — What review found that the feature's own tests could not
+
+*Added 2026-09-11 after a `go-reviewer` gate audit returned BLOCK on otherwise-complete work.
+Recorded because the pattern, not the individual bugs, is the reusable lesson.*
+
+Three of the five blocking findings were **the same shape**: a belief about godog written into a
+comment, with a test that structurally could not falsify it. Both godog claims were re-measured
+independently before acting; both held.
+
+| Finding | Measured | Fix |
+|---|---|---|
+| A comment claimed godog passes a typed nil for a missing declared docstring, so the nil branch was "real rather than defensive" | **False.** `status=1, handlerCalled=false` — godog never calls the handler (`len(sd.Args) < numIn`), so the branch was unreachable and its descriptive error could never reach an author | Comment corrected; `checkPhraseDocstrings` raises the error at scenario init where it IS reachable |
+| A step carrying a docstring, matched by a phrase declaring none | **`status=0, handlerCalled=true`, body discarded, scenario PASSES.** A green verdict from a comparator that never read the author's expectation body — reachable through the public surface, because docstring-ness is inferred from a `:$` convention an author can forget | Rejected at scenario init in both directions, before any SUT is driven |
+| The `ExpectationParser` (docstring) route | **Zero test coverage.** Mutating the body to a constant left the whole suite green. The lint-cleanup commit had deleted the only stub built for it | Route test added, asserting the body arrives VERBATIM; the reviewer's exact mutation now goes red |
+| `isAnchored` (V2) | **Defeated by top-level alternation**: `^the alpha reading\|the beta reading$` passes a string-level check and matches inside "I check the beta reading", because the runner matches with an unanchored `FindStringSubmatch` | Rewritten as a structural check over the parsed syntax tree: an alternation is anchored only if EVERY branch is |
+| `TestSuiteCheckDedupesScenarioOutlineRows` | **Did not test dedupe** — each example row produced a distinct message, so all survived either way; disabling dedupe left it PASSING | Offending step made a constant sentence, so three identical findings must collapse to one |
+| `EngineStepDocs` (FR-012) | Had **no facade alias and no non-test caller**, so the documented "render the reference for your own engine" was impossible for a consumer | `mentat.StepReference` added, with an external-package test |
+
+**The lesson worth carrying**: this feature corrected four inherited premises (R10, R11, and the
+two above) and every one had the same signature — *a claim about behaviour, asserted in a comment,
+with no test able to contradict it*. The tests that caught nothing were not absent; they were
+adjacent. `TestContributedPhraseSeamRouting` tested the routing FUNCTION and never the route;
+the dedupe test named a property its assertions could not observe.
+
+Ask of any guard: **what mutation would make this fail?** If the answer is "none that matters",
+the guard is decoration. Two of the six rows above were found by running exactly that experiment.
+
+---
+
 ## Summary of what changed versus the spec's assumptions
 
 | Item | Spec assumed | Research found |
@@ -296,5 +369,6 @@ change can be reverted once 012 ships.
 | Surfacing ambiguity | might need a mechanism | **none needed** — reaches the existing After hook as `stepErr` (R1) |
 | `registerSteps` signature | not considered | **must take phrases as a parameter** — the drift test uses a nil-engine world (R5) |
 | Registry work | possible new seam | **none** — existing sorted accessors suffice, and the sort is load-bearing for collision determinism (R3) |
+| Alias protection | R2: the nameability sweep demands them automatically | **false** — the sweep is seeded from existing aliases and cannot notice a missing one. The public-surface golden and the external-package compile-time witnesses are the real guards (R11) |
 
 No `NEEDS CLARIFICATION` items remain.

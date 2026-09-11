@@ -238,16 +238,17 @@ type PhraseBinding struct {
 // Scoped to this engine. Two engines in one process never observe each other's
 // phrases, which is the property the per-engine sealed registry established in 007
 // and which this accessor must not quietly undo.
-func (e *Engine) ContributedPhrases() []PhraseBinding {
+func (e *Engine) ContributedPhrases() ([]PhraseBinding, error) {
 	var out []PhraseBinding
 	for _, name := range e.reg.Comparators() {
 		c, ok := e.reg.Comparator(name)
 		if !ok {
-			// Unreachable: name came from this same sealed registry's own listing.
-			// Skipping rather than panicking keeps library code panic-free; if the
-			// registry could ever disagree with itself, that is a registry bug and
-			// its own tests are the place it surfaces.
-			continue
+			// Unreachable today: name came from this same sealed registry's own
+			// listing. Reported rather than skipped anyway, because the failure mode
+			// of skipping is nasty and silent — the comparator's phrases vanish and
+			// every sentence using them reports as an unbound step, sending the author
+			// to look at their feature file for a defect that is in the registry.
+			return nil, fmt.Errorf("engine: comparator %q is listed by the registry but cannot be resolved from it", name)
 		}
 		pc, ok := c.(core.PhraseContributor)
 		if !ok {
@@ -260,7 +261,7 @@ func (e *Engine) ContributedPhrases() []PhraseBinding {
 			out = append(out, PhraseBinding{Comparator: name, Phrase: p})
 		}
 	}
-	return out
+	return out, nil
 }
 
 // AggregateComparator resolves a named aggregate comparator from this engine's registry.

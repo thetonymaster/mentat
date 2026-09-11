@@ -1,10 +1,11 @@
 # Quickstart: validating 012
 
-**Date**: 2026-09-10 | **Baseline**: `0f9dcea` | Plan: [plan.md](./plan.md)
+**Date**: 2026-09-10, updated 2026-09-11 after implementation | **Baseline**: `0f9dcea`
+| Plan: [plan.md](./plan.md)
 
-How to prove this feature works end to end, and how to reproduce the two planning experiments
-that shaped it. Every command below was run at planning time except where marked *(after
-implementation)*.
+How to prove this feature works end to end, and how to reproduce the experiments that shaped it.
+The §3 sections now name the API that actually shipped, and the results recorded are the ones
+measured at implementation time — see [baseline.txt](./baseline.txt) for the full evidence.
 
 ## Prerequisites
 
@@ -125,9 +126,21 @@ go run ./cmd/mentat steps            # built-in rows byte-identical (FR-013)
 go generate ./...                    # docs/steps.md regenerates; built-in rows unchanged
 ```
 
-Then, from a consumer test binary, call the library validate entry point with the same options
-used for `mentat.Run` and assert **zero** `unbound-step` findings for a suite written in
-contributed phrases.
+Then, from a consumer test binary:
+
+```go
+findings, err := mentat.Validate(ctx, cfg,
+	mentat.WithFeatures("features/"),
+	mentat.WithComparator("revenue-shape", newRevenueShape),
+)
+```
+
+Assert **zero** `unbound-step` findings for a suite written in contributed phrases, and that a
+genuinely misspelled step still produces exactly one — an engine-aware validator reporting
+nothing would pass the first assertion too.
+
+`mentat validate --help` states the limit a compiled binary cannot escape; a test asserts the
+help text actually says so.
 
 ### 3.6 L3 meta-test (FR-016, SC-007, Constitution V)
 
@@ -142,14 +155,26 @@ comparator's own reason. A framework not proven to fail on bad behaviour is unfa
 
 ```bash
 make ci                                          # lint + test + cover + example
+golangci-lint run ./...                          # 0 issues
 go test ./... -coverprofile=cover.out && go tool cover -func=cover.out   # 80% floor (SC-010)
 go test -run TestPublicSurfaceGolden ./...       # new seams + method sets (SC-008)
-go test -tags e2e -timeout 25m ./e2e/            # SC-012 — not covered by make ci
+go test -tags e2e -timeout 25m ./e2e/            # SC-012 — NOT covered by make ci
 ```
 
-The public-surface golden must record the two new seams and `ContributedPhrase`'s exported
-fields, and **011's `ExpectationParser` line must not change** — that stability is the
-operational test of D6's claim that this is a sibling, not a replacement.
+The public-surface golden records the two new seams, `ContributedPhrase`'s exported fields,
+`Validate` and the `Finding` alias — **15 insertions, 0 deletions** against `main`. Nothing
+removed or changed, so **011's `ExpectationParser` line is untouched**, which is the operational
+test of D6's claim that this is a sibling rather than a replacement.
+
+> **Run the e2e lane.** It is not paranoia. `make ci` does not compile `//go:build e2e`, and the
+> e2e stdout golden caught a churn nothing else did — it captures godog's step-definition SOURCE
+> LINE (`# metadata.go:75 -> *world`), so merely documenting `registerSteps` broke it. Both
+> golden normalizers now collapse that line number and keep the filename.
+
+> **What the sweep does not do.** `TestFacadeNameabilitySweep` does NOT demand the new aliases:
+> it is seeded from the aliases that already exist, so removing one removes its seed. The guards
+> are the public-surface golden and the compile-time witnesses in an EXTERNAL test package
+> (`var _ mentat.PhraseContributor = ...`). See R11.
 
 ---
 

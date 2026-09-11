@@ -27,7 +27,7 @@ func validateCmd(args []string, stdout io.Writer) (int, error) {
 	// The limit is stated in --help rather than left for a user to discover as a
 	// wall of false unbound-step findings on a feature file that is actually valid.
 	fs.Usage = func() {
-		fmt.Fprint(stdout, "usage: mentat validate [paths...] [--config FILE] [--format text|json]\n\n"+
+		_, _ = fmt.Fprint(stdout, "usage: mentat validate [paths...] [--config FILE] [--format text|json]\n\n"+
 			"Statically checks feature files: step binding, target and shape references,\n"+
 			"CEL expressions and @runs tags. Drives no SUT and contacts no store.\n\n"+
 			"Checks BUILT-IN steps only. Comparator-contributed Gherkin phrases are scoped\n"+

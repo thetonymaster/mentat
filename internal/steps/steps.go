@@ -145,6 +145,13 @@ func InitializerWithBudget(eng *engine.Engine, col *report.Collector, budget *re
 			if err := w.precheckShapePatterns(scenario.Steps); err != nil {
 				return ctx, err
 			}
+			// A step whose docstring presence disagrees with the contributed phrase it
+			// matches is rejected here, before any SUT is driven. The surplus-body
+			// direction is the important one: the runner would discard the body
+			// silently and report the scenario PASSED.
+			if err := checkPhraseDocstrings(resolved, scenario.Steps); err != nil {
+				return ctx, fmt.Errorf("scenario-init: %w", err)
+			}
 			return ctx, nil
 		})
 

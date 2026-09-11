@@ -527,6 +527,32 @@ func engineOptions(logger *slog.Logger, ro runOptions) ([]engine.Option, error) 
 // message. Validate returns these.
 type Finding = steps.Finding
 
+// StepDoc is one row of the step reference: the group it belongs under, the registered
+// pattern, a one-line summary and one valid Gherkin example.
+type StepDoc = steps.StepDoc
+
+// StepReference returns the complete step reference for the engine the SAME options
+// would build: Mentat's built-in steps followed by the Gherkin phrases this engine's
+// own comparators contribute, each under an "Extension: " group heading.
+//
+// `mentat steps` and the committed docs/steps.md list built-ins ONLY, and no flag can
+// change that: a consumer's WithComparator calls are compiled into their binary and a
+// prebuilt mentat executable cannot reach them. This is how a consumer renders the
+// reference that actually describes their suite — including the steps they wrote, which
+// are the ones least likely to be documented anywhere else.
+//
+// Like Validate, it builds the engine to learn what exists and drives no SUT. An error
+// means the reference could not be produced (a bad config, a malformed contributed
+// phrase); it is never a partial list, because a reference silently missing a phrase is
+// worse than no reference at all.
+func StepReference(ctx context.Context, cfg Config, opts ...Option) ([]StepDoc, error) {
+	eng, err := buildEngineForInspection(ctx, &cfg, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return steps.EngineStepDocs(eng)
+}
+
 // Validate statically checks feature files against the engine the SAME options would
 // build, returning every authoring defect it finds rather than stopping at the first.
 //
@@ -549,6 +575,9 @@ type Finding = steps.Finding
 // validation could not RUN (a bad config, a malformed contributed phrase); findings
 // mean it ran and the suite has defects.
 func Validate(ctx context.Context, cfg Config, opts ...Option) ([]Finding, error) {
+	if len(opts) == 0 {
+		return nil, fmt.Errorf("mentat: Validate: no options; pass at least WithFeatures(...)")
+	}
 	var ro runOptions
 	for _, opt := range opts {
 		opt(&ro)
@@ -557,51 +586,9 @@ func Validate(ctx context.Context, cfg Config, opts ...Option) ([]Finding, error
 		return nil, fmt.Errorf("mentat: Validate: no feature paths; pass at least one via WithFeatures")
 	}
 
-	// Defensive copy of Targets before Resolve, for the same reason Run makes one:
-	// cfg arrives by value but Targets is a map, so Resolve would otherwise write
-	// resolved targets back into the CALLER's Config. Validating a suite must not
-	// mutate the configuration the caller then passes to Run.
-	if cfg.Targets != nil {
-		targets := make(map[string]config.Target, len(cfg.Targets))
-		for name, t := range cfg.Targets {
-			targets[name] = t
-		}
-		cfg.Targets = targets
-	}
-	if err := config.Resolve(&cfg); err != nil {
-		return nil, fmt.Errorf("mentat: resolving config: %w", err)
-	}
-
-	logWriter := ro.logWriter
-	if logWriter == nil {
-		logWriter = io.Discard
-	}
-	logger := engine.NewLogger(logWriter, ro.verbose, ro.debug)
-
-	cor, err := engine.BuildCorrelator(cfg, logger)
-	if err != nil {
-		return nil, fmt.Errorf("mentat: build correlator: %w", err)
-	}
-	var storeOpts []engine.Option
-	for _, s := range ro.stores {
-		if s.factory == nil {
-			return nil, fmt.Errorf("mentat: WithStore %q: nil factory; register a non-nil StoreFactory", s.name)
-		}
-		storeOpts = append(storeOpts, engine.WithExtraStore(s.name, func(c config.Config) (core.TraceStore, error) {
-			return s.factory(c)
-		}))
-	}
-	st, err := engine.BuildStore(cfg, storeOpts...)
-	if err != nil {
-		return nil, fmt.Errorf("mentat: build store: %w", err)
-	}
-	buildOpts, err := engineOptions(logger, ro)
+	eng, err := buildEngineForInspection(ctx, &cfg, opts...)
 	if err != nil {
 		return nil, err
-	}
-	eng, err := engine.Build(cfg, st, cor, buildOpts...)
-	if err != nil {
-		return nil, fmt.Errorf("mentat: build engine: %w", err)
 	}
 
 	// The engine-aware pattern set: built-ins PLUS this engine's contributed phrases.
@@ -624,4 +611,69 @@ func Validate(ctx context.Context, cfg Config, opts ...Option) ([]Finding, error
 		CheckTargets: true,
 		CheckShapes:  true,
 	}.Paths(ro.featurePaths), nil
+}
+
+// buildEngineForInspection assembles the same engine mentat.Run would, for the
+// entry points that INSPECT a suite rather than execute one (Validate, StepReference).
+//
+// It is shared so inspection can never answer about a different engine than the one a
+// run will use. A second assembly path here is exactly the drift this feature exists to
+// prevent: validation reporting a suite clean against an engine that is not the one
+// which will execute it is worse than no validation.
+//
+// cfg is taken by POINTER because config.Resolve writes back into it; the caller's copy
+// is defended by the Targets copy below, mirroring Run.
+func buildEngineForInspection(_ context.Context, cfg *Config, opts ...Option) (*engine.Engine, error) {
+	var ro runOptions
+	for _, opt := range opts {
+		opt(&ro)
+	}
+
+	// Defensive copy of Targets before Resolve, for the same reason Run makes one: cfg
+	// arrives by value from the caller but Targets is a map, so Resolve would otherwise
+	// write resolved targets back into the CALLER's Config. Inspecting a suite must not
+	// mutate the configuration the caller then passes to Run.
+	if cfg.Targets != nil {
+		targets := make(map[string]config.Target, len(cfg.Targets))
+		for name, t := range cfg.Targets {
+			targets[name] = t
+		}
+		cfg.Targets = targets
+	}
+	if err := config.Resolve(cfg); err != nil {
+		return nil, fmt.Errorf("mentat: resolving config: %w", err)
+	}
+
+	logWriter := ro.logWriter
+	if logWriter == nil {
+		logWriter = io.Discard
+	}
+	logger := engine.NewLogger(logWriter, ro.verbose, ro.debug)
+
+	cor, err := engine.BuildCorrelator(*cfg, logger)
+	if err != nil {
+		return nil, fmt.Errorf("mentat: build correlator: %w", err)
+	}
+	var storeOpts []engine.Option
+	for _, sp := range ro.stores {
+		if sp.factory == nil {
+			return nil, fmt.Errorf("mentat: WithStore %q: nil factory; register a non-nil StoreFactory", sp.name)
+		}
+		storeOpts = append(storeOpts, engine.WithExtraStore(sp.name, func(c config.Config) (core.TraceStore, error) {
+			return sp.factory(c)
+		}))
+	}
+	st, err := engine.BuildStore(*cfg, storeOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("mentat: build store: %w", err)
+	}
+	buildOpts, err := engineOptions(logger, ro)
+	if err != nil {
+		return nil, err
+	}
+	eng, err := engine.Build(*cfg, st, cor, buildOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("mentat: build engine: %w", err)
+	}
+	return eng, nil
 }

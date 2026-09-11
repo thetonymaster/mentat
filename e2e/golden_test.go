@@ -22,12 +22,30 @@ import (
 // only ever match the standalone summary line, never in-line text.
 var godogDurationLine = regexp.MustCompile(`(?m)^(?:\d+h)?(?:\d+m)?\d+(?:\.\d+)?(?:ns|µs|us|ms|s)$`)
 
+// godogStepDefLine matches the "# <file>.go:<line> -> *world" annotation godog's
+// pretty formatter appends to each step: the SOURCE LOCATION of the step definition
+// it bound.
+//
+// The line number is normalized because it is an artifact of where the reg.Step call
+// happens to sit in internal/steps/metadata.go, not a property of the rendered
+// output. Left raw, adding a comment anywhere above that loop churns this golden —
+// which is exactly what happened when feature 012 documented the registration
+// function, and `make ci` never compiles this lane so nothing caught it until the
+// e2e run.
+//
+// The FILENAME is deliberately kept: registration moving to a different file is a
+// real change to the single registration path and must still churn the golden.
+// Mirrors normalizeGoldenStdout in the root package's mentat_golden_test.go — the
+// two goldens capture the same annotation and must treat it the same way.
+var godogStepDefLine = regexp.MustCompile(`(\w+\.go):\d+( -> )`)
+
 // normalizeStdout replaces the nondeterministic total-duration summary line with a
 // fixed placeholder so a live run's stdout is byte-stable across invocations. This
 // is the EXACT transform used to produce cmd/mentat/testdata/golden-green.txt; the
 // golden comparison below is the cross-check that the two stay in sync.
 func normalizeStdout(b []byte) string {
-	return godogDurationLine.ReplaceAllString(string(b), "<DURATION>")
+	s := godogDurationLine.ReplaceAllString(string(b), "<DURATION>")
+	return godogStepDefLine.ReplaceAllString(s, "${1}:<LINE>${2}")
 }
 
 // TestGoldenStdoutSilentByDefault is the SC-005 regression tripwire: it proves the

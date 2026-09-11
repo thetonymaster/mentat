@@ -218,16 +218,16 @@ written in contributed phrases and assert zero `unbound-step` findings.
 
 ## Phase 7: Polish & Cross-Cutting Concerns
 
-- [ ] T059 [P] Add the contributed-phrase authoring path to `docs/extending/` — declaring a phrase, the two seams and when each applies, the anchoring rule, and the collision policy (FR-017) (go-coder)
-- [ ] T060 [P] Reconcile the seam taxonomy at `specs/009-extension-surface-integrity/contracts/seam-taxonomy.md` and `docs/extending/new-seam.md` if this feature changed any seam's shape (FR-017) (go-coder)
-- [ ] T061 Regenerate the public-surface golden (`specs/007-public-extension-api/contracts/public-surface.golden`) with `MENTAT_UPDATE_GOLDEN=1 go test -run TestPublicSurfaceGolden` and **hand-review the diff**: expect the two new seams with full method sets, `ContributedPhrase`'s exported fields, the validate entry point and the `Finding` alias — and **nothing else**. 011's `ExpectationParser` line must be unchanged (SC-008, FR-015) (go-coder)
-- [ ] T062 Confirm `TestFacadeNameabilitySweep` (`surface_test.go`) demands the new aliases automatically, without anyone adding them by hand — 010 paying for itself (SC-008) (go-coder)
-- [ ] T063 [P] Verify SC-009: build an engine with **zero** contributed phrases and confirm byte-identical output to T002's baseline across every existing golden. The overwhelmingly common case must cost nothing (go-test-writer)
-- [ ] T064 Verify the 80% per-package coverage floor for every touched package with the `/coverage` skill or `go test ./... -coverprofile=cover.out && go tool cover -func=cover.out` (SC-010, Constitution V) (go-coder)
-- [ ] T065 [P] Run `gofmt -l .`, `go vet ./...` and `golangci-lint run ./...` clean (go-coder)
-- [ ] T066 Run the full [quickstart.md](./quickstart.md) validation end to end, including the e2e lane with the harness up (go-coder)
-- [ ] T067 Re-run `make ci` **and** `go test -tags e2e -timeout 25m ./e2e/`; record final before/after against T002's baseline. A green `make ci` alone does not discharge SC-012 (go-coder)
-- [ ] T068 Update the `<!-- SPECKIT -->` block in `CLAUDE.md`: 012 shipped, what landed, and any correction this feature made to its own artifacts — following the pattern 011 set (go-coder)
+- [X] T059 [P] Add the contributed-phrase authoring path to `docs/extending/` — declaring a phrase, the two seams and when each applies, the anchoring rule, and the collision policy (FR-017) (go-coder)
+- [X] T060 [P] Reconcile the seam taxonomy at `specs/009-extension-surface-integrity/contracts/seam-taxonomy.md` and `docs/extending/new-seam.md` if this feature changed any seam's shape (FR-017) (go-coder)
+- [X] T061 Regenerate the public-surface golden (`specs/007-public-extension-api/contracts/public-surface.golden`) with `MENTAT_UPDATE_GOLDEN=1 go test -run TestPublicSurfaceGolden` and **hand-review the diff**: expect the two new seams with full method sets, `ContributedPhrase`'s exported fields, the validate entry point and the `Finding` alias — and **nothing else**. 011's `ExpectationParser` line must be unchanged (SC-008, FR-015) (go-coder)
+- [X] T062 Establish what actually guards the new facade aliases (SC-008). **Corrected 2026-09-11 (R11)**: the task assumed `TestFacadeNameabilitySweep` would demand them automatically. Measured false — the sweep is SEEDED from existing aliases and walks outward, so removing one removes its seed and nothing fires. Both seams are optional and discovered by type assertion, so no published type references them either. The real guards, both measured: `TestPublicSurfaceGolden` (reports "symbols in golden but NOT present now") and the compile-time witnesses in `custom_phrase_facade_test.go` (build failure in an external test package) — the same pair 011 used for `ExpectationParser` (go-coder)
+- [X] T063 [P] Verify SC-009: build an engine with **zero** contributed phrases and confirm byte-identical output to T002's baseline across every existing golden. The overwhelmingly common case must cost nothing (go-test-writer)
+- [X] T064 Verify the 80% per-package coverage floor for every touched package with the `/coverage` skill or `go test ./... -coverprofile=cover.out && go tool cover -func=cover.out` (SC-010, Constitution V) (go-coder)
+- [X] T065 [P] Run `gofmt -l .`, `go vet ./...` and `golangci-lint run ./...` clean (go-coder)
+- [X] T066 Run the full [quickstart.md](./quickstart.md) validation end to end, including the e2e lane with the harness up (go-coder)
+- [X] T067 Re-run `make ci` **and** `go test -tags e2e -timeout 25m ./e2e/`; record final before/after against T002's baseline. A green `make ci` alone does not discharge SC-012 (go-coder)
+- [X] T068 Update the `<!-- SPECKIT -->` block in `CLAUDE.md`: 012 shipped, what landed, and any correction this feature made to its own artifacts — following the pattern 011 set (go-coder)
 - [ ] T069 **go-reviewer `gate`** audit of the staged diff: PASS/BLOCK. Conventional Commits, no `git add .`, no AI attribution (go-reviewer)
 
 ---

@@ -93,6 +93,52 @@ existing convention rather than a new exemption.
 
 ---
 
+## 3b. Final coverage (T064), and why `cmd/mentat`'s percentage fell
+
+| Package | Baseline | After | Verdict |
+|---|---|---|---|
+| `github.com/thetonymaster/mentat` | 99.1% | 95.1% | ≥ 80% ✓ |
+| `internal/core` | 100.0% | 100.0% | ≥ 80% ✓ |
+| `internal/engine` | 95.2% | 95.0% | ≥ 80% ✓ |
+| `internal/steps` | 88.9% | **89.4%** | ≥ 80% ✓, above baseline |
+| `cmd/mentat` | 69.4% | **62.0%** | below baseline — see below |
+
+`cmd/mentat` was already under the constitution's 80% floor at `0f9dcea`, and §3a set the
+obligation for such packages as "no regression". That obligation is not met on the raw
+percentage, so here is the measurement rather than an assurance:
+
+| | statements | covered | % |
+|---|---|---|---|
+| `cmd/mentat` baseline | 281 | 195 | 69.4% |
+| `cmd/mentat` after | 187 | 116 | 62.0% |
+| `internal/steps` baseline | 442 | 393 | 88.9% |
+| `internal/steps` after | 687 | 614 | 89.4% |
+| **combined baseline** | 723 | 588 | **81.3%** |
+| **combined after** | 874 | 730 | **83.5%** |
+
+The feature-walking logic (`checkFeature`, `featureFiles`, `lineMap`, `newIDGen`,
+`dedupeSort`) MOVED from `cmd/mentat` into `internal/steps` so the CLI and the library
+validate entry point share one implementation. That removed 94 statements from `cmd/mentat`,
+**79 of them covered** — an 84%-covered block, well above the package's 69.4% average. Deleting
+an above-average block lowers the average; no coverage was lost.
+
+Combined coverage across the two packages ROSE, and what remains uncovered in `cmd/mentat` is
+`main`, `usage` and `runMain` (0% at baseline too — they are the `os.Exit` shell the pure seams
+exist to keep untested). Every statement 012 added to `cmd/mentat` is covered, including the new
+`--help` text, which has its own test asserting the documented limit is actually printed.
+
+**Why `make ci` is green regardless**: the coverage gate (`.claude/skills/coverage/coverage.sh:44-47`) SKIPS `*/cmd/*`, `*/cmd`, `*/mocks` and `*/mocks/*`
+packages entirely. `cmd/mentat` has therefore never been subject to the 80% floor, and its
+number is informational. Stated here because the argument above would otherwise look like it is
+what keeps CI green, and it is not — leaving that unsaid is how a reader later concludes the
+gate covers something it does not.
+
+**Conclusion**: the raw percentage regressed, the underlying coverage did not. Recorded rather
+than waved through, because a number moving the wrong way deserves an explanation that can be
+checked.
+
+---
+
 ## 4. Environment
 
 - Go 1.25.0
@@ -124,3 +170,39 @@ SC-012 asserts is that **golden content** does not, and no golden test failed.
 **Zero churn on both surfaces.** R0's planning-time measurement reproduced at implementation
 time rather than inherited — which matters, because R1 (the other planning-time claim about
 godog) turned out to be partly false when re-checked (see R10).
+
+---
+
+## 6. Final verification (T066/T067), and the golden `make ci` could not see
+
+Run 2026-09-11 with the harness up, after all implementation.
+
+| Surface | Result |
+|---|---|
+| `gofmt -l .` | clean |
+| `go vet ./...` | clean |
+| `golangci-lint run ./...` | **0 issues** |
+| `go test ./...` | all ok, 0 FAIL |
+| `go test -tags e2e -run TestGolden ./e2e/` | `ok 15.866s` |
+| `go test -tags e2e -timeout 25m ./e2e/` | `ok 35.660s` (baseline 40.101s) |
+| `make ci` | PASS, including `COVERAGE GATE: PASS (all packages >= 80%)` |
+
+### The e2e golden caught what `make ci` structurally cannot
+
+The SC-005 stdout golden (`cmd/mentat/testdata/golden-green.txt`) captured the same
+step-definition source annotation §3a describes — `# metadata.go:75 -> *world` — and 012's
+documentation of `registerSteps` moved that line to 107. The e2e lane FAILED on it.
+
+`make ci` does not compile `//go:build e2e`, so nothing caught this until the e2e run. That is
+exactly why the spec refused to let a green `make ci` discharge SC-012, and it is the second time
+in this feature that running both surfaces was the only thing that worked.
+
+**Fix**: `normalizeStdout` in `e2e/golden_test.go` now applies the same line-number normalization
+as `normalizeGoldenStdout` in the root package, and the committed golden was regenerated
+(7 insertions, 7 deletions — every one of them a `metadata.go:NNN` → `metadata.go:<LINE>` token,
+no rendered content changed). The two goldens capture the same annotation and now treat it the
+same way; a comment on either side would otherwise churn one and not the other.
+
+**Standing lesson**: a green `make ci` is not evidence about the e2e goldens. Run
+`go test -tags e2e` after any change to step registration, and after any change to the
+FILE LAYOUT around it — not only to the step table.

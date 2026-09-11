@@ -3,6 +3,7 @@ package steps
 import (
 	"bytes"
 	"context"
+	"errors"
 	"reflect"
 	"strconv"
 	"strings"
@@ -162,7 +163,7 @@ func TestMakeStepHandlerPropagatesError(t *testing.T) {
 	if out[0].IsNil() {
 		t.Fatal("handler returned nil for a parser that returned an error")
 	}
-	if got := out[0].Interface().(error); got != want {
+	if got := out[0].Interface().(error); !errors.Is(got, want) {
 		t.Fatalf("handler returned %v, want the parser's own error %v", got, want)
 	}
 }
@@ -222,7 +223,6 @@ func TestGodogAcceptsTheSynthesizedHandler(t *testing.T) {
 // property under test and a stub implementing both would hide a routing mistake.
 type phraseComparator struct {
 	gotCaps []string
-	gotText string
 	exp     core.Expectation
 	err     error
 	nilExp  bool
@@ -245,17 +245,6 @@ func (c *phraseComparator) ParseCaptures(caps []string) (core.Expectation, error
 
 // captureOnly implements CaptureParser but NOT ExpectationParser.
 type captureOnly struct{ *phraseComparator }
-
-// docOnly implements ExpectationParser but NOT CaptureParser.
-type docOnly struct{ *phraseComparator }
-
-func (c docOnly) ParseCaptures([]string) (core.Expectation, error) {
-	panic("docOnly must not be routed to ParseCaptures")
-}
-func (c docOnly) ParseExpectation(text string) (core.Expectation, error) {
-	c.gotText = text
-	return c.exp, c.err
-}
 
 // neitherSeam contributes a phrase but implements no parser seam at all. It is
 // declared standalone rather than embedding phraseComparator: embedding would
@@ -541,7 +530,6 @@ func TestContributedPhraseGoesRedOnAFalseClaim(t *testing.T) {
 type validationComparator struct {
 	name    string
 	phrases []core.ContributedPhrase
-	noSeam  bool
 }
 
 func (c *validationComparator) Name() string { return c.name }
@@ -752,6 +740,18 @@ func TestAnchoredPatternEdgeCases(t *testing.T) {
 		{`^the price is 5\\\$`, false}, // escaped backslash then escaped dollar
 		{`$`, false},                   // no start anchor
 		{`^$`, true},                   // degenerate but genuinely anchored
+
+		// Top-level alternation binds LOOSER than the anchors. Found by review after a
+		// string-level check ("starts ^, ends $") had shipped and accepted the first
+		// row below — which the runner, matching with an UNANCHORED
+		// FindStringSubmatch, then matches inside "I check the beta reading". That is
+		// exactly the swallowing V2 exists to prevent.
+		{`^the alpha reading|the beta reading$`, false}, // parses as (^alpha)|(beta$)
+		{`^a|b$`, false},
+		{`^a$|^b$`, true},                  // every branch anchored: legitimate
+		{`^(?:alpha|beta) reading$`, true}, // alternation INSIDE the anchors
+		{`^(alpha|beta) reading$`, true},   // same, with a capture group
+		{`^a$|b`, false},                   // one unanchored branch is enough
 	}
 
 	for _, tt := range tests {
@@ -863,4 +863,99 @@ func TestContributedPhraseNeverSelectedByTagsIsStillValidated(t *testing.T) {
 	if _, err := resolvePhrases(eng); err == nil {
 		t.Fatal("a phrase no scenario would select was accepted; validation must not depend on whether a phrase is reached")
 	}
+}
+
+// docstringOnly implements ExpectationParser but NOT CaptureParser, and PANICS if the
+// capture route is taken. A stub that implemented both could not detect a routing
+// mistake — it would quietly succeed either way.
+type docstringOnly struct {
+	gotText string
+	exp     core.Expectation
+	err     error
+}
+
+func (c *docstringOnly) Name() string { return "doc-only" }
+func (c *docstringOnly) Compare(_ context.Context, _ core.Evidence, _ core.Expectation) (core.Verdict, error) {
+	return core.Verdict{Pass: true}, nil
+}
+func (c *docstringOnly) ParseExpectation(text string) (core.Expectation, error) {
+	c.gotText = text
+	return c.exp, c.err
+}
+
+// TestContributedPhraseDocstringRouteReachesExpectationParser covers row 1 of the
+// routing table — the one advertised everywhere as "ExpectationParser (unchanged from
+// 011)" and, until review caught it, executed by no test in the repo.
+//
+// A mutation replacing the body with a constant left the entire suite green, which is
+// the only evidence that matters about a test's absence.
+//
+// The body must arrive VERBATIM. Whitespace can be significant to a comparator's own
+// format, so the untrimmed guarantee is asserted rather than assumed — the surrounding
+// code claims it and nothing checked it.
+func TestContributedPhraseDocstringRouteReachesExpectationParser(t *testing.T) {
+	t.Parallel()
+
+	const body = "  leading and trailing space matters  \n\n  second line  "
+
+	c := &docstringOnly{exp: "parsed-by-expectation-parser"}
+	cp := contributedPhrase{
+		comparator: "doc-only",
+		phrase:     core.ContributedPhrase{Pattern: `^the revenue matches:$`},
+		arity:      0,
+		wantsDoc:   true,
+	}
+	if cp.seam() != "docstring" {
+		t.Fatalf("seam() = %q, want docstring — this test is asserting the wrong route", cp.seam())
+	}
+
+	exp, err := cp.parse(c, nil, body, true)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if exp != "parsed-by-expectation-parser" {
+		t.Errorf("parse returned %v, want the ExpectationParser's own expectation", exp)
+	}
+	if c.gotText != body {
+		t.Errorf("ExpectationParser received %q, want %q verbatim — the body is never trimmed or normalized because whitespace may be significant to the comparator's format",
+			c.gotText, body)
+	}
+}
+
+// TestContributedPhraseDocstringRoutePropagatesParseFailures pins that the docstring
+// route honours the SAME error contract as the captures route: a parse error is wrapped
+// naming the comparator, and a nil expectation with no error is refused rather than
+// forwarded into a passing verdict.
+func TestContributedPhraseDocstringRoutePropagatesParseFailures(t *testing.T) {
+	t.Parallel()
+
+	cp := contributedPhrase{
+		comparator: "doc-only",
+		phrase:     core.ContributedPhrase{Pattern: `^the revenue matches:$`},
+		wantsDoc:   true,
+	}
+
+	t.Run("parse error is wrapped and names the comparator", func(t *testing.T) {
+		t.Parallel()
+		_, err := cp.parse(&docstringOnly{err: errStub{"bad body"}}, nil, "x", true)
+		if err == nil {
+			t.Fatal("parse succeeded despite the parser returning an error")
+		}
+		for _, want := range []string{"doc-only", "bad body"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not mention %q", err.Error(), want)
+			}
+		}
+	})
+
+	t.Run("nil expectation with no error is refused", func(t *testing.T) {
+		t.Parallel()
+		exp, err := cp.parse(&docstringOnly{exp: nil}, nil, "x", true)
+		if err == nil {
+			t.Fatal("a nil expectation with no error was accepted; it would produce a passing verdict for a step that asserted nothing")
+		}
+		if exp != nil {
+			t.Errorf("parse returned an expectation (%v) alongside an error", exp)
+		}
+	})
 }

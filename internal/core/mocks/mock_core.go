@@ -163,6 +163,83 @@ func (mr *MockExpectationParserMockRecorder) ParseExpectation(text any) *gomock.
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ParseExpectation", reflect.TypeOf((*MockExpectationParser)(nil).ParseExpectation), text)
 }
 
+// MockPhraseContributor is a mock of PhraseContributor interface.
+type MockPhraseContributor struct {
+	ctrl     *gomock.Controller
+	recorder *MockPhraseContributorMockRecorder
+	isgomock struct{}
+}
+
+// MockPhraseContributorMockRecorder is the mock recorder for MockPhraseContributor.
+type MockPhraseContributorMockRecorder struct {
+	mock *MockPhraseContributor
+}
+
+// NewMockPhraseContributor creates a new mock instance.
+func NewMockPhraseContributor(ctrl *gomock.Controller) *MockPhraseContributor {
+	mock := &MockPhraseContributor{ctrl: ctrl}
+	mock.recorder = &MockPhraseContributorMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockPhraseContributor) EXPECT() *MockPhraseContributorMockRecorder {
+	return m.recorder
+}
+
+// ContributedPhrases mocks base method.
+func (m *MockPhraseContributor) ContributedPhrases() []core.ContributedPhrase {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ContributedPhrases")
+	ret0, _ := ret[0].([]core.ContributedPhrase)
+	return ret0
+}
+
+// ContributedPhrases indicates an expected call of ContributedPhrases.
+func (mr *MockPhraseContributorMockRecorder) ContributedPhrases() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ContributedPhrases", reflect.TypeOf((*MockPhraseContributor)(nil).ContributedPhrases))
+}
+
+// MockCaptureParser is a mock of CaptureParser interface.
+type MockCaptureParser struct {
+	ctrl     *gomock.Controller
+	recorder *MockCaptureParserMockRecorder
+	isgomock struct{}
+}
+
+// MockCaptureParserMockRecorder is the mock recorder for MockCaptureParser.
+type MockCaptureParserMockRecorder struct {
+	mock *MockCaptureParser
+}
+
+// NewMockCaptureParser creates a new mock instance.
+func NewMockCaptureParser(ctrl *gomock.Controller) *MockCaptureParser {
+	mock := &MockCaptureParser{ctrl: ctrl}
+	mock.recorder = &MockCaptureParserMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockCaptureParser) EXPECT() *MockCaptureParserMockRecorder {
+	return m.recorder
+}
+
+// ParseCaptures mocks base method.
+func (m *MockCaptureParser) ParseCaptures(caps []string) (core.Expectation, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ParseCaptures", caps)
+	ret0, _ := ret[0].(core.Expectation)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ParseCaptures indicates an expected call of ParseCaptures.
+func (mr *MockCaptureParserMockRecorder) ParseCaptures(caps any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ParseCaptures", reflect.TypeOf((*MockCaptureParser)(nil).ParseCaptures), caps)
+}
+
 // MockDriver is a mock of Driver interface.
 type MockDriver struct {
 	ctrl     *gomock.Controller

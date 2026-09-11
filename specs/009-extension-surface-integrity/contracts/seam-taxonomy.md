@@ -26,6 +26,22 @@ table names both)
 | Correlator | no (engine seam only) | — | — | none — types-only until three real demands (007 rule) |
 | Reporter | package-global `registry.RegisterReporter` (:189) — a package-level func, NOT a `*Registry` method; reporters live in no per-engine registry | instance | **never sealed** (package-global, own mutex, `registry.go:177-201`) | types-only |
 
+> **Amended 2026-09-11 by feature 012.** Two OPTIONAL seams were added —
+> `PhraseContributor` and `CaptureParser` (`internal/core/core.go`, aliased on the
+> facade). They are deliberately absent from the table above, and that absence is the
+> point: the table's axes are *registry ownership*, *registration style*, *sealing* and
+> *public hook*, and an optional seam has none of them. It is never registered, owns no
+> registry entry, is never sealed, and has no `With*` hook — it is discovered by TYPE
+> ASSERTION on an already-registered comparator, the model 011 established for
+> `ExpectationParser` (which is likewise, and correctly, not in this table).
+>
+> Recording this rather than adding rows: a reader who finds `PhraseContributor` on the
+> facade and not here needs to know it was considered and excluded, or the next person
+> "fixes" the omission and the taxonomy grows a fourth axis it does not need. The
+> distinction to keep is REGISTERED seams (this table) versus OPTIONAL capabilities a
+> registered seam may additionally implement (`ExpectationParser`, `PhraseContributor`,
+> `CaptureParser`). See `docs/extending/phrases.md`.
+
 > **Amended 2026-07-18 during T020/T021.** Two cells above were corrected against
 > the source after this contract was written: the Matcher public-hook cell said
 > "types-only", which is false — "types-only" means *aliased with no registration

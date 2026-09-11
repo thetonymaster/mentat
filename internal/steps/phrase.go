@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"regexp/syntax"
 	"strings"
 
 	"github.com/cucumber/godog"
+	messages "github.com/cucumber/messages/go/v21"
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/engine"
 )
@@ -104,10 +106,19 @@ func makeStepHandler(arity int, wantsDoc bool, fn func(caps []string, body strin
 			caps[i] = args[i].String()
 		}
 
-		// The docstring parameter is always last and present in the signature only
-		// when declared. godog passes a typed nil when the step carries no body, so
-		// the nil check is real rather than defensive: hasBody stays false and the
-		// routing layer rejects it loudly instead of treating it as an empty body.
+		// The docstring parameter is present in the signature only when declared, and
+		// is always last.
+		//
+		// hasBody is NOT a runtime guard against a missing body — measured on godog
+		// v0.15.1, a step that omits a declared docstring never reaches this handler
+		// at all: the argument count check fails first (`len(sd.Args) < numIn`,
+		// internal/models/stepdef.go) and the step dies with "func expected more
+		// arguments than given". An earlier version of this comment claimed godog
+		// passed a typed nil here. It does not, and the nil branch was unreachable.
+		//
+		// Mismatches in BOTH directions are caught at scenario init instead, by
+		// checkPhraseDocstrings, which can name the comparator and the pattern —
+		// godog's own message names neither.
 		var body string
 		var hasBody bool
 		if wantsDoc {
@@ -137,8 +148,12 @@ func makeStepHandler(arity int, wantsDoc bool, fn func(caps []string, body strin
 type contributedPhrase struct {
 	comparator string
 	phrase     core.ContributedPhrase
-	arity      int
-	wantsDoc   bool
+	// re is the SAME compiled pattern godog matches against. Keeping it means the
+	// scenario-init docstring precheck decides "does this step match this phrase"
+	// exactly as the runner will, rather than by a second, divergent rule.
+	re       *regexp.Regexp
+	arity    int
+	wantsDoc bool
 }
 
 // seam names the parser that serves this phrase, per the routing table:
@@ -265,7 +280,10 @@ func (cp contributedPhrase) step(w *world) phraseStep {
 // An engine with no contributing comparators resolves to nil, so the overwhelmingly
 // common path allocates nothing and registers nothing.
 func resolvePhrases(eng *engine.Engine) ([]contributedPhrase, error) {
-	bindings := eng.ContributedPhrases()
+	bindings, err := eng.ContributedPhrases()
+	if err != nil {
+		return nil, err
+	}
 	if len(bindings) == 0 {
 		return nil, nil
 	}
@@ -285,10 +303,10 @@ func resolvePhrases(eng *engine.Engine) ([]contributedPhrase, error) {
 
 		// V1 — the pattern must compile. A bad regex is author input, so this is a
 		// descriptive build error rather than the panic MustCompile would give.
-		re, err := regexp.Compile(p.Pattern)
-		if err != nil {
+		re, cerr := regexp.Compile(p.Pattern)
+		if cerr != nil {
 			return nil, fmt.Errorf("comparator %q contributes an uncompilable pattern %q: %w",
-				b.Comparator, p.Pattern, err)
+				b.Comparator, p.Pattern, cerr)
 		}
 
 		// V2 — the pattern must be anchored. An unanchored pattern is the realistic
@@ -326,6 +344,7 @@ func resolvePhrases(eng *engine.Engine) ([]contributedPhrase, error) {
 		cp := contributedPhrase{
 			comparator: b.Comparator,
 			phrase:     p,
+			re:         re,
 			// Arity comes from the SAME compiled pattern godog matches against, so
 			// the synthesized handler cannot declare a different number of arguments
 			// than the matcher supplies.
@@ -382,22 +401,67 @@ func checkPhraseSeam(eng *engine.Engine, cp contributedPhrase) error {
 	return nil
 }
 
-// isAnchored enforces V2: the pattern begins "^" and ends with an UNESCAPED "$".
+// isAnchored enforces V2: the pattern must match a WHOLE sentence and nothing less.
 //
-// The unescaped part is the whole subtlety. `^the price is 5\$` ends with a dollar
-// character but that dollar is a literal, so the pattern is not anchored and can match
-// a prefix of a longer sentence — exactly the shadowing V2 exists to prevent. Counting
-// the backslashes immediately before the final "$" distinguishes the cases: an even
-// number (including zero) leaves the "$" acting as an anchor, an odd number escapes it.
+// # Why this is a structural check and not string inspection
+//
+// The obvious test — "starts with ^ and ends with $" — is wrong in two ways that both
+// let a pattern swallow part of a neighbouring sentence, which is precisely what V2
+// exists to prevent. The runner matches with an UNANCHORED FindStringSubmatch, so a
+// pattern that only looks anchored really can match a substring.
+//
+//   - A trailing ESCAPED dollar is a literal, not an anchor: `^the price is 5\$` has
+//     no end anchor at all.
+//   - Top-level ALTERNATION binds looser than the anchors:
+//     `^the alpha reading|the beta reading$` parses as
+//     `(^the alpha reading)|(the beta reading$)`, and the second branch happily
+//     matches inside "I check the beta reading". Measured — a string-level check
+//     accepts this.
+//
+// So the pattern is parsed and its shape inspected. A concatenation must open with a
+// begin anchor and close with an end anchor; an alternation must have EVERY branch
+// independently anchored, which correctly accepts `^a$|^b$` and correctly rejects
+// `^a|b$`.
 func isAnchored(pattern string) bool {
-	if !strings.HasPrefix(pattern, "^") || !strings.HasSuffix(pattern, "$") {
+	re, err := syntax.Parse(pattern, syntax.Perl)
+	if err != nil {
+		// V1 reports the compile failure with the underlying cause; this only has to
+		// avoid claiming an unparseable pattern is anchored.
 		return false
 	}
-	backslashes := 0
-	for i := len(pattern) - 2; i >= 0 && pattern[i] == '\\'; i-- {
-		backslashes++
+	return anchoredShape(re.Simplify())
+}
+
+func anchoredShape(re *syntax.Regexp) bool {
+	switch re.Op {
+	case syntax.OpConcat:
+		if len(re.Sub) < 2 {
+			return false
+		}
+		return isBeginAnchor(re.Sub[0]) && isEndAnchor(re.Sub[len(re.Sub)-1])
+	case syntax.OpAlternate:
+		// Every branch must stand on its own: one unanchored branch is enough to
+		// match a substring, and the caller never sees which branch matched.
+		for _, sub := range re.Sub {
+			if !anchoredShape(sub) {
+				return false
+			}
+		}
+		return len(re.Sub) > 0
+	case syntax.OpCapture:
+		// `^(...)$` simplifies to a concat, but `(^...$)` does not.
+		return anchoredShape(re.Sub[0])
+	default:
+		return false
 	}
-	return backslashes%2 == 0
+}
+
+func isBeginAnchor(re *syntax.Regexp) bool {
+	return re.Op == syntax.OpBeginText || re.Op == syntax.OpBeginLine
+}
+
+func isEndAnchor(re *syntax.Regexp) bool {
+	return re.Op == syntax.OpEndText || re.Op == syntax.OpEndLine
 }
 
 // declaresDocstring reports whether a pattern's sentence ends with a colon, which is
@@ -406,6 +470,11 @@ func isAnchored(pattern string) bool {
 //
 // Using the existing convention rather than inventing a flag keeps one way of saying
 // this, and makes a contributed phrase read exactly like a built-in to an author.
+//
+// Because it is a CONVENTION an author can forget, a mismatch between what the pattern
+// declares and what a step actually carries is checked at scenario init — see
+// checkPhraseDocstrings. Inferring it is convenient; trusting the inference silently
+// would not be.
 func declaresDocstring(pattern string) bool {
 	return strings.HasSuffix(pattern, ":$")
 }
@@ -499,4 +568,56 @@ func EngineStepPatterns(eng *engine.Engine) (StepPatterns, error) {
 		return nil, err
 	}
 	return append(pats, extra...), nil
+}
+
+// checkPhraseDocstrings rejects a step whose docstring presence disagrees with the
+// contributed phrase it matches, at scenario init, before the step can run.
+//
+// # Why this exists, in both directions
+//
+// Measured against the pinned godog v0.15.1, neither case is handled acceptably by the
+// runner alone:
+//
+//   - **Step carries a body the phrase did not declare.** godog's argument conversion
+//     loop runs `i < numIn`, so the SURPLUS docstring is discarded without a word, the
+//     handler runs on the captures alone, and the scenario reports PASSED. An author
+//     who wrote an expectation body gets a green verdict that never read it. That is a
+//     silent fallback producing an unearned green — the one outcome a test framework
+//     must never produce.
+//
+//   - **Step omits a body the phrase declared.** godog fails loudly, so nothing is
+//     silent here, but its message is "func expected more arguments than given:
+//     expected 2 arguments, matched 1 from step" — which names neither the comparator
+//     nor the pattern. An author with several contributed phrases cannot tell which one
+//     they got wrong.
+//
+// Both are decidable statically: the phrase's pattern says whether it takes a body, and
+// the pickle step says whether it has one. Deciding it here also means no SUT is driven
+// before the mistake is reported.
+//
+// The FIRST matching phrase wins, mirroring how the runner resolves a step. A step
+// matching no contributed phrase is not this function's business — it is either a
+// built-in or an unbound step, and both are handled elsewhere.
+func checkPhraseDocstrings(phrases []contributedPhrase, steps []*messages.PickleStep) error {
+	if len(phrases) == 0 {
+		return nil
+	}
+	for _, st := range steps {
+		for _, cp := range phrases {
+			if !cp.re.MatchString(st.Text) {
+				continue
+			}
+			hasBody := st.Argument != nil && st.Argument.DocString != nil
+			switch {
+			case cp.wantsDoc && !hasBody:
+				return fmt.Errorf("step %q matches the phrase %q contributed by comparator %q, which expects a docstring body, but the step carries none",
+					st.Text, cp.phrase.Pattern, cp.comparator)
+			case !cp.wantsDoc && hasBody:
+				return fmt.Errorf("step %q carries a docstring, but the phrase %q contributed by comparator %q takes none — the body would be silently discarded and the step would report a verdict that never read it",
+					st.Text, cp.phrase.Pattern, cp.comparator)
+			}
+			break
+		}
+	}
+	return nil
 }

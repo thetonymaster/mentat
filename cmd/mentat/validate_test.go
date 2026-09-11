@@ -604,3 +604,31 @@ func TestValidateBadFormatFlag(t *testing.T) {
 		t.Fatalf("exit = %d, want 2 for a bad flag", code)
 	}
 }
+
+// TestValidateUsageStatesTheContributedPhraseLimit is T057's real assertion: the
+// limit must be STATED, not merely true.
+//
+// A compiled binary cannot see comparator-contributed phrases, so a suite written in
+// them reports every phrase as unbound here. That is structural and cannot be fixed
+// with a flag — which makes it a trap unless --help says so and points at the way out.
+// A user who hits a wall of unbound-step findings on a file they know is valid must be
+// able to find the explanation without reading the source.
+func TestValidateUsageStatesTheContributedPhraseLimit(t *testing.T) {
+	var buf bytes.Buffer
+	code, err := validateCmd([]string{"--help"}, &buf)
+	// --help is flag.ErrHelp, surfaced as a usage exit rather than success.
+	if err == nil && code == 0 {
+		t.Fatalf("validate --help returned success; want a usage exit\n%s", buf.String())
+	}
+	got := buf.String()
+	for _, want := range []string{
+		"BUILT-IN steps only",
+		"Comparator-contributed",
+		"compiled binary",
+		"library entry point",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("validate --help does not mention %q; the limit is a trap unless it is documented where a user meets it\n%s", want, got)
+		}
+	}
+}

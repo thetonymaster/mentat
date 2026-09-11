@@ -48,11 +48,11 @@ func (c *phraseRevenue) ParseCaptures(caps []string) (mentat.Expectation, error)
 	if len(caps) != 2 {
 		return nil, fmt.Errorf("revenue-shape: expected 2 captures, got %d: %q", len(caps), caps)
 	}
-	min, err := strconv.Atoi(caps[0])
+	floor, err := strconv.Atoi(caps[0])
 	if err != nil {
 		return nil, fmt.Errorf("revenue-shape: parsing floor %q: %w", caps[0], err)
 	}
-	return facadeRevenueExpectation{Min: min, Currency: caps[1]}, nil
+	return facadeRevenueExpectation{Min: floor, Currency: caps[1]}, nil
 }
 
 func (c *phraseRevenue) ParseExpectation(text string) (mentat.Expectation, error) {
@@ -377,5 +377,115 @@ func TestValidateRejectsAMalformedPhraseBeforeCheckingFiles(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "anchored") {
 		t.Errorf("error %q does not say what was wrong", err)
+	}
+}
+
+// TestStepReferenceRendersContributedPhrases is FR-012 through the FACADE, and it
+// exists because review found the renderer was reachable only from inside the module.
+//
+// `mentat steps` lists built-ins only — structurally, since a compiled binary cannot
+// reach a consumer's registrations. Telling consumers to "render the reference for your
+// own engine" is a promise the public surface has to actually keep.
+func TestStepReferenceRendersContributedPhrases(t *testing.T) {
+	cfg := mentat.Config{
+		Store:   phraseRegistryName,
+		Targets: map[string]mentat.Target{"bot": {Adapter: phraseRegistryName, Command: []string{"noop"}, MaxConcurrency: 1}},
+		Poll:    mentat.PollSpec{Interval: "1ms", StableFor: 1},
+	}
+	b := newBus()
+	docs, err := mentat.StepReference(context.Background(), cfg,
+		mentat.WithDriver(phraseRegistryName, func(mentat.Config) (mentat.Driver, error) {
+			return busDriver{bus: b, answer: "ok"}, nil
+		}),
+		mentat.WithStore(phraseRegistryName, func(mentat.Config) (mentat.TraceStore, error) {
+			return busStore{bus: b}, nil
+		}),
+		mentat.WithComparator("revenue-shape", func(mentat.Config) (mentat.Comparator, error) {
+			return &phraseRevenue{}, nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("StepReference: %v", err)
+	}
+
+	var sawBuiltin, sawContributed bool
+	for _, d := range docs {
+		if d.Pattern == `^the run satisfies:$` {
+			sawBuiltin = true
+		}
+		if d.Pattern == `^the revenue floor is (\d+) (\w+)$` {
+			sawContributed = true
+			if d.Group != "Extension: Revenue" {
+				t.Errorf("contributed row group = %q, want %q — a reader must be able to tell which rows their own code added", d.Group, "Extension: Revenue")
+			}
+			if d.Summary == "" || d.Example == "" {
+				t.Errorf("contributed row is missing documentation: %+v", d)
+			}
+		}
+	}
+	if !sawBuiltin {
+		t.Error("the engine reference omits built-in steps; it must be the FULL reference, not only the additions")
+	}
+	if !sawContributed {
+		t.Error("the engine reference omits the contributed phrase — the one step a consumer cannot find documented anywhere else")
+	}
+
+	// Contiguity is what lets a markdown generator emit one heading per group.
+	seen := map[string]bool{}
+	prev := ""
+	for _, d := range docs {
+		if d.Group == prev {
+			continue
+		}
+		if seen[d.Group] {
+			t.Errorf("group %q reappears after %q; groups must be contiguous", d.Group, prev)
+		}
+		seen[d.Group] = true
+		prev = d.Group
+	}
+}
+
+// TestStepReferenceRejectsAMalformedPhrase pins that a reference is never PARTIAL. A
+// list silently missing a phrase is worse than an error: the author concludes their
+// registration did not take effect and goes looking in the wrong place.
+func TestStepReferenceRejectsAMalformedPhrase(t *testing.T) {
+	cfg := mentat.Config{
+		Store:   phraseRegistryName,
+		Targets: map[string]mentat.Target{"bot": {Adapter: phraseRegistryName, Command: []string{"noop"}, MaxConcurrency: 1}},
+		Poll:    mentat.PollSpec{Interval: "1ms", StableFor: 1},
+	}
+	b := newBus()
+	_, err := mentat.StepReference(context.Background(), cfg,
+		mentat.WithDriver(phraseRegistryName, func(mentat.Config) (mentat.Driver, error) {
+			return busDriver{bus: b, answer: "ok"}, nil
+		}),
+		mentat.WithStore(phraseRegistryName, func(mentat.Config) (mentat.TraceStore, error) {
+			return busStore{bus: b}, nil
+		}),
+		mentat.WithComparator("bad", func(mentat.Config) (mentat.Comparator, error) {
+			return &brokenPhrase{pattern: `unanchored`}, nil
+		}),
+	)
+	if err == nil {
+		t.Fatal("StepReference returned a reference despite a malformed contributed phrase")
+	}
+}
+
+// TestValidateRequiresFeaturePaths pins Validate's precondition. It is a new public
+// entry point, and "validation could not run" is half its documented contract — a
+// caller who forgets WithFeatures must get that, not an empty findings list that reads
+// exactly like a clean suite.
+func TestValidateRequiresFeaturePaths(t *testing.T) {
+	findings, err := mentat.Validate(context.Background(), mentat.Config{},
+		mentat.WithConcurrency(1),
+	)
+	if err == nil {
+		t.Fatal("Validate succeeded with no feature paths; an empty result is indistinguishable from a clean suite")
+	}
+	if findings != nil {
+		t.Errorf("Validate returned findings (%+v) alongside an error", findings)
+	}
+	if !strings.Contains(err.Error(), "WithFeatures") {
+		t.Errorf("error %q does not name the option the caller is missing", err)
 	}
 }

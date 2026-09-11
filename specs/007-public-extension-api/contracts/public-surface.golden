@@ -143,6 +143,10 @@ field (Span)[04] Status string
 field (Span)[05] Start time.Time
 field (Span)[06] End time.Time
 field (Span)[07] Attrs map[string]string
+field (StepDoc)[00] Group string
+field (StepDoc)[01] Pattern string
+field (StepDoc)[02] Summary string
+field (StepDoc)[03] Example string
 field (StoreCaps)[00] StructuralQuery bool
 field (Target)[00] Adapter string
 field (Target)[01] Command []string
@@ -166,6 +170,7 @@ field (Verdict)[03] Detail *AggregateDetail
 field (Verdict)[04] Judge *JudgeUsage
 func LoadConfig(path string) (Config, error)
 func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error)
+func StepReference(ctx context.Context, cfg Config, opts ...Option) ([]StepDoc, error)
 func Validate(ctx context.Context, cfg Config, opts ...Option) ([]Finding, error)
 func WithComparator(name string, f ComparatorFactory) Option
 func WithConcurrency(n int) Option
@@ -243,6 +248,7 @@ type RunResult = core.RunResult
 type RunSpec = core.RunSpec
 type ScenarioResult = result.ScenarioResult
 type Span = trace.Span
+type StepDoc = steps.StepDoc
 type StoreCaps = core.StoreCaps
 type StoreFactory = func(Config) (TraceStore, error)
 type Target = config.Target

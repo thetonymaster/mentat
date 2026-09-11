@@ -190,20 +190,81 @@ moves from 012 to **013**. The 009 roadmap line
 (`specs/009-extension-surface-integrity/spec.md:143`) was corrected on 2026-09-10,
 along with its `:65` sibling that cited the range `010–012`.
 
-**In flight: 012-comparator-gherkin-phrases** — spec, research, data-model, contracts
-and quickstart complete; `tasks.md` not yet generated. Current plan:
-`specs/012-comparator-gherkin-phrases/plan.md`.
+**012-comparator-gherkin-phrases** (`specs/012-comparator-gherkin-phrases`, implemented
+2026-09-11, all 69 tasks complete) is on branch `012-comparator-gherkin-phrases`.
 
-Read `research.md` before touching anything godog-related — two of the feature's
-inherited premises were tested at planning time and **one was false**:
+What landed: two OPTIONAL seams in `internal/core` — `PhraseContributor` (a comparator
+declares the Gherkin sentences that invoke it) and `CaptureParser` (its captures become
+the comparator's own Expectation) — plus `ContributedPhrase`, `Engine.ContributedPhrases`,
+a `reflect.MakeFunc` handler bridge in `internal/steps/phrase.go`, `mentat.Validate`, and
+`Strict: true` on `mentat.Run`'s godog options.
+
+The headline guarantee is **equivalence**: a contributed phrase and 011's generic step
+produce identical pass/fail, identical reason text, identical qualifiers and an identical
+expectation value (`custom_phrase_facade_test.go`). 011's path is provably untouched — the
+`Extend` row and `comparatorSatisfiedByDoc` are byte-identical, and the only edit to its
+test file is one mechanical `mustInit(...)` wrap.
+
+Four corrections this feature made to its own artifacts — the same shape as 011's, and
+worth reading before trusting the spec text:
+
+- **R10: the ambiguity defect is LATENT, not live.** R1's first draft claimed it was
+  "reachable between two built-in patterns today". Measured false — the 40 built-in
+  patterns are **pairwise disjoint** across 1530 generated sentences covering every
+  alternation branch, and registration is single-pathed. Contributed phrases are what
+  make it reachable, so `Strict` is a prerequisite of 012 rather than a separable bugfix.
+  Pinned by `TestBuiltinStepPatternsArePairwiseDisjoint`, which nothing asserted before.
+- **R11: the nameability sweep does NOT demand the new aliases.** R2 claimed 010 would
+  pay for itself here. Measured false — `TestFacadeNameabilitySweep` is SEEDED from the
+  aliases that already exist, so removing one removes its seed and nothing fires; and both
+  new seams are optional, so no published type references them. SC-008 still holds, via
+  the public-surface golden plus the external-package compile-time witnesses — the same
+  pair 011 used. **A gate's coverage is a property to measure, not to infer from its name.**
+- **`StepBindingFindings` had ONE non-test caller, not two** (`cmd/mentat/validate.go`).
+  Which is also why its `sync.Once` never bit: its only consumer was a single-shot CLI
+  process.
+- **Both stdout goldens captured godog's step-definition SOURCE LINE**
+  (`# metadata.go:75 -> *world`), so documenting `registerSteps` churned them with no
+  change to rendered output. Both normalizers now collapse the line number and keep the
+  filename. The e2e one was caught only by running `go test -tags e2e` — `make ci` does
+  not compile that lane.
+
+Three design decisions worth knowing before extending this:
+
+- `registerSteps` takes its phrases as a **parameter**, not from `w.eng`. The drift test
+  drives it with a zero `world` whose `eng` is nil; nil-guarding would be the silent
+  fallback that makes a drift test assert over an empty set while believing otherwise.
+- The drift gate became a **partition** (every registered pattern is either a `stepDefs`
+  row or a member of the supplied contributed set, counts adding up) rather than being
+  relaxed into an unchecked superset.
+- Validation lives in `internal/steps`, not `engine.Build`: `internal/engine` cannot import
+  `internal/steps`, and V4 (collision with a built-in) is a statement about `stepDefs`.
+  It runs at composition, so no scenario executes when a phrase is malformed.
+
+`docs/extending/phrases.md` is the authoring guide. `mentat steps` and `docs/steps.md`
+remain **built-in only** — a compiled binary cannot see a consumer's registrations, which
+is structural; use `mentat.Validate` and the engine-scoped renderer from your own test
+binary.
+
+Read `research.md` before touching anything godog-related. Everything below was
+**measured** against the pinned `godog v0.15.1`, and every one of these corrected a claim
+someone had previously asserted without testing:
 
 - **godog reports an ambiguous match only under `Strict`** (`suite.go:547-553`), and
-  `mentat.Run` does not set it (`run.go:411-419`). Measured: two patterns matching one
+  `mentat.Run` did not set it (`run.go:411-419`). Measured: two patterns matching one
   step resolve **silently to the first-registered one and the scenario PASSES** — the
-  After hook receives a nil `stepErr`. Since built-ins register before anything else,
-  this is a live first-wins shadowing defect at `0f9dcea`, not just a 012 hazard. 011's
-  D1 asserted the opposite. Enabling `Strict` surfaces it through the existing After-hook
-  path as a FAILED scenario naming every matching expression — no new mechanism needed.
+  After hook receives a nil `stepErr`. 011's D1 asserted the opposite. Enabling `Strict`
+  surfaces it through the existing After-hook path as a FAILED scenario naming every
+  matching expression — no new mechanism needed. The branch was **latent, not live**, at
+  `0f9dcea` (see R10 above); built-ins register first, so the phrase a contributed
+  collision would silently swallow is always the contributed one.
+- **godog SILENTLY DISCARDS a docstring the handler did not declare** — the argument
+  conversion loop runs `i < numIn`, so a step carrying a body matched by a phrase that
+  takes none runs on its captures alone and the scenario reports **PASSED**, with the
+  body never read. Found by review after the feature was otherwise complete. Closed by
+  `checkPhraseDocstrings` at scenario init, which also replaces godog's own
+  "expected more arguments than given" (which names neither comparator nor pattern) for
+  the opposite mismatch.
 - **Enabling `Strict` churns zero goldens**, measured on both surfaces (`go test ./...`
   and `go test -tags e2e` with the harness up). `make ci` does not compile the e2e lane,
   so it is not evidence for this on its own.
@@ -212,6 +273,8 @@ inherited premises were tested at planning time and **one was false**:
   a `reflect.MakeFunc` bridge with arity derived from the pattern's `NumSubexp()`.
 
 All three are properties of the **pinned** `godog v0.15.1`; a bump re-opens them.
+
+**Roadmap after 012:** CLI/`mentatctl` UX is **013**.
 
 Two standing rules 010 established — read these before touching the facade:
 
