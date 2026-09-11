@@ -201,3 +201,7 @@ Feature: span floor
 
 The `Evidence` this reads — the `Trace` forest, the driver `Output`, and the
 failure fields — is described in the [Evidence primer](evidence.md).
+
+If your team writes that generic step often, your comparator can declare the sentence
+itself, so the feature file reads `Then the revenue floor is 4 USD` instead — see
+[Contributing Gherkin phrases](phrases.md). Both routes produce identical verdicts.

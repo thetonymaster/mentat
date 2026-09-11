@@ -1,0 +1,403 @@
+---
+
+description: "Task list for 012-comparator-gherkin-phrases"
+---
+
+# Tasks: Comparator-Contributed Gherkin Phrases
+
+**Input**: Design documents from `/specs/012-comparator-gherkin-phrases/`
+
+**Prerequisites**: [plan.md](./plan.md), [spec.md](./spec.md), [research.md](./research.md),
+[data-model.md](./data-model.md), [contracts/](./contracts/)
+
+**Tests**: This project's constitution mandates Test-First / TDD as NON-NEGOTIABLE (Principle V).
+Every test task below MUST be written and observed FAILING before its implementation task. Two
+tasks (T004, T038) additionally require the *pre-change* behaviour to be recorded, because they
+are regression tests for a **latent defect** (R10) rather than new-feature tests.
+
+**Organization**: Tasks are grouped by user story. US1 and US2 are both P1 — US2 is not a
+lesser story, it is the property that decides whether the feature is sound (see spec).
+
+## Format: `[ID] [P?] [Story] Description`
+
+- **[P]**: Can run in parallel (different files, no dependencies)
+- **[Story]**: US1–US4, on user-story phases only
+- Exact file paths are given in every task
+
+## Path Conventions
+
+Go module `github.com/thetonymaster/mentat`. Facade at repo root (`mentat.go`, `run.go`);
+internals under `internal/`; CLI under `cmd/mentat/`; live-Tempo tests under `e2e/` behind
+`//go:build e2e`.
+
+## Routing (constitution: Development Workflow)
+
+Behaviour changes → **go-test-writer** (owns red→green). Scaffolding, docs, regeneration,
+behaviour-preserving refactors → **go-coder**. Pre-commit audit → **go-reviewer** (`gate`).
+Each task names its agent.
+
+---
+
+## Phase 1: Setup
+
+**Purpose**: Branch, and capture the baseline evidence SC-009 and SC-012 are measured against.
+
+- [X] T001 Create branch `012-comparator-gherkin-phrases` from `main` at `0f9dcea` (go-coder)
+- [X] T002 [P] Capture baseline evidence into `specs/012-comparator-gherkin-phrases/baseline.txt`: `go test ./...`, `go test -tags e2e -timeout 25m ./e2e/` (needs `make harness-up`), and per-package coverage from `go test ./... -coverprofile=cover.out && go tool cover -func=cover.out`. This is the before-half of SC-009/SC-012 (go-coder)
+- [X] T003 [P] Confirm `godog v0.15.1` is still the pinned version in `go.mod`; if it has moved, STOP — research R0/R1 are properties of that version and must be re-established before any other task (go-coder)
+
+---
+
+## Phase 2: Foundational (Blocking Prerequisites)
+
+**Purpose**: Close the latent collision branch, remove package-level step state, and make
+registration per-engine. Every user story depends on this phase.
+
+**⚠️ CRITICAL**: No user story work can begin until this phase is complete.
+
+**Note on sequencing**: T004–T007 close godog's silent first-wins branch **before** Phase 3 makes
+it reachable. They are behaviour-preserving for every existing user (R0 measured zero golden
+churn) and are deliberately kept separate — their own commit — so the risky flag change is
+reviewable apart from the new-seam work.
+
+**Corrected 2026-09-11 (R10)**: an earlier draft called this "a defect that exists at `0f9dcea`
+independently of this feature". That was wrong. The 40 built-in patterns are **pairwise
+disjoint** (measured: 1530 generated sentences covering every alternation branch, 0 overlaps) and
+registration is single-pathed, so the ambiguous branch is **not reachable** through the public
+surface today. It is latent; contributed phrases make it live. Two consequences: T004 is a
+step-registration-level test rather than an end-to-end one (T038 is the end-to-end counterpart,
+after phrases exist), and this work is a prerequisite of 012, not a separable bugfix.
+
+### The latent collision defect (R1, R10) — regression test first
+
+- [X] T004 Write the FAILING regression test in `internal/steps/ambiguity_test.go`: build a godog suite with the same options `mentat.Run` uses (`run.go:411-419`), register two colliding patterns (a broad one first, a specific one second, mirroring built-ins-before-contributed order), and assert the scenario is reported FAILED naming both expressions. Record in the test file the measured pre-change behaviour — PASSED with a nil `stepErr`, the broad pattern run and the specific one never executed. **Not an end-to-end test**: per R10 the collision cannot be constructed through the public surface at `0f9dcea` (go-test-writer, red)
+- [X] T005 Add `Strict: true` to the godog options in `run.go:411-419`; confirm T004 goes green (go-test-writer, green)
+- [X] T006 [P] Verify SC-012 on the non-e2e surface: `go test ./...` including the hermetic stdout golden `mentat_golden_test.go`; diff against T002's baseline (go-coder)
+- [X] T007 Verify SC-012 on the e2e surface — **`make ci` does not compile this lane, so it is not evidence**: `make harness-up && go test -tags e2e -timeout 25m ./e2e/`, including the SC-005 stdout golden `e2e/golden_test.go`. Record the before/after in `specs/012-comparator-gherkin-phrases/baseline.txt` (go-coder)
+
+### Remove package-level step state (R6, FR-010)
+
+- [X] T008 Write FAILING tests in `internal/steps/precheck_test.go` proving two different pattern sets yield different `unbound-step` findings **in both evaluation orders** — the assertion the `sync.Once` cache cannot satisfy (go-test-writer, red)
+- [X] T009 Delete `stepPatternsOnce` and `stepPatterns` (`internal/steps/precheck.go:76-91`) and re-shape `StepBindingFindings` (`precheck.go:95`) to take a compiled pattern set instead of reading package state; confirm T008 green (go-test-writer, green)
+- [X] T010 Update the `StepBindingFindings` call site for the new signature. **Corrected 2026-09-11**: there is exactly **one** non-test caller, `cmd/mentat/validate.go:185` — not two. The scenario-init path (`steps.go:117-122`) runs `CELFindings` and `precheckShapePatterns` and never calls `StepBindingFindings`; godog reports an undefined step at runtime instead. This is also why the `sync.Once` has never bitten: its only consumer is a single-shot CLI process. It becomes a live hazard when D7's library validate entry point (T054) can be called repeatedly in-process against different engines (go-coder)
+
+### Per-engine registration (R5, FR-002, FR-005)
+
+- [X] T011 Write the FAILING partition test in `internal/steps/metadata_test.go`: drive `registerSteps` with the spy and a known non-empty phrase set, and assert every registered pattern is **either** a `stepDefs` row **or** a member of that set, with counts adding up. Keep the existing bidirectional equality for the built-in half (go-test-writer, red)
+- [X] T012 Change `registerSteps` (`internal/steps/metadata.go:73`) to `registerSteps(reg stepRegistrar, w *world, phrases []ContributedPhrase)` and update the call site at `internal/steps/steps.go:100`. **Do not** reach through `w.eng` — the drift test passes a zero `world` whose `eng` is nil (`metadata_test.go:40`), and nil-guarding it would be the silent fallback Constitution IV forbids (go-test-writer, green)
+- [X] T013 Confirm `TestNoDirectStepRegistration` (`metadata_test.go:129`) and `TestStepMetadataFieldsPresent` (`metadata_test.go:95`) still pass unchanged — registration must stay single-pathed (go-coder)
+
+### The seams and the engine accessor (R2, R3)
+
+- [X] T014 [P] Write FAILING tests in `internal/core/core_test.go` for the two new seams: a comparator implementing the phrase-contributor seam returns its phrases; one implementing the capture-parser seam returns a typed expectation. Use gomock where call verification matters (go-test-writer, red)
+- [X] T015 Declare the contributed-phrase seam, the capture-parser seam, and the `ContributedPhrase` struct in `internal/core/core.go`, next to `ExpectationParser` (`:114-132`). **`ExpectationParser` itself must not change** — D6. See [contracts/phrase-seam.md](./contracts/phrase-seam.md) (go-test-writer, green)
+- [X] T016 Add the facade aliases in `mentat.go` for both seams and `ContributedPhrase`. 010's D5 forbids declaring them at the facade; they must be aliased from `internal/core` (go-coder)
+- [X] T017 Write a FAILING test in `internal/engine/engine_test.go` asserting the new accessor returns contributed phrases resolved from registered comparators, in **sorted comparator-name order** (go-test-writer, red)
+- [X] T018 Add the accessor to `internal/engine/engine.go`, mirroring `Comparators()` (`:207`) — enumerate via the sorted `Registry.Comparators()` (`registry.go:125-137`), resolve each with `Comparator(name)`, type-assert for the phrase seam. **No new registry** (go-test-writer, green)
+
+**Checkpoint**: The live defect is fixed, no package-level step state remains, registration is
+per-engine, and the seams exist. User stories can now begin.
+
+---
+
+## Phase 3: User Story 1 - Write a scenario in the comparator's own language (Priority: P1) 🎯 MVP
+
+**Goal**: A comparator contributes its own Gherkin sentence; a feature file written in that
+sentence runs and the comparator receives its own typed expectation.
+
+**Independent Test**: Register one comparator contributing one phrase, run a feature file
+written only in that phrase, assert the verdict equals the 011-style generic step's verdict for
+the same expectation.
+
+### Tests for User Story 1 (REQUIRED — Test-First) ⚠️
+
+- [X] T019 [P] [US1] Write FAILING table-driven tests in `internal/steps/phrase_test.go` for the godog handler bridge across capture counts 0, 1, and 3 — asserting every capture reaches the parser and **none is discarded** (SC-013; godog silently drops surplus args, `internal/models/stepdef.go:58`) (go-test-writer, red)
+- [X] T020 [P] [US1] Write FAILING tests in `internal/steps/phrase_test.go` for seam routing per [data-model.md](./data-model.md) §3: captures-only → capture-parser; docstring-only, no captures → 011's `ExpectationParser`; captures + docstring → capture-parser with the docstring appended (go-test-writer, red)
+- [X] T021 [P] [US1] Write FAILING error-path tests in `internal/steps/phrase_test.go`: parse returns an error (wrapped `%w`, names the comparator); parse returns a nil expectation with no error (**refused**, mirroring `steps.go:615-650`); comparator contributes a phrase but implements no capture parser (hard error at build) (go-test-writer, red)
+- [X] T022 [US1] Write the FAILING equivalence test in `custom_phrase_facade_test.go` (repo root, alongside `custom_comparator_facade_test.go`): a contributed phrase and the equivalent 011 generic step produce identical pass/fail **and reason text** for the same expectation — SC-001 (go-test-writer, red)
+
+### Implementation for User Story 1
+
+- [X] T023 [US1] Create `internal/steps/phrase.go` with the `reflect.MakeFunc` bridge: `reflect.FuncOf(N × string, error)` with N from the compiled pattern's `NumSubexp()`, plus `*messages.PickleDocString` appended for docstring-carrying phrases. Confirm T019 green. Keep godog's signature rules contained to this file (D9, R4) (go-test-writer, green)
+- [X] T024 [US1] Implement seam routing and expectation construction in `internal/steps/phrase.go`; confirm T020 green (go-test-writer, green)
+- [X] T025 [US1] Implement the error paths in `internal/steps/phrase.go`; confirm T021 green. Every message names the comparator and the offending value (go-test-writer, green)
+- [X] T026 [US1] Wire resolved phrases into the registration closure at `internal/steps/steps.go:100`, passing them to `registerSteps` (T012's parameter). Route the step through `checkSensitive` — 011's D3 stands, a custom comparator's verdict is completeness-sensitive (go-test-writer, green)
+- [X] T027 [US1] Confirm T022 green; confirm 011's generic `Extend` row (`metadata.go:367`) and `comparatorSatisfiedByDoc` (`steps.go:615`) are **untouched** and their tests unchanged — the operational test of D1 (go-test-writer, green)
+- [X] T028 [US1] Write and pass the L3 meta-test (FR-016, SC-007, Constitution V): a contributed phrase whose assertion is **false** makes the run RED with the comparator's own reason. Place it in `internal/steps` as an in-process godog suite — **not** in `e2e/`, which drives a prebuilt binary that cannot contain a consumer-registered comparator (011's R6) (go-test-writer, red→green)
+- [X] T029 [US1] Record the mutation rehearsals for T019–T021 in the test files: state **what was mutated**, not merely that red was observed. 011 hit a rehearsal that failed to go red because the mutation had not applied, and "the mutation didn't fire" is indistinguishable from "the guard is real" from output alone (go-test-writer)
+
+**Checkpoint**: US1 fully functional — a comparator's own sentence drives it, proven equivalent
+to the 011 path and proven to go RED on a false claim.
+
+---
+
+## Phase 4: User Story 2 - Two engines in one process stay isolated (Priority: P1)
+
+**Goal**: Contributed phrases are scoped to the engine that resolved them; two engines in one
+process cannot observe each other's phrases.
+
+**Independent Test**: Build two engines with disjoint phrase sets, run both in one process in
+**both orders**, assert each binds only its own.
+
+### Tests for User Story 2 (REQUIRED — Test-First) ⚠️
+
+- [X] T030 [P] [US2] Write the FAILING isolation test in `custom_phrase_isolation_test.go` (repo root, mirroring `mentat_run_reentrancy_test.go`): engines A and B with disjoint contributed phrases, run A→B **and** B→A, asserting each binds only its own. Both orders are required — a first-writer-wins cache passes one and fails the other (go-test-writer, red)
+- [X] T031 [P] [US2] Write the FAILING test asserting a phrase belonging to engine A is reported unbound under engine B, with the same wording any unknown step gets (go-test-writer, red)
+
+### Implementation for User Story 2
+
+- [X] T032 [US2] Confirm T030/T031 go green on the Phase 2 foundation (per-engine resolution T018, no package cache T009). If either fails, a package-level cache survives somewhere — find it rather than adding a guard (go-test-writer, green)
+- [X] T033 [US2] Add a `t.Parallel()` concurrent-run variant of T030 and run the package under `-race`, so concurrent engines are covered and not only sequential ones (go-test-writer)
+- [X] T034 [US2] Grep `internal/steps` and `internal/engine` for any remaining package-level mutable state (`sync.Once`, package `var` caches) and record the result in `internal/steps/phrase.go`'s package doc — FR-010 is "none survives", not "the one we knew about is gone" (go-reviewer, `pair`)
+
+**Checkpoint**: US1 and US2 both work; the reentrancy property 007 established is not re-opened.
+
+---
+
+## Phase 5: User Story 3 - A colliding phrase fails loudly at composition (Priority: P2)
+
+**Goal**: Collisions and malformed phrases fail with an error naming the contributor, before any
+scenario runs; genuine overlap fails at match time naming every matching expression.
+
+**Independent Test**: Register two comparators contributing the same pattern; assert the engine
+build fails naming both, and that no scenario executes.
+
+### Tests for User Story 3 (REQUIRED — Test-First) ⚠️
+
+- [X] T035 [P] [US3] Write FAILING table-driven validation tests in `internal/steps/phrase_test.go` for rules V1–V5 ([data-model.md](./data-model.md) §1): uncompilable pattern; unanchored pattern; identical contributed patterns; pattern identical to a built-in's; blank `Group`/`Summary`/`Example`. One row per rule, each asserting the error names the contributor and the offending value (go-test-writer, red)
+- [X] T036 [P] [US3] Write the FAILING test asserting **no scenario executes** when validation fails — the failure is at engine build, not mid-suite (go-test-writer, red)
+- [X] T037 [P] [US3] Write the FAILING test for the anchoring rule's edge case: a pattern ending in an **escaped** `\$` is not anchored and must be rejected (R8) (go-test-writer, red)
+- [X] T038 [US3] Write the FAILING end-to-end collision test: two contributed phrases whose anchored patterns both match one sentence produce a FAILED scenario naming every matching expression (FR-007b). Confirm it fails against the pre-T005 non-strict configuration first — this is the phrase-level counterpart of T004 (go-test-writer, red)
+
+### Implementation for User Story 3
+
+- [X] T039 [P] [US3] Implement V1 (regex compiles) and V2 (anchored `^…$`, unescaped terminal `$`) in `internal/steps/phrase.go`; confirm the T035/T037 rows green (go-test-writer, green)
+- [X] T040 [US3] Implement V3 (duplicate contributed patterns, naming **both** contributors) and V4 (collision with a `stepDefs` row, naming the built-in step) in `internal/steps/phrase.go` (go-test-writer, green)
+- [X] T041 [US3] Implement V5 (non-blank `Group`/`Summary`/`Example`) in `internal/steps/phrase.go`, matching the bar `TestStepMetadataFieldsPresent` sets for built-in rows (D5) (go-test-writer, green)
+- [X] T042 [US3] Wire validation into the engine build path so failures surface before any scenario runs; confirm T036 green (go-test-writer, green)
+- [X] T043 [US3] Confirm T038 green on T005's `Strict: true`; assert the reason text names every matching expression (go-test-writer, green)
+- [X] T044 [US3] Assert built-ins register **before** contributed phrases, and contributed phrases in sorted comparator-name order — godog returns the first match, so ordering decides collision resolution and map order would make it vary between runs of an unchanged suite (R3) (go-test-writer)
+- [X] T045 [US3] Record a mutation rehearsal per rejection path (SC-003), naming what was mutated (go-test-writer)
+- [X] T046 [P] [US3] Add the edge-case tests the spec lists and Phase 5 has not yet covered: the same comparator registered under two names contributing the same phrase; a phrase contributed after the registry is sealed (`registry.go:71-79`); a contributed pattern matching a step the engine's tag expression never selects (go-test-writer)
+
+- [X] T047 [P] [US3] Pin the assumption V4 rests on: assert the 40 built-in `stepDefs` patterns are **pairwise disjoint** — no sentence matches two of them — in `internal/steps/metadata_test.go`. Generate sentences from each pattern's parsed syntax tree expanding every alternation branch. Nothing asserted this before R10 measured it, and V4 (a contributed pattern identical to a built-in's) is only meaningful if the built-in set is itself unambiguous (go-test-writer)
+
+**Checkpoint**: Every collision and malformed-phrase path is loud and named.
+
+---
+
+## Phase 6: User Story 4 - The step reference and the validator tell the truth (Priority: P2)
+
+**Goal**: A consumer can render the full reference for their own engine, and no path reports a
+valid feature file as broken.
+
+**Independent Test**: Render an engine's reference and assert it contains built-ins plus the
+contributed phrases with their documentation; run the engine-aware validate path over a suite
+written in contributed phrases and assert zero `unbound-step` findings.
+
+### Tests for User Story 4 (REQUIRED — Test-First) ⚠️
+
+- [X] T048 [P] [US4] Write the FAILING renderer test in `internal/steps/docs_test.go`: the engine-scoped reference contains every built-in row plus each contributed phrase with its group, summary and example (FR-012) (go-test-writer, red)
+- [X] T049 [P] [US4] Write the FAILING contiguity test: contributed phrases render in contiguous group blocks **after** the built-in groups even when a phrase declares an existing group name (e.g. `"Shape"`), which would otherwise duplicate a heading (FR-014, R9, `docs_test.go:43`) (go-test-writer, red)
+- [X] T050 [P] [US4] Write the FAILING test in `cmd/mentat/steps_cmd_test.go` asserting `mentat steps` output and `docs/steps.md` render the built-in rows **byte-identically** to baseline (FR-013, SC-006) (go-test-writer, red)
+- [X] T051 [US4] Write the FAILING test for the library validate entry point: a suite written in contributed phrases yields **zero** `unbound-step` findings when validated against an engine that has them (FR-011, SC-005) (go-test-writer, red)
+
+### Implementation for User Story 4
+
+- [X] T052 [US4] Implement the engine-scoped reference renderer, reusing the `StepDoc` shape so both paths render from one view; confirm T048/T049 green (go-test-writer, green)
+- [X] T053 [US4] Confirm `TestStepDocsMirrorsTable` (`docs_test.go:12`) still proves the built-in view lossless (go-coder)
+- [X] T054 [US4] Add the library validate entry point to `run.go` accepting the same `Option`s `mentat.Run` accepts and returning `[]Finding`; alias `steps.Finding` (`precheck.go:23-28`) on the facade in `mentat.go`. See [contracts/validate-surface.md](./contracts/validate-surface.md). Confirm T051 green (go-test-writer, green)
+- [X] T055 [US4] Keep `cmd/mentat/validate.go`'s current strictness for built-in steps; add **no** manifest flag and no second source of phrase truth (FR-011a, D7) (go-coder)
+- [X] T056 [P] [US4] Add the sentence to `cmd/mentat/steps_cmd.go`'s generated intro stating contributed phrases are engine-scoped and not listed there; regenerate with `go generate ./...` and confirm the built-in rows in `docs/steps.md` are byte-identical (FR-013) (go-coder)
+- [X] T057 [P] [US4] Document in `cmd/mentat/validate.go`'s help text and `docs/` that a compiled binary cannot see contributed phrases, pointing at the library entry point (FR-011a) (go-coder)
+- [X] T058 [US4] Confirm T050 green (go-coder)
+
+**Checkpoint**: All four user stories independently functional.
+
+---
+
+## Phase 7: Polish & Cross-Cutting Concerns
+
+- [X] T059 [P] Add the contributed-phrase authoring path to `docs/extending/` — declaring a phrase, the two seams and when each applies, the anchoring rule, and the collision policy (FR-017) (go-coder)
+- [X] T060 [P] Reconcile the seam taxonomy at `specs/009-extension-surface-integrity/contracts/seam-taxonomy.md` and `docs/extending/new-seam.md` if this feature changed any seam's shape (FR-017) (go-coder)
+- [X] T061 Regenerate the public-surface golden (`specs/007-public-extension-api/contracts/public-surface.golden`) with `MENTAT_UPDATE_GOLDEN=1 go test -run TestPublicSurfaceGolden` and **hand-review the diff**: expect the two new seams with full method sets, `ContributedPhrase`'s exported fields, the validate entry point and the `Finding` alias — and **nothing else**. 011's `ExpectationParser` line must be unchanged (SC-008, FR-015) (go-coder)
+- [X] T062 Establish what actually guards the new facade aliases (SC-008). **Corrected 2026-09-11 (R11)**: the task assumed `TestFacadeNameabilitySweep` would demand them automatically. Measured false — the sweep is SEEDED from existing aliases and walks outward, so removing one removes its seed and nothing fires. Both seams are optional and discovered by type assertion, so no published type references them either. The real guards, both measured: `TestPublicSurfaceGolden` (reports "symbols in golden but NOT present now") and the compile-time witnesses in `custom_phrase_facade_test.go` (build failure in an external test package) — the same pair 011 used for `ExpectationParser` (go-coder)
+- [X] T063 [P] Verify SC-009: build an engine with **zero** contributed phrases and confirm byte-identical output to T002's baseline across every existing golden. The overwhelmingly common case must cost nothing (go-test-writer)
+- [X] T064 Verify the 80% per-package coverage floor for every touched package with the `/coverage` skill or `go test ./... -coverprofile=cover.out && go tool cover -func=cover.out` (SC-010, Constitution V) (go-coder)
+- [X] T065 [P] Run `gofmt -l .`, `go vet ./...` and `golangci-lint run ./...` clean (go-coder)
+- [X] T066 Run the full [quickstart.md](./quickstart.md) validation end to end, including the e2e lane with the harness up (go-coder)
+- [X] T067 Re-run `make ci` **and** `go test -tags e2e -timeout 25m ./e2e/`; record final before/after against T002's baseline. A green `make ci` alone does not discharge SC-012 (go-coder)
+- [X] T068 Update the `<!-- SPECKIT -->` block in `CLAUDE.md`: 012 shipped, what landed, and any correction this feature made to its own artifacts — following the pattern 011 set (go-coder)
+- [X] T069 **go-reviewer `gate`** audit of the staged diff: PASS/BLOCK. Conventional Commits, no `git add .`, no AI attribution (go-reviewer)
+
+---
+
+## Dependencies & Execution Order
+
+### Phase Dependencies
+
+- **Setup (Phase 1)**: no dependencies
+- **Foundational (Phase 2)**: depends on Setup — **BLOCKS all user stories**
+- **US1 (Phase 3)**, **US2 (Phase 4)**, **US3 (Phase 5)**, **US4 (Phase 6)**: all depend on Phase 2
+- **Polish (Phase 7)**: depends on all desired stories
+
+### Within Phase 2 (the critical path)
+
+```
+T004 → T005 → {T006, T007}          # live defect: regression test, Strict, both golden surfaces
+T008 → T009 → T010                  # sync.Once removal, then call sites
+T011 → T012 → T013                  # registerSteps parameter, then drift partition
+T014 → T015 → T016                  # seams, then facade aliases
+T017 → T018                         # engine accessor (needs T015)
+```
+
+The three chains `T004→T007`, `T008→T010` and `T011→T013` touch disjoint files and can run in
+parallel. `T014→T018` may start immediately; only T018 depends on T015.
+
+### User Story Dependencies
+
+- **US1 (P1)**: needs Phase 2 complete. No dependency on other stories.
+- **US2 (P1)**: needs Phase 2 (T009, T018) and US1's registration wiring (T026) to have phrases to isolate.
+- **US3 (P2)**: needs Phase 2 and T005 (`Strict`) for T038/T043. Independent of US1's parse paths.
+- **US4 (P2)**: needs Phase 2 and US1's phrase resolution for a non-empty reference.
+
+### Within Each Story
+
+Tests written and observed FAILING → implementation → green → mutation rehearsal recorded.
+
+### Parallel Opportunities
+
+- T002, T003 (Setup)
+- The three Phase 2 chains above
+- T019, T020, T021 — different concerns, same new file: **coordinate or serialize**, see Notes
+- T030, T031 (US2 tests); T035, T036, T037 (US3 validation tests); T048, T049, T050 (US4 tests)
+- T039 and T046 within US3; T056, T057 within US4
+- T059, T060, T063, T065 in Polish
+
+---
+
+## Parallel Example: Phase 2
+
+```bash
+# Three disjoint chains, one agent each:
+Agent A: T004 → T005 → T006 → T007     # run.go, internal/steps/ambiguity_test.go, e2e/
+Agent B: T008 → T009 → T010            # internal/steps/precheck.go, cmd/mentat/validate.go
+Agent C: T011 → T012 → T013            # internal/steps/metadata.go, metadata_test.go
+
+# T014 → T015 → T016 (internal/core, mentat.go) may run alongside all three.
+```
+
+---
+
+## Implementation Strategy
+
+### Land Phase 2's `Strict` change first, in its own commit
+
+T004–T007 close godog's silent first-wins branch and are behaviour-preserving for every existing
+user (R0 measured zero golden churn on both surfaces). They land as a **separate first commit on
+this branch** — not a separate PR: per R10 the branch is latent at `0f9dcea`, so there is no
+user-facing fix to ship independently. The split buys reviewability of a flag that changes
+behaviour for *every* engine, and it puts the guard in place before Phase 3 makes collisions
+constructible.
+
+### MVP (US1)
+
+Phase 1 → Phase 2 → Phase 3. **Stop and validate**: a comparator's own sentence drives it,
+proven equivalent to the 011 path (T022) and proven to go RED on a false claim (T028).
+
+### Incremental delivery
+
+Phase 2 → US1 (MVP) → US2 (soundness) → US3 (guardrails) → US4 (surfaces) → Polish. US2 is P1
+alongside US1: shipping US1 without it means shipping a latent cross-run contamination bug.
+
+---
+
+## Notes
+
+- **T019–T021 all create `internal/steps/phrase_test.go`.** They are marked [P] because the
+  concerns are independent, but three agents writing one new file will collide. Either serialize
+  them or have one agent create the file with the three table stubs first. Parallelize by
+  package, not by story.
+- **A TDD red poisons sibling agents' signal.** An agent running the package suite while another
+  holds a deliberate red cannot tell whose failure it is. Keep concurrent agents on disjoint
+  packages.
+- **Subagents never run git.** Branch, staging and commits are the top-level session's job.
+- Verify every test fails before implementing; `VERIFY: Ran <exact name> — Result: PASS/FAIL/DID NOT RUN`.
+- Commit per task or logical group, Conventional Commits, files staged individually.
+- If a godog behaviour surprises you, re-read [research.md](./research.md) before changing code —
+  two of this feature's premises came from 011's D1 and **one was false**.
+
+---
+
+## Phase 8: Convergence
+
+Appended by `/speckit-converge` on 2026-09-11, with T001–T069 complete and `go test ./...` green
+(0 FAIL). **No functional gap was found** — every FR and SC has a code and test witness, and
+nothing is `missing`. Four of these five are the signature this feature kept finding in itself
+(R10–R13): a claim asserted in prose that an adjacent measurement contradicts. The Phase 1
+contracts are where it survived, because the corrections landed in `research.md`, `plan.md`,
+`quickstart.md` and `CLAUDE.md` and stopped there.
+
+`tasks.md` is append-only here, so the "live defect" wording at lines 98 and 247 is left as the
+historical record of what was believed when those tasks were written; T072 corrects the contract
+a future feature will actually read.
+
+- [X] T070 Correct `specs/012-comparator-gherkin-phrases/contracts/validate-surface.md:79`, which claims "**No path reports a valid file as broken**" — measured false on 2026-09-11: `mentat validate` over a suite written in a contributed phrase emits `[unbound-step] no step matches "the revenue floor is 4 USD"` and exits 1, the behaviour the contract's own table at `:77` and `docs/extending/phrases.md:199-200` both describe. Scope the claim to the engine-aware library path and state the binary's deliberate limit (D7/FR-011a) beside it, so 013's CLI work inherits the measurement and not the slogan per SC-005 (contradicts)
+- [X] T071 Reconcile `contracts/phrase-seam.md:90-92` and `data-model.md:52` with R11 — both still assert the facade nameability sweep "demands their aliases automatically", measured false: `TestFacadeNameabilitySweep` is seeded from the aliases that already exist, so removing one removes its seed and nothing fires, and both seams are optional so no published type references them. Name the real guards as T062 and `quickstart.md:174-177` already do — `TestPublicSurfaceGolden` plus the external-package compile-time witnesses in `custom_phrase_facade_test.go` per SC-008 (contradicts)
+- [X] T072 Reconcile `contracts/step-registration.md:85` with R10 — it still states the ambiguity defect "is a live defect at `0f9dcea`, reachable between two built-in patterns today", measured false: the 40 built-in patterns are pairwise disjoint across 1530 generated sentences covering every alternation branch, so the defect was **latent** until contributed phrases made it reachable. `plan.md:23-29` carries this correction and the contract does not per D8 (contradicts)
+- [X] T073 Remove `EngineStepPatterns` (`internal/steps/phrase.go:567`) and `EnginePhraseArguments` (`:625`) or give them a production caller — both are exported with **zero non-test callers** since `EngineStepChecks` (`run.go:596`) became the single resolve-once entry point, and `EnginePhraseArguments`'s doc comment still claims it is "exported so the static validate path runs the SAME check", which that path no longer does. Re-point `suite_test.go:252-350` and `phrase_test.go:1097-1108` at whatever survives; note that the `:345-350` cross-check can only fire if someone edits one of two wrappers that both delegate to `stepPatternsFor`, so today it guards a path nothing runs per plan: no unreachable step state (unrequested)
+- [X] T074 Add `docs/extending/phrases.md` to README.md's extension-guide list (`README.md:282-287`), which names driver, store, comparator, judge, evidence and stability but not the contributed-phrase authoring path this feature shipped — it is currently reachable only from `comparator.md:207` and `new-seam.md:205` per FR-017 (partial)
+
+---
+
+## Phase 9: Close the built-in step-argument gap
+
+Added 2026-09-11 on the maintainer's instruction, reversing the "out of scope" call
+recorded in R14. The scope argument was about where the defect was FOUND (contributed
+phrases) rather than what it WAS (godog's `i < numIn` discard, which reaches all 40
+built-in steps and needs no comparator to trigger).
+
+Sequenced test-first per Constitution V, and the end-to-end guard was rehearsed against
+the pre-fix state before being trusted.
+
+- [X] T075 Write the FAILING unit test: a built-in step carrying a surplus docstring, a surplus data table, or a table where a docstring is declared, must be reported as a problem by the check an engine with ZERO contributed phrases runs (go-test-writer, red)
+- [X] T076 Derive each `stepDefs` row's expected argument from its handler signature by reflection in `internal/steps/stepargs.go` — `*godog.DocString` → docstring, `*godog.Table` → data table, otherwise none. Derived, never listed: a hand-kept table is a second source of truth for what `stepDefs` exists to be the only source of (go-test-writer, green)
+- [X] T077 Rename `PhraseArguments` → `StepArguments` and move it out of `phrase.go` into `stepargs.go`; the type now covers both sources and a "Phrase" name would be the same class of false claim this feature keeps correcting. Rename the finding class `phrase-argument` → `step-argument` (go-coder)
+- [X] T078 Enforce at all three call sites: scenario init (`steps.go:156`), `mentat.Validate` via `EngineStepChecks`, and — new — the `mentat validate` binary via `steps.BuiltinStepArguments()`. A binary cannot see contributed phrases (D7) but sees every built-in, so it is fully equipped to catch this class (go-test-writer, green)
+- [X] T079 Write the END-TO-END guard `TestBuiltinStepWithSurplusArgumentMakesTheRunRed` proving the RUNNER acts on the check, not merely that the check computes the right answer. Record the mutation rehearsal: `stepArgs := StepArguments{}` reproduces suite status 0 / "1 scenarios (1 passed)" (go-test-writer)
+- [X] T080 Preserve the contributed-phrase message quality the shared builder initially lost — "expects a docstring **body**" and the seam note explaining why no contributed phrase can receive a data table (go-test-writer)
+- [X] T081 Sweep the repo's own feature corpus with the new check and confirm ZERO findings — a check this broad is worth nothing if it false-positives on the suite it ships with (go-coder)
+- [X] T082 Document the rule where someone hitting it will look: the generated `docs/steps.md` preamble (via `cmd/mentat/steps_cmd.go`) and `docs/extending/phrases.md` rule 6. Confirm the built-in step ROWS stay byte-identical (SC-006) (go-coder)
+- [X] T083 Update the records that said the gap was open: `research.md` R14 (was "Known gap this feature does NOT close"), the closing lesson, and the `CLAUDE.md` retrospective (go-coder)
+- [X] T084 Verify both surfaces: `make ci` including the coverage gate, and `go test -tags e2e -timeout 25m ./e2e/` with the harness up — a green `make ci` is not evidence about the e2e goldens, and this change runs at every scenario init (go-coder)
+- [X] T085 Act on the gate audit's four BLOCKs: (a) the binary call site had NO test — `seedDefectCorpus` gained a `step-argument` defect at line 8 and the deletion of `Arguments:` now reddens `TestValidateCollectsAllFindings`, verified by mutation since `make ci` exempts `cmd/*` from coverage; (b) `stepargs.go` claimed godog delivers an argument only into `*godog.DocString`/`*godog.Table` — **measured false**, `shouldBeString` routes it into a plain `string` param (`status=0 called=true seen="PAYLOAD"`), so a built-in drifting to `(s, body string)` would be classified argument-free and every scenario using it REJECTED; corrected the comment and added `checkBuiltinArity` + `TestBuiltinHandlerArityMatchesItsPatternAndArgument`, rehearsed to show the count test is blind to exactly that drift; (c) restored the skip for steps matching BOTH a built-in and a phrase, so the rationale comment is true again and an ambiguity is not misreported as an argument defect; (d) corrected `research.md` and `contracts/validate-surface.md`, which this change had made false (go-test-writer)
+- [X] T086 Guard the promise `docs/steps.md` makes to authors — `TestBuiltinExampleCarriesTheArgumentItsHandlerDeclares` compares every row's example against its derived argument kind, so a 40-row doc claim is checked rather than asserted (go-test-writer)
+
+---
+
+## Phase 10: Convergence
+
+Appended by `/speckit-converge` on 2026-09-11 with T001–T086 complete, tree clean and all
+gates green. **No functional gap.** Every item is a feature artifact that Phases 8–9 made
+stale or never reached — the same signature this feature kept finding in its code, now in
+its own records.
+
+- [X] T087 Add the `### Added` CHANGELOG.md entry for 012's headline capability — `PhraseContributor`, `CaptureParser`, `ContributedPhrase`, `mentat.Validate`, `mentat.StepReference`. The only 012 content there today is Phase 9's `### Changed` breaking note, so the feature's actual deliverable ships unlisted while its side effect is documented. No FR mandates a changelog entry; 007, 010 and 011 each shipped one, and this is new public surface per FR-015 (missing)
+- [X] T088 Re-measure and update `baseline.txt` §3b, whose "Final coverage (T064) — measured at the committed state" no longer reproduces after Phases 8-9: `internal/steps` 89.2% → 89.5%, `internal/engine` 93.6% → 95.0% (`cmd/mentat` 62.0% and the facade 96.6% still hold). Keep §3b's method note — `-count=1`, `main` from its own worktree, measured after the final commit — since that note is the reason the figures are trustworthy at all, and this is the third time these numbers have gone stale per SC-010 (contradicts)
+- [X] T089 Record the second SC-009 caveat beside §3a in `baseline.txt`: the criterion's golden clause still holds (measured — `make ci` and an uncached `go test -tags e2e` both green with zero contributed phrases), but "proving the feature costs nothing when unused" is no longer true of BEHAVIOUR. Phase 9 makes a zero-phrase engine run the built-in step-argument check, and a suite that passed at `0f9dcea` with a surplus argument now fails. That was a deliberate, maintainer-approved scope change, so it wants recording rather than reverting per SC-009 (partial)
+- [X] T090 Decide the Validate/Run ambiguity asymmetry: `mentat.Validate` reports CLEAN on a step matching both a built-in and a contributed phrase, which `Run` fails as ambiguous under `Strict`. Nothing in `internal/steps` detects pattern overlap statically. Either add an `ambiguous-step` finding class over `SuiteCheck.Patterns`, or accept it and record why — a validator that certifies a suite the runner refuses is the drift D7 exists to remove, so silence is the one option that should not survive per FR-011/D7 (partial)
+- [X] T091 Extend `quickstart.md` §3.5 to exercise the `step-argument` finding class: today it asserts only `unbound-step`, so someone following the validation guide end to end never touches the check Phase 9 added, on either the binary or the library path per SC-005 (partial)
+- [X] T092 Add the step-argument agreement rule to `data-model.md` — the V1-V5 validation table and the collision-timing table (`:127-130`) describe contributed-phrase validation only, with no row for the rule now enforced against built-in rows and phrases alike, nor its timing (scenario init and both validate paths). data-model is a Phase 1 artifact 013 reads first per FR-019 (partial)
+
+---
+
+## Phase 11: Convergence
+
+Appended by `/speckit-converge` on 2026-09-11 with T001-T092 complete, tree clean and all
+gates green. **No functional gap**: every FR and SC has a code and test witness, and no
+constitution principle is violated. All three findings are records that Phase 10 itself left
+behind — the feature's own signature, now on its third lap.
+
+- [X] T093 Add the step-argument check to `mentat validate`'s usage text (`cmd/mentat/validate.go:31-32`), which enumerates what the binary checks — "step binding, target and shape references, CEL expressions and @runs tags" — and omits the check Phase 9 added to that same binary. The omission is user-facing and load-bearing: that check is marked BREAKING (authoring) and can fail a suite that previously passed, so the first place an author looks is the help text that does not mention it. Extend `TestValidateHelp`'s `want` list (`cmd/mentat/validate_test.go:640-648`) so the text is asserted rather than merely written per FR-011a and contracts/validate-surface.md §2 (partial)
+- [X] T094 Record R15 in `research.md` for the godog property Phase 10 measured: `keywordMatches` (`suite.go:558-560`) is inert for every Mentat step because `ScenarioContext.Step` registers with `formatters.None` (`test_context.go:255-257`) and `registerSteps` uses `reg.Step` for both built-ins and contributed phrases (`metadata.go:107,110`), so `matchStepTextAndType` (`suite.go:511-556`) reduces to "how many registered patterns match this sentence" — which is what makes the static `ambiguous-step` check the SAME predicate as the runner's rather than an approximation. It currently lives only in code comments and `contracts/validate-surface.md`, while `CLAUDE.md` directs anyone touching godog to read `research.md` first; a bump of the pinned v0.15.1 re-opens this like R1 and R10-R14 per spec.md:599-601 (partial)
+- [X] T095 Extend the 012 retrospective in `CLAUDE.md` with the ambiguity closure — `mentat.Validate` reported CLEAN on a step `Run` refuses under `Strict`, now an `ambiguous-step` finding folded into `StepBindingFindings` as one 0/1/>1 classification, reachable via the library path only. T083 established that closing a gap updates the records that said it was open; Phase 10 closed one and updated neither `research.md` (T094) nor this retrospective, which currently contains no occurrence of `ambiguous-step` per the T068/T083 precedent (partial)

@@ -6,7 +6,93 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING (authoring): a step carrying an argument its definition cannot receive is
+  now rejected.** godog discards any argument a step handler did not declare — the
+  conversion loop runs `i < numIn` — so a docstring or data table written under a step
+  that takes neither was dropped in silence and the scenario reported **PASSED** with the
+  expectation never read. Measured on the pinned `godog v0.15.1`: `the result contains
+  "hi"` with a surplus docstring gave suite status 0, `1 scenarios (1 passed)`.
+
+  This applies to all 40 built-in steps and to comparator-contributed phrases. A built-in
+  row's expected argument is derived by reflection from the handler it registers, never
+  from a list kept beside it; a contributed phrase declares its own through the `:$`
+  pattern convention. Rejection happens at scenario init, before any SUT is driven, and
+  statically in `mentat.Validate` and `mentat validate` (a new `step-argument` finding
+  class).
+
+  The opposite direction moved earlier too: a step that OMITS a docstring its definition
+  requires used to fail when the step ran, with godog's own
+  `func expected more arguments than given`. It is now caught at scenario init, naming the
+  step and what it expects.
+
+  **A suite that passed before may now fail.** That is the point: the step it fails on was
+  reporting a verdict that never read your expectation. The fix is to move the argument to
+  the step that takes it, or remove it. `docs/steps.md` shows the argument every built-in
+  step accepts, and `mentat validate` names the file, the line and the step.
+
 ### Added
+
+- **A comparator can contribute the Gherkin sentences that invoke it.** A feature file can
+  read in your domain language —
+
+  ```gherkin
+  Then the revenue floor is 4 USD
+  ```
+
+  — instead of naming a registry key and handing it a payload. Two new **optional** seams,
+  discovered by type assertion: `PhraseContributor` declares the sentences, `CaptureParser`
+  turns a sentence's regex captures into the comparator's own `Expectation`. A comparator that
+  implements neither is completely unaffected. Phrases are declared with `ContributedPhrase`
+  (pattern, group, summary, example) and need no separate registration — the phrase resolves
+  *through* the comparator that declared it, so there is nothing to keep in sync.
+
+  `CaptureParser` is the **sibling** of the previous release's `ExpectationParser`, not its
+  replacement: one receives a docstring body, the other the captures. Which seam serves a
+  phrase is decided once, at engine build, from the shape of the pattern — never guessed at
+  runtime from what the comparator happens to implement.
+
+  Both routes produce **identical verdicts**: same pass/fail, same reason text, same
+  completeness qualifiers, same expectation value. Contributing a phrase adds an invocation
+  route, not a second semantics.
+
+  Every pattern rule is enforced when the engine is built, before any scenario runs, and every
+  error names the comparator and the offending value: the pattern must compile, must be
+  anchored (a trailing `\$` and top-level alternation both look anchored and are not), must
+  not duplicate another contributed pattern or a built-in's, and must carry a non-blank group,
+  summary and example.
+
+  Phrases are scoped to the engine that registered them: two suites in one binary never see
+  each other's sentences. See `docs/extending/phrases.md`.
+
+- **`mentat.Validate` and `mentat.StepReference`.** `mentat validate` builds no engine, so it
+  cannot reach a consumer's `WithComparator` registrations and reports a suite written in
+  contributed phrases as unbound — structural, not an omission. Both new entry points accept
+  the same `Option`s as `mentat.Run`, so they answer about **exactly** the engine the run will
+  use: `Validate` returns the same `Finding` values the CLI prints, and `StepReference` renders
+  the step reference for your own engine, built-ins plus your phrases. `StepReference` returns
+  an error rather than a partial list if any phrase is malformed.
+
+- **`mentat.Run` now sets godog's `Strict`.** Without it, two patterns matching one step
+  resolved silently to the first registered and the scenario **passed** — a green verdict
+  nobody wrote. Measured to churn zero goldens on both the hermetic and e2e surfaces.
+
+- **A step matching more than one step definition is now reported statically**, as a new
+  `ambiguous-step` finding class naming every pattern that matched. Under `Strict`, godog
+  refuses such a step at match time and fails the scenario; `mentat.Validate` used to
+  report the same suite CLEAN, so the validator certified a suite the runner would refuse.
+
+  The case is reachable because pattern validation rejects only *identical* patterns: a
+  contributed `^the (\w+) reading is fine$` coexists with a contributed or built-in
+  `^the alpha reading is fine$`, and both match the same sentence.
+
+  This is **not** regex-overlap analysis, which Mentat does not compute and neither does
+  the runner. Both classify per sentence, so two patterns that could collide on a sentence
+  no scenario contains are reported by neither. It reaches suites through `mentat.Validate`,
+  which sees the engine's contributed phrases; the `mentat validate` binary sees built-in
+  patterns only, and no two of those are known to match the same sentence, so the class is
+  not expected to fire there.
 
 - **Custom comparators are drivable from a `.feature` file.** A comparator registered
   with `WithComparator` could be composed but not *invoked* by an authored step: every

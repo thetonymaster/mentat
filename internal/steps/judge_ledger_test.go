@@ -67,7 +67,7 @@ func TestInitializer_CollectsJudgeUsage(t *testing.T) {
     When I run scenario "x"
     Then the result means "the answer"
 `
-	if status := runLedgerSuite(t, InitializerWithCollector(eng, col), feature); status != 0 {
+	if status := runLedgerSuite(t, mustInit(InitializerWithCollector(eng, col)), feature); status != 0 {
 		t.Fatalf("expected passing suite, status=%d", status)
 	}
 
@@ -116,7 +116,7 @@ func TestInitializer_BudgetAbortsAndStillCollects(t *testing.T) {
     Then the result means "the answer"
 `
 	suite := godog.TestSuite{
-		ScenarioInitializer: InitializerWithBudget(eng, col, budget, cancel),
+		ScenarioInitializer: mustInit(InitializerWithBudget(eng, col, budget, cancel)),
 		Options: &godog.Options{
 			Format:          "pretty",
 			Output:          &testDiscard{},

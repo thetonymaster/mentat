@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"time"
 
@@ -336,44 +337,9 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 	// a built-in surfaces a loud collision error and never runs the factory, and a
 	// factory error surfaces at Build (build engine), wrapped and named there —
 	// never a silent nil seam.
-	buildOpts := []engine.Option{engine.WithLogger(logger)}
-	for _, d := range ro.drivers {
-		if d.factory == nil {
-			return Results{}, fmt.Errorf("mentat: WithDriver %q: nil factory; register a non-nil DriverFactory", d.name)
-		}
-		buildOpts = append(buildOpts, engine.WithExtraDriver(d.name, func(conf config.Config) (core.Driver, error) {
-			return d.factory(conf)
-		}))
-	}
-	for _, c := range ro.comparators {
-		if c.factory == nil {
-			return Results{}, fmt.Errorf("mentat: WithComparator %q: nil factory; register a non-nil ComparatorFactory", c.name)
-		}
-		buildOpts = append(buildOpts, engine.WithExtraComparator(c.name, func(conf config.Config) (core.Comparator, error) {
-			return c.factory(conf)
-		}))
-	}
-	// Judges are passed through as factories (like the built-in "claude" backend):
-	// the engine resolves one only when cfg.Judge.Backend names it, so a factory
-	// error surfaces at Build (build engine), not here.
-	for _, j := range ro.judges {
-		if j.factory == nil {
-			return Results{}, fmt.Errorf("mentat: WithJudge %q: nil factory; register a non-nil JudgeFactory", j.name)
-		}
-		buildOpts = append(buildOpts, engine.WithExtraJudge(j.name, func(c config.Config) (core.Judge, error) {
-			return j.factory(c)
-		}))
-	}
-	// Reporters are registered like every other seam and USED only when WithReports
-	// names one (feature 010). The collision check runs unconditionally, so a name
-	// clashing with a built-in fails the build even if no report was requested.
-	for _, r := range ro.reporters {
-		if r.factory == nil {
-			return Results{}, fmt.Errorf("mentat: WithReporter %q: nil factory; register a non-nil ReporterFactory", r.name)
-		}
-		buildOpts = append(buildOpts, engine.WithExtraReporter(r.name, func(c config.Config) (result.Reporter, error) {
-			return r.factory(c)
-		}))
+	buildOpts, err := engineOptions(logger, ro)
+	if err != nil {
+		return Results{}, err
 	}
 	eng, err := engine.Build(cfg, st, cor, buildOpts...)
 	if err != nil {
@@ -406,8 +372,18 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 	defer budgetCancel()
 
 	col := report.NewCollector()
+	// Building the initializer resolves this engine's comparator-contributed Gherkin
+	// phrases. A malformed one — an uncompilable or unanchored pattern, a phrase whose
+	// comparator cannot parse it — fails HERE, before any feature is loaded or any SUT
+	// driven, and names the contributing comparator. An authoring defect in the
+	// extension surface must not surface as a single mysterious red scenario partway
+	// through a suite.
+	init, err := steps.InitializerWithBudget(eng, col, budget, budgetCancel)
+	if err != nil {
+		return Results{}, fmt.Errorf("mentat: %w", err)
+	}
 	suite := godog.TestSuite{
-		ScenarioInitializer: steps.InitializerWithBudget(eng, col, budget, budgetCancel),
+		ScenarioInitializer: init,
 		Options: &godog.Options{
 			Format:         "pretty",
 			Paths:          ro.featurePaths,
@@ -416,6 +392,27 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 			Concurrency:    concurrency,
 			Tags:           ro.tags,
 			StopOnFailure:  ro.failFast,
+			// Strict makes an AMBIGUOUS step a hard failure. godog gates that check
+			// on this flag (suite.go:547-553); with it off, two patterns matching one
+			// sentence resolve SILENTLY to the first registered and the scenario
+			// PASSES — the After hook receives a nil stepErr, so `Pass: stepErr == nil`
+			// records a green verdict nobody wrote (measured: spec 012 research R1,
+			// pinned by internal/steps.TestAmbiguousStepIsRecordedAsFailed).
+			//
+			// Registration order is built-ins first, so a colliding comparator-
+			// contributed phrase would be the silently shadowed one and its assertion
+			// would never run. That is a Constitution IV silent fallback, and it is
+			// why this flag is a PREREQUISITE of contributed phrases rather than an
+			// independent hardening: without phrases the ambiguous branch is
+			// unreachable (the 40 built-in patterns are pairwise disjoint), and with
+			// them it is one authoring mistake away.
+			//
+			// It costs nothing elsewhere. Strict's other effect is failing UNDEFINED
+			// and PENDING steps; mentat registers no pending steps, and an undefined
+			// step already fails through the collector (011's
+			// TestUndefinedStepFailsTheRun). Measured across both golden surfaces —
+			// `go test ./...` and the //go:build e2e lane — with zero churn.
+			Strict: true,
 		},
 	}
 
@@ -475,3 +472,216 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 // toResults is gone (feature 010, D5). The collector already produces the type Run
 // returns, so there is nothing left to convert — and nothing left to lose in the
 // conversion, which is what made the old facade Results lossy against the report.
+
+// engineOptions assembles the engine composition options from the registered seams.
+//
+// It is shared by Run and Validate so that validation sees EXACTLY the engine a run
+// would build. A second assembly here would be the drift this feature exists to
+// prevent: validation that reports a suite clean against a different engine than the
+// one that will execute it is worse than no validation.
+func engineOptions(logger *slog.Logger, ro runOptions) ([]engine.Option, error) {
+	buildOpts := []engine.Option{engine.WithLogger(logger)}
+	for _, d := range ro.drivers {
+		if d.factory == nil {
+			return nil, fmt.Errorf("mentat: WithDriver %q: nil factory; register a non-nil DriverFactory", d.name)
+		}
+		buildOpts = append(buildOpts, engine.WithExtraDriver(d.name, func(conf config.Config) (core.Driver, error) {
+			return d.factory(conf)
+		}))
+	}
+	for _, c := range ro.comparators {
+		if c.factory == nil {
+			return nil, fmt.Errorf("mentat: WithComparator %q: nil factory; register a non-nil ComparatorFactory", c.name)
+		}
+		buildOpts = append(buildOpts, engine.WithExtraComparator(c.name, func(conf config.Config) (core.Comparator, error) {
+			return c.factory(conf)
+		}))
+	}
+	// Judges are passed through as factories (like the built-in "claude" backend):
+	// the engine resolves one only when cfg.Judge.Backend names it, so a factory
+	// error surfaces at Build (build engine), not here.
+	for _, j := range ro.judges {
+		if j.factory == nil {
+			return nil, fmt.Errorf("mentat: WithJudge %q: nil factory; register a non-nil JudgeFactory", j.name)
+		}
+		buildOpts = append(buildOpts, engine.WithExtraJudge(j.name, func(c config.Config) (core.Judge, error) {
+			return j.factory(c)
+		}))
+	}
+	// Reporters are registered like every other seam and USED only when WithReports
+	// names one (feature 010). The collision check runs unconditionally, so a name
+	// clashing with a built-in fails the build even if no report was requested.
+	for _, r := range ro.reporters {
+		if r.factory == nil {
+			return nil, fmt.Errorf("mentat: WithReporter %q: nil factory; register a non-nil ReporterFactory", r.name)
+		}
+		buildOpts = append(buildOpts, engine.WithExtraReporter(r.name, func(c config.Config) (result.Reporter, error) {
+			return r.factory(c)
+		}))
+	}
+	return buildOpts, nil
+}
+
+// StepReference returns the complete step reference for the engine the SAME options
+// would build: Mentat's built-in steps followed by the Gherkin phrases this engine's
+// own comparators contribute, each under an "Extension: " group heading.
+//
+// `mentat steps` and the committed docs/steps.md list built-ins ONLY, and no flag can
+// change that: a consumer's WithComparator calls are compiled into their binary and a
+// prebuilt mentat executable cannot reach them. This is how a consumer renders the
+// reference that actually describes their suite — including the steps they wrote, which
+// are the ones least likely to be documented anywhere else.
+//
+// Like Validate, it builds the engine to learn what exists and drives no SUT. An error
+// means the reference could not be produced (a bad config, a malformed contributed
+// phrase); it is never a partial list, because a reference silently missing a phrase is
+// worse than no reference at all.
+func StepReference(ctx context.Context, cfg Config, opts ...Option) ([]StepDoc, error) {
+	eng, err := buildEngineForInspection(ctx, &cfg, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return steps.EngineStepDocs(eng)
+}
+
+// Validate statically checks feature files against the engine the SAME options would
+// build, returning every authoring defect it finds rather than stopping at the first.
+//
+// # Why this exists alongside `mentat validate`
+//
+// The CLI cannot see comparator-contributed Gherkin phrases, and no flag can change
+// that. A consumer's WithComparator calls live in their own module and are compiled
+// into their binary; a prebuilt `mentat` executable has no way to reach them. Applied
+// unchanged to a suite written in contributed phrases it would report one
+// "unbound-step" finding per phrase — a false red on a valid feature file, from the
+// one command whose entire job is certifying that a suite is well-formed.
+//
+// Running the consumer's own code is the only thing that closes that gap. Because
+// Validate accepts the same Options as Run and assembles the engine through the same
+// path, validation sees exactly the engine the run will use — no second artifact to
+// keep in sync, and no manifest that can drift from the engine that produced it.
+//
+// It drives no SUT and contacts no store or judge: it constructs the engine to learn
+// what steps and comparators exist, then reads feature files. A returned error means
+// validation could not RUN (a bad config, a malformed contributed phrase); findings
+// mean it ran and the suite has defects.
+//
+// It checks EVERY scenario in the given paths, including ones a WithTags expression
+// would exclude from a run. The asymmetry is deliberate and safe in that direction —
+// Validate is stricter than Run, never more permissive — and it means a defect cannot
+// hide behind a tag filter until the day someone runs that tag.
+func Validate(ctx context.Context, cfg Config, opts ...Option) ([]Finding, error) {
+	if len(opts) == 0 {
+		return nil, fmt.Errorf("mentat: Validate: no options; pass at least WithFeatures(...)")
+	}
+	var ro runOptions
+	for _, opt := range opts {
+		opt(&ro)
+	}
+	if len(ro.featurePaths) == 0 {
+		return nil, fmt.Errorf("mentat: Validate: no feature paths; pass at least one via WithFeatures")
+	}
+
+	eng, err := buildEngineForInspection(ctx, &cfg, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	// The engine-aware pattern set: built-ins PLUS this engine's contributed phrases.
+	// This is the whole difference from the CLI path, and the reason an "unbound-step"
+	// from here means what it says.
+	// One resolution feeding both derivations. Resolving twice recompiled every
+	// contributed pattern for no benefit, and left two places that could disagree
+	// about which phrases this engine has.
+	pats, stepArgs, err := steps.EngineStepChecks(eng)
+	if err != nil {
+		return nil, fmt.Errorf("mentat: %w", err)
+	}
+
+	known := make(map[string]bool, len(cfg.Targets))
+	for name := range cfg.Targets {
+		known[name] = true
+	}
+
+	return steps.SuiteCheck{
+		Engine:       eng,
+		Patterns:     pats,
+		Targets:      known,
+		CheckTargets: true,
+		CheckShapes:  true,
+		Arguments:    stepArgs,
+	}.Paths(ro.featurePaths), nil
+}
+
+// buildEngineForInspection assembles the same engine mentat.Run would, for the
+// entry points that INSPECT a suite rather than execute one (Validate, StepReference).
+//
+// It is shared so inspection can never answer about a different engine than the one a
+// run will use. A second assembly path here is exactly the drift this feature exists to
+// prevent: validation reporting a suite clean against an engine that is not the one
+// which will execute it is worse than no validation.
+//
+// cfg is taken by POINTER because config.Resolve writes back into it; the caller's copy
+// is defended by the Targets copy below, mirroring Run.
+//
+// ctx is honoured at entry only, and that limit is stated rather than hidden: none of
+// the composition calls below (BuildCorrelator, BuildStore, engine.Build) accepts a
+// context, because none of them performs I/O — they wire seams. The one place a
+// cancellable caller can be served today is refusing to start.
+func buildEngineForInspection(ctx context.Context, cfg *Config, opts ...Option) (*engine.Engine, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("mentat: %w", err)
+	}
+	var ro runOptions
+	for _, opt := range opts {
+		opt(&ro)
+	}
+
+	// Defensive copy of Targets before Resolve, for the same reason Run makes one: cfg
+	// arrives by value from the caller but Targets is a map, so Resolve would otherwise
+	// write resolved targets back into the CALLER's Config. Inspecting a suite must not
+	// mutate the configuration the caller then passes to Run.
+	if cfg.Targets != nil {
+		targets := make(map[string]config.Target, len(cfg.Targets))
+		for name, t := range cfg.Targets {
+			targets[name] = t
+		}
+		cfg.Targets = targets
+	}
+	if err := config.Resolve(cfg); err != nil {
+		return nil, fmt.Errorf("mentat: resolving config: %w", err)
+	}
+
+	logWriter := ro.logWriter
+	if logWriter == nil {
+		logWriter = io.Discard
+	}
+	logger := engine.NewLogger(logWriter, ro.verbose, ro.debug)
+
+	cor, err := engine.BuildCorrelator(*cfg, logger)
+	if err != nil {
+		return nil, fmt.Errorf("mentat: build correlator: %w", err)
+	}
+	var storeOpts []engine.Option
+	for _, sp := range ro.stores {
+		if sp.factory == nil {
+			return nil, fmt.Errorf("mentat: WithStore %q: nil factory; register a non-nil StoreFactory", sp.name)
+		}
+		storeOpts = append(storeOpts, engine.WithExtraStore(sp.name, func(c config.Config) (core.TraceStore, error) {
+			return sp.factory(c)
+		}))
+	}
+	st, err := engine.BuildStore(*cfg, storeOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("mentat: build store: %w", err)
+	}
+	buildOpts, err := engineOptions(logger, ro)
+	if err != nil {
+		return nil, err
+	}
+	eng, err := engine.Build(*cfg, st, cor, buildOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("mentat: build engine: %w", err)
+	}
+	return eng, nil
+}

@@ -36,6 +36,10 @@ field (Config)[08] Judge JudgeConfig
 field (Config)[09] RunTimeout string
 field (Config)[10] KillGrace string
 field (Config)[11] Budget RunBudget
+field (ContributedPhrase)[00] Pattern string
+field (ContributedPhrase)[01] Group string
+field (ContributedPhrase)[02] Summary string
+field (ContributedPhrase)[03] Example string
 field (Endpoint)[00] Endpoint string
 field (Evidence)[00] RunID string
 field (Evidence)[01] Trace *Trace
@@ -49,6 +53,10 @@ field (ExtractConfig)[02] Pattern string
 field (ExtractPolicy)[00] Mode string
 field (ExtractPolicy)[01] Marker string
 field (ExtractPolicy)[02] Pattern *regexp.Regexp
+field (Finding)[00] File string
+field (Finding)[01] Line int
+field (Finding)[02] Class string
+field (Finding)[03] Message string
 field (HTTP)[00] URL string
 field (HTTP)[01] Method string
 field (HTTP)[02] Headers map[string]string
@@ -135,6 +143,10 @@ field (Span)[04] Status string
 field (Span)[05] Start time.Time
 field (Span)[06] End time.Time
 field (Span)[07] Attrs map[string]string
+field (StepDoc)[00] Group string
+field (StepDoc)[01] Pattern string
+field (StepDoc)[02] Summary string
+field (StepDoc)[03] Example string
 field (StoreCaps)[00] StructuralQuery bool
 field (Target)[00] Adapter string
 field (Target)[01] Command []string
@@ -158,6 +170,8 @@ field (Verdict)[03] Detail *AggregateDetail
 field (Verdict)[04] Judge *JudgeUsage
 func LoadConfig(path string) (Config, error)
 func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error)
+func StepReference(ctx context.Context, cfg Config, opts ...Option) ([]StepDoc, error)
+func Validate(ctx context.Context, cfg Config, opts ...Option) ([]Finding, error)
 func WithComparator(name string, f ComparatorFactory) Option
 func WithConcurrency(n int) Option
 func WithDriver(name string, f DriverFactory) Option
@@ -170,6 +184,7 @@ func WithReports(targets map[string]string) Option
 func WithStore(name string, f StoreFactory) Option
 func WithTags(expr string) Option
 func WithVerbosity(w io.Writer, verbose, debug bool) Option
+method (CaptureParser) ParseCaptures(caps []string) (Expectation, error)
 method (Comparator) Compare(ctx context.Context, ev Evidence, e Expectation) (Verdict, error)
 method (Comparator) Name() string
 method (Correlator) Inject(ctx context.Context, spec *RunSpec) (runID string)
@@ -179,6 +194,7 @@ method (Driver) Run(ctx context.Context, spec RunSpec) (RunResult, error)
 method (ExpectationParser) ParseExpectation(text string) (Expectation, error)
 method (ExtractConfig) Policy() ExtractPolicy
 method (Judge) Judge(ctx context.Context, req JudgeRequest) (JudgeVerdict, error)
+method (PhraseContributor) ContributedPhrases() []ContributedPhrase
 method (Reporter) Report(res Results, w io.Writer) error
 method (Results) ExitCode() int
 method (Span) Attr(k string) string
@@ -191,11 +207,13 @@ method (TraceStore) DecodePayload(id string, payload []byte) (*Trace, error)
 method (TraceStore) FetchPayload(ctx context.Context, id string) ([]byte, error)
 method (TraceStore) Query(ctx context.Context, q TraceQuery) ([]TraceRef, error)
 type AggregateDetail = core.AggregateDetail
+type CaptureParser = core.CaptureParser
 type Comparator = core.Comparator
 type ComparatorFactory = func(Config) (Comparator, error)
 type Completeness = config.Completeness
 type CompletenessContract = core.CompletenessContract
 type Config = config.Config
+type ContributedPhrase = core.ContributedPhrase
 type Correlator = core.Correlator
 type Driver = core.Driver
 type DriverFactory = func(Config) (Driver, error)
@@ -205,6 +223,7 @@ type Expectation = core.Expectation
 type ExpectationParser = core.ExpectationParser
 type ExtractConfig = config.ExtractConfig
 type ExtractPolicy = core.ExtractPolicy
+type Finding = steps.Finding
 type HTTP = config.HTTP
 type HTTPSpec = core.HTTPSpec
 type Judge = core.Judge
@@ -216,6 +235,7 @@ type JudgeVerdict = core.JudgeVerdict
 type ModelRate = config.ModelRate
 type Option func(*runOptions)
 type Output = core.Output
+type PhraseContributor = core.PhraseContributor
 type PollSpec = config.PollSpec
 type Pricing = config.Pricing
 type Reporter = result.Reporter
@@ -228,6 +248,7 @@ type RunResult = core.RunResult
 type RunSpec = core.RunSpec
 type ScenarioResult = result.ScenarioResult
 type Span = trace.Span
+type StepDoc = steps.StepDoc
 type StoreCaps = core.StoreCaps
 type StoreFactory = func(Config) (TraceStore, error)
 type Target = config.Target

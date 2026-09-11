@@ -5,7 +5,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 
 	messages "github.com/cucumber/messages/go/v21"
 	"github.com/thetonymaster/mentat/internal/comparator"
@@ -73,41 +72,120 @@ var _ PrecheckEngine = (*engine.Engine)(nil)
 // target name to check it against the configured targets.
 var reTarget = regexp.MustCompile(`^the (?:agent|service) target "([^"]+)"$`)
 
-var (
-	stepPatternsOnce sync.Once
-	stepPatterns     []*regexp.Regexp
-)
+// StepPatterns is the compiled step-pattern set ONE engine binds against: the
+// built-in stepDefs rows plus whatever comparator-contributed phrases that engine
+// resolved.
+//
+// It is a value derived from an engine, deliberately NOT package state. This file
+// previously held a sync.Once cache (stepPatternsOnce/stepPatterns) that compiled
+// the pattern set once per process. That fixes the first-compiled set for every
+// later caller, so a second engine would be checked against the first engine's
+// patterns and report a valid feature file as broken — the same defect class 007
+// closed for registries, and the property US2 exists to prove.
+//
+// The cache never bit because its only consumer was `mentat validate`, a
+// single-shot CLI process. The library validate entry point, which a consumer can
+// call repeatedly in one process against different engines, is what makes it live.
+type StepPatterns []*regexp.Regexp
 
-// compiledStepPatterns compiles every registered step pattern once. The patterns
-// come from the same stepDefs metadata table godog registers, so a step that
-// binds no pattern here binds none at runtime either (StepBindingFindings).
-func compiledStepPatterns() []*regexp.Regexp {
-	stepPatternsOnce.Do(func() {
-		for _, d := range StepDocs() {
-			stepPatterns = append(stepPatterns, regexp.MustCompile(d.Pattern))
+// CompileStepPatterns compiles each pattern in order, returning an error that names
+// the offending pattern. It returns an error rather than panicking because
+// comparator-contributed patterns are author input: a bad regex must surface as a
+// descriptive engine-build failure, never a crash (Constitution IV).
+func CompileStepPatterns(patterns []string) (StepPatterns, error) {
+	out := make(StepPatterns, 0, len(patterns))
+	for _, p := range patterns {
+		re, err := regexp.Compile(p)
+		if err != nil {
+			return nil, fmt.Errorf("compiling step pattern %q: %w", p, err)
 		}
-	})
-	return stepPatterns
+		out = append(out, re)
+	}
+	return out, nil
 }
 
-// StepBindingFindings reports every pickle step whose text matches no registered
-// step pattern — the static equivalent of godog's runtime "undefined step".
-func StepBindingFindings(steps []*messages.PickleStep, src Source) []Finding {
-	pats := compiledStepPatterns()
+// BuiltinStepPatterns compiles the built-in stepDefs patterns, in table order.
+//
+// MustCompile is correct here and nowhere else in this file: these are literals in
+// the stepDefs table, guarded by the drift tests, so a failure is an unreachable
+// invariant violation rather than user input. This preserves exactly the contract
+// the deleted cache had — it only stops memoizing it.
+func BuiltinStepPatterns() StepPatterns {
+	docs := StepDocs()
+	out := make(StepPatterns, 0, len(docs))
+	for _, d := range docs {
+		out = append(out, regexp.MustCompile(d.Pattern))
+	}
+	return out
+}
+
+// StepBindingFindings classifies every pickle step by HOW MANY patterns in pats
+// match its text. The count has exactly three answers and each gets one:
+//
+//	0  -> "unbound-step", the static equivalent of godog's runtime "undefined step"
+//	1  -> no finding; that definition is what binds
+//	>1 -> "ambiguous-step", naming every matching pattern
+//
+// One function answers all three because it is one question. They were two checks —
+// binding here, ambiguity nowhere — and the gap between them was a validator that
+// reported CLEAN on a suite the runner refuses.
+//
+// # The >1 case is godog's own predicate, not an approximation of it
+//
+// Measured against the pinned godog v0.15.1:
+//
+//   - matchStepTextAndType (godog suite.go:511-556) loops every registered definition,
+//     tests h.Expr.FindStringSubmatch(text), collects each matching h.Expr.String()
+//     into matchingExpressions, and under Strict returns ErrAmbiguous when
+//     len(matchingExpressions) > 1. mentat.Run sets Strict (run.go).
+//   - the keywordMatches filter inside that loop is INERT for every Mentat step:
+//     ScenarioContext.Step registers with formatters.None (godog test_context.go:255-257),
+//     which keywordMatches short-circuits to true, and registerSteps (metadata.go:107,110)
+//     uses reg.Step for both built-ins and contributed phrases.
+//
+// So godog's predicate reduces to "how many registered patterns match this sentence",
+// and SuiteCheck.Patterns is that same set in the same registration order
+// (stepPatternsFor, phrase.go: built-ins then contributed). Same predicate, same
+// inputs, same order — which is why the patterns are listed in pattern-set order here
+// too, lining up with godog's own matchingExpressions output.
+//
+// This decides nothing about regex OVERLAP in general, which mentat does not compute.
+// It is per-sentence multi-match, scoped to the sentences the corpus actually contains:
+// two patterns that could collide but that no step in the corpus reaches are not
+// reported, and neither runner nor validator has an opinion about them.
+//
+// pats is a parameter, not package state, so the answer is always about the engine
+// the caller means. See StepPatterns.
+func StepBindingFindings(pats StepPatterns, steps []*messages.PickleStep, src Source) []Finding {
 	var out []Finding
 	for _, st := range steps {
-		bound := false
+		var matched []string
 		for _, re := range pats {
 			if re.MatchString(st.Text) {
-				bound = true
-				break
+				matched = append(matched, re.String())
 			}
 		}
-		if !bound {
+		switch {
+		case len(matched) == 0:
 			out = append(out, stepFinding(src, st, "unbound-step", fmt.Sprintf("no step matches %q", st.Text)))
+		case len(matched) > 1:
+			out = append(out, stepFinding(src, st, "ambiguous-step", ambiguousStepMessage(st.Text, matched)))
 		}
 	}
 	return out
+}
+
+// ambiguousStepMessage renders one line: findings print one per line
+// (cmd/mentat/validate.go renderText), so a multi-line message would break the
+// format. Patterns are quoted with strconv.Quote (what %q does for a string), matching
+// how argumentProblem quotes step definitions.
+func ambiguousStepMessage(text string, matched []string) string {
+	quoted := make([]string, 0, len(matched))
+	for _, p := range matched {
+		quoted = append(quoted, strconv.Quote(p))
+	}
+	return fmt.Sprintf("step %q matches %d step definitions and the runner refuses it as ambiguous: %s",
+		text, len(matched), strings.Join(quoted, ", "))
 }
 
 // TargetFindings reports every `the (agent|service) target "X"` step whose X is

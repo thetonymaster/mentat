@@ -1,0 +1,559 @@
+# Research: Comparator-Contributed Gherkin Phrases (012)
+
+**Date**: 2026-09-10 | **Baseline**: `0f9dcea` | **godog**: `v0.15.1` (pinned)
+
+Two of these items were settled by **running an experiment**, not by reading source. Both
+touched claims the spec inherited from 011's D1, and one of them was false. Where a finding is
+empirical, the exact command and its output are recorded so the next reader does not have to
+re-run it to trust it.
+
+---
+
+## R0 — Does enabling `Strict` churn any committed golden? **MEASURED: no.**
+
+**Decision**: Enable `Strict: true` in `mentat.Run`'s godog options (`run.go:411-419`). SC-012
+is satisfied by the evidence below rather than deferred to implementation.
+
+**This was the feature's one named risk.** The spec predicted zero churn and explicitly refused
+to let a green `make ci` stand as evidence, because the SC-005 stdout goldens are
+`//go:build e2e` and `make ci` never compiles them. So the experiment ran both surfaces.
+
+**Method**: patched `Strict: true` into `run.go`, ran each surface, reverted, re-ran the e2e
+surface to establish the matching baseline. Docker was up (`make harness-up`) so live-Tempo
+tests actually executed rather than being skipped.
+
+| Surface | Command | Baseline | With `Strict: true` |
+|---|---|---|---|
+| All non-e2e (incl. hermetic stdout golden `mentat_golden_test.go`) | `go test ./...` | all `ok` | all `ok`, **0 FAIL** |
+| e2e stdout golden (SC-005) | `go test -tags e2e -run TestGolden ./e2e/` | — | `PASS` (14.68s) |
+| Full e2e suite (L3 meta-tests included) | `go test -tags e2e -timeout 25m ./e2e/` | `ok 50.7s` | `ok 42.1s` |
+
+**Zero golden churn on both surfaces.** The prediction held, and it is now a result.
+
+**Rationale for why it held**: Mentat registers no pending steps, and undefined steps already
+produce a failed scenario through the collector (011's `TestUndefinedStepFailsTheRun`), so the
+two behaviours `Strict` changes were already Mentat's behaviour by another route.
+
+**Alternatives considered**: leaving `Strict` off and detecting overlap with a hand-written
+heuristic (spec's rejected option). Unnecessary given R1, and strictly worse — a heuristic can
+false-collide, godog's matcher cannot.
+
+**Caveat for planning**: this is a property of a *pinned* dependency. A godog bump re-opens R0
+and R1 together.
+
+---
+
+## R1 — What does godog do when two patterns match one step? **MEASURED: silently picks the first.**
+
+**Decision**: Mentat MUST NOT rely on godog for collision detection *unless* `Strict` is on;
+with `Strict` on, godog's matcher is exact and sufficient. This is the evidence behind D8.
+
+**011's D1 said** "godog reports an ambiguous match; Constitution IV requires a loud failure,
+never last-wins." **That is false as stated** for `mentat.Run`. The check is gated
+(`suite.go:547-553`) and `mentat.Run` does not set `Strict`.
+
+**Method**: a throwaway godog suite registering a broad pattern first (standing in for a
+built-in `stepDefs` row) and a specific one second (standing in for a contributed phrase), both
+matching `the widget is green`. An `sc.After` hook mirroring Mentat's verdict-authoritative
+hook (`steps.go:126-129`) recorded the `stepErr` it received.
+
+```
+strict=false -> suiteStatus=0 firstRan=true  secondRan=false afterHookStepErr=<nil>
+                pretty output: "1 scenarios (1 passed)"
+
+strict=true  -> suiteStatus=1 firstRan=false secondRan=false
+                afterHookStepErr=ambiguous step definition, step text: the widget is green
+                    matches:
+                        ^the widget is (\w+)$
+                        ^the widget is green$
+                pretty output: "1 scenarios (1 ambiguous)"
+```
+
+**Three things this establishes, in descending order of importance:**
+
+1. **It is first-wins, not last-wins, and it is silent.** The broad pattern ran; the specific
+   one never did; the scenario **passed**. Because built-ins register from `stepDefs` before any
+   contributed phrase would, a contributed phrase colliding with a built-in is silently
+   shadowed and the author's assertion never executes. A green verdict nobody wrote.
+2. **This is a LATENT defect at `0f9dcea`, not a live one.** *(Corrected 2026-09-11 at
+   implementation time — see R10. The original text claimed it was "reachable between two
+   built-in patterns today"; that was asserted, never measured, and it is false.)* The godog
+   behaviour above is real and `mentat.Run` really does not set `Strict`, but the 40 built-in
+   patterns are **pairwise disjoint**, so no sentence can reach the ambiguous branch through
+   Mentat's public surface today. Contributed phrases are what first make it reachable — which
+   is why `Strict` is a **prerequisite** of this feature rather than an independent bugfix it
+   happens to carry. SC-011's regression test is therefore written at the step-registration
+   level (two patterns registered directly), with the end-to-end counterpart arriving only once
+   phrases exist.
+3. **`Strict` routes the ambiguity through the exact path Mentat already trusts.** The After
+   hook receives it as a non-nil `stepErr`, so `Pass: stepErr == nil` (`steps.go:127`) yields
+   `Pass=false` and `Reasons=[<message naming every matching expression>]`. **No new
+   surfacing mechanism is required** — the collector records a FAILED scenario with a useful
+   reason, and `mentat.Run` discarding the suite status is irrelevant.
+
+**Alternatives considered**: parsing godog's `Ambiguous` formatter callback, or checking suite
+status. Both rejected — the After-hook path already works and is the one 011 established.
+
+---
+
+## R2 — Where does the phrase-declaration type live?
+
+**Decision**: `internal/core`, alongside `ExpectationParser`, aliased on the facade.
+
+**Rationale**: 010's D5 forbids declaring it *at* the
+facade, because root imports `internal/steps`/`internal/engine`/`internal/registry` and those
+packages consume it. `internal/core` imports only stdlib plus `internal/trace`
+(`core.go:5-13`), so it is a leaf for this purpose and adding the type creates no cycle —
+verified: neither `internal/engine` nor `internal/core` imports `internal/steps`.
+
+> **Corrected 2026-09-11 (R11)**: this entry originally added "the type appears in a published
+> seam's method set, so 010's nameability sweep will demand a facade alias automatically
+> (SC-008)". Measured false — the sweep is seeded from the aliases that already exist, so it
+> cannot notice a missing one, and both new seams are optional and referenced by no published
+> type. SC-008 still holds; the guards are the public-surface golden and the external-package
+> compile-time witnesses. See R11.
+
+**Alternatives considered**: a new `internal/phrase` package (more moving parts for one type
+group); declaring at the facade (forbidden by D5).
+
+---
+
+## R3 — How is the contributed set resolved per engine?
+
+**Decision**: Reuse the existing accessors. `Engine.Comparators()` (`engine.go:207`, sorted)
+enumerates names; `Engine.Comparator(name)` (`engine.go:200`) resolves each instance; a type
+assertion finds the ones that contribute phrases. Add one accessor mirroring `Comparators()`
+exactly.
+
+**Rationale**: No registry change is needed — `Registry.Comparators()` already sorts
+(`registry.go:125-137`), and 011 made that sort load-bearing precisely so a derived list is
+deterministic between runs. Deterministic order matters more here than it did for 011's error
+message: it fixes godog registration order, which under R1 decides which pattern wins a
+collision. **Sorted enumeration is therefore a correctness requirement, not a tidiness one.**
+
+**Alternatives considered**: a dedicated phrase registry seam (a seventh registry for data
+already reachable through the sixth — rejected as over-abstraction; the composition rule wants a
+second implementation that exists now, and there is none).
+
+---
+
+## R4 — How is the godog handler built, given runtime-unknown arity?
+
+**Decision**: `reflect.MakeFunc` over `reflect.FuncOf(N × string, error)`, with N from the
+compiled pattern's `NumSubexp()`; a docstring-carrying phrase appends
+`*messages.PickleDocString` as the final parameter.
+
+**Rationale**: godog rejects `[]string` and variadic handlers — `reflect.Slice` accepts
+`[]byte` only (`internal/models/stepdef.go:222-233`) — and its arity check is one-sided
+(`stepdef.go:58`): too few args error, **surplus args are silently discarded** because the
+conversion loop runs `i < numIn`. Deriving N from the same regex godog matches against makes
+the two structurally unable to disagree, converting a silent-drop hazard into an impossibility.
+
+**This constrains only the bridge.** Because Mentat synthesizes the handler, the
+comparator-facing seam is unconstrained by godog's rules — which is precisely what freed D6 to
+choose a `[]string`-shaped sibling interface.
+
+**Alternatives considered**: a fixed set of pre-declared arities (1..N) — brittle and caps
+phrase expressiveness at an arbitrary N; a zero-arg handler (binds fine, since `len(Args) >= 0`,
+but cannot see any capture).
+
+---
+
+## R5 — How does the drift test express the partition without a nil-engine panic?
+
+**Decision**: Change `registerSteps` to take the resolved phrase set as a parameter:
+`registerSteps(reg stepRegistrar, w *world, phrases []ContributedPhrase)`. The caller
+(`steps.go:100`) resolves it from the engine; the drift test passes what it wants to assert.
+
+**Rationale — this is a real constraint, not a style choice.** The drift test calls
+`registerSteps(spy, &world{})` (`metadata_test.go:40`) with a **zero world, so `w.eng` is nil**.
+If `registerSteps` reached through `w.eng` for phrases it would panic there, and nil-guarding it
+would be exactly the silent fallback Constitution IV forbids. Passing the set in also matches
+the composition rule — the unit knows its input type and nothing about who calls it — and makes
+the partition assertion natural: drive the spy with a known phrase set, then assert every
+registered pattern is either a `stepDefs` row or a member of that set, with counts adding up.
+
+**Alternatives considered**: giving `world` a phrase field (keeps the nil-eng problem, just
+moves it); a package-level phrase var (forbidden by D3).
+
+---
+
+## R6 — How does the step-binding precheck lose its package-level cache?
+
+**Decision**: Delete `stepPatternsOnce`/`stepPatterns` (`precheck.go:76-91`). Compile the
+pattern set per engine and pass it to `StepBindingFindings`, which becomes a function of
+(pattern set, steps, source) rather than of package state.
+
+**Rationale**: The `sync.Once` fixes the first-compiled pattern set for the process, so with
+per-engine phrases a second `mentat.Run` would be checked against the first run's patterns.
+Same defect class 007 closed for registries (`registry.go:30-35`), and the property US2 exists
+to prove. Compilation cost is trivial (≈40 patterns) and can be done once per engine build if
+it ever matters.
+
+**Consumers to update**: the scenario-init precheck path, and `mentat validate`
+(`validate.go:185`) whose `checker` (`validate.go:117`) supplies no phrases — see R7.
+
+---
+
+## R7 — What shape does the validate entry point take? (D7)
+
+**Decision**: A facade function accepting the same `Option`s `mentat.Run` accepts, returning
+the existing `Finding` values. `steps.Finding` (`precheck.go:23`) is aliased on the facade —
+legal under 010's D5 because it is declared in `internal/steps`, beneath root, not at it.
+
+**Rationale**: The consumer already constructs their options for `mentat.Run`; reusing them
+means validation sees exactly the engine the run will use, with no second artifact. The binary's
+`validate` keeps its `checker` and its current strictness for built-ins, and documents that
+contributed phrases are outside a compiled binary's reach.
+
+**Alternatives considered**: a manifest flag on the binary — rejected in D7 with the full
+argument (generating it requires running consumer Go code anyway, so the standalone-lint benefit
+only lands if the file is committed, at which point it can drift and needs its own regeneration
+gate). Recorded as a deferred *layer*: if wanted later, the manifest becomes a generated
+artifact rendered by this entry point and guarded byte-identically, the way `docs/steps.md`
+already is (`steps_cmd.go:3`).
+
+---
+
+## R8 — How is anchoring checked? (FR-007a)
+
+**Decision**: Require the pattern to begin `^` and end `$`, rejecting otherwise at engine build.
+Check the *unescaped* terminal `$` (a pattern ending `\$` is not anchored).
+
+**Rationale**: All 40 built-in patterns are already `^…$`, so the rule matches existing practice
+rather than imposing a new one, and an unanchored contributed pattern is the realistic way to
+swallow a built-in (R1's experiment used exactly that shape). Anchoring does not eliminate
+overlap — two anchored patterns can still both match via alternation or character classes —
+which is why `Strict` (R0/R1) remains the backstop rather than the anchoring rule alone.
+
+---
+
+## R9 — Where do contributed phrases appear in the rendered reference?
+
+**Decision**: The engine-scoped renderer emits contributed phrases in their own group(s) after
+the built-in groups. `mentat steps` and `docs/steps.md` keep rendering built-ins only,
+byte-identically, and the generated page gains a sentence stating that contributed phrases are
+engine-scoped.
+
+**Rationale**: `TestStepDocsGroupsAreContiguous` (`docs_test.go:43`) lets the markdown generator
+emit one heading per group by watching for the group to change — an interleaved group produces a
+duplicated heading. A contributed phrase declaring an existing group name (e.g. `"Shape"`) would
+break that, so the renderer MUST group contributed phrases contiguously regardless of the names
+authors choose. This is an edge case the spec lists and the reason FR-014 extends the
+contiguity guarantee to the engine-scoped path.
+
+---
+
+## R10 — Are any two built-in patterns ambiguous today? **MEASURED: no, they are pairwise disjoint.**
+
+*Added 2026-09-11 at implementation time. It corrects R1's claim #2, which was inherited into
+plan.md and tasks.md.*
+
+**Decision**: Treat `Strict: true` as a **prerequisite** for contributed phrases, not as a fix
+for a defect users can hit at `0f9dcea`. The change itself is unaltered; only its justification
+and the shape of its regression test change.
+
+**Why it was checked**: R1's claim #2 asserted the ambiguity was "reachable between two built-in
+patterns today". R1 measured godog's *behaviour* but never measured *reachability*. This feature's
+own quickstart says to check whether a surprising thing is a premise nobody re-verified, so it
+was verified before writing a test whose framing depended on it.
+
+**Method**: two probes over the 40 `stepDefs` patterns.
+
+| Probe | Construction | Result |
+|---|---|---|
+| 1 | Each row's own `example`, keyword stripped, matched against all 40 compiled patterns | 0 sentences matched >1 pattern |
+| 2 | Sentences generated from each pattern's parsed syntax tree, expanding **every alternation branch**, × 9 fillers (`"x"`, `""`, `"a b"`, `"1"`, `"2nd"`, `"true"`, `"0.5"`, `"tool-name"`, `"a/b.c"`) — 1530 unique sentences | **0 sentences matched >1 pattern** |
+
+**Why it holds structurally**, not just on the sample: every pattern carries a distinct literal
+skeleton. Terminal literals alone separate most of the table — `… exists$` vs `…"$` vs `…:$` —
+and the remainder differ on literal prefixes (`the result contains "` / `the result of ` /
+`the run satisfies` / `the runs satisfy` / `a span matching` / `at least` / `exactly`).
+
+**And no other registration route exists**: `TestNoDirectStepRegistration`
+(`metadata_test.go:129`) keeps `steps.go` free of direct `sc.Step(` calls,
+`TestStepMetadataMatchesRegistration` (`:56`) forbids duplicate rows by count, and 011's `Extend`
+row is a single pattern.
+
+**Consequences**:
+
+1. SC-011 cannot be an end-to-end test at `0f9dcea` — there is no way to construct the collision
+   through the public surface. It is a step-registration-level test (T004); the end-to-end
+   version is T038, after phrases exist.
+2. The "ship the defect fix as its own PR" strategy loses its rationale. It stays a **separate
+   first commit** on this branch for reviewability of the `Strict` flag, not a separate PR.
+3. "The built-in patterns are pairwise disjoint" is worth **pinning as a test** — V4 (a
+   contributed pattern identical to a built-in's) implicitly assumes the built-in set is
+   internally unambiguous, and nothing asserted that before. Added as a guard in US3.
+
+**Alternatives considered**: leaving the claim in place since the remedy is unchanged. Rejected —
+a spec that misstates why a change is needed will mislead the next reader into thinking the
+change can be reverted once 012 ships.
+
+---
+
+## R11 — Does the nameability sweep demand the new aliases? **MEASURED: no. The golden does.**
+
+*Added 2026-09-11 at implementation time. It corrects R2 and SC-008's mechanism, not their
+conclusion.*
+
+**R2 claimed**: "The type appears in a published seam's method set, so 010's nameability sweep
+will demand a facade alias automatically (SC-008)."
+
+**Measured**: false for the seams themselves. With BOTH the `PhraseContributor` alias and the
+compile-time witness removed, `TestFacadeNameabilitySweep` stays **green**.
+
+**Why.** The sweep is SEEDED from the aliases that already exist and walks outward, checking that
+everything reachable from a published alias is itself nameable. It cannot discover a type that
+*should* be aliased and is not — removing the alias removes the seed. That is exactly the boundary
+010 drew, and 011 already wrote it down in `custom_comparator_facade_test.go`: "the failure mode
+the nameability sweep cannot catch, since it only walks what IS published."
+
+The premise was also wrong on its own terms: both new seams are **optional and discovered by type
+assertion**, so no published type references them. `Comparator` does not mention
+`PhraseContributor`, so there is no published method set for the sweep to reach them through.
+
+**What actually guards them** — both measured:
+
+| Guard | Removing the alias → |
+|---|---|
+| `TestPublicSurfaceGolden` | **FAILS**: "symbols in golden but NOT present now (removed/changed): type PhraseContributor …" |
+| Compile-time witnesses in `custom_phrase_facade_test.go` (`var _ mentat.PhraseContributor = …`) | **build failure** in an external test package |
+
+SC-008 holds. Its mechanism is the golden plus the external-package witnesses, which is the same
+pair 011 relied on for `ExpectationParser`. The sweep still earns its keep for what it *does*
+cover: every type reachable *from* the new aliases (including `ContributedPhrase`) must be
+nameable, and it would fire if one were not.
+
+**Lesson worth keeping**: "010 pays for itself here" was assumed rather than tested, twice in a
+row now (R1/R10, R2/R11). A gate's coverage is a property to measure, not to infer from its name.
+
+---
+
+## R12 — What review found that the feature's own tests could not
+
+*Added 2026-09-11 after a `go-reviewer` gate audit returned BLOCK on otherwise-complete work.
+Recorded because the pattern, not the individual bugs, is the reusable lesson.*
+
+Three of the five blocking findings were **the same shape**: a belief about godog written into a
+comment, with a test that structurally could not falsify it. Both godog claims were re-measured
+independently before acting; both held.
+
+| Finding | Measured | Fix |
+|---|---|---|
+| A comment claimed godog passes a typed nil for a missing declared docstring, so the nil branch was "real rather than defensive" | **Partly false, and the correction was itself partly false** — see R13 | The error moved to the step-argument check at scenario init, where it IS reachable; the nil check stays, because R13 shows it is load-bearing after all |
+| A step carrying an argument the matched phrase cannot receive | **`status=0, handlerCalled=true`, argument discarded, scenario PASSES.** A green verdict from a comparator that never read the author's expectation — reachable through the public surface, because docstring-ness is inferred from a `:$` convention an author can forget | Rejected at scenario init AND in `mentat.Validate`, before any SUT is driven, for every argument kind |
+| The `ExpectationParser` (docstring) route | **Zero test coverage.** Mutating the body to a constant left the whole suite green. The lint-cleanup commit had deleted the only stub built for it | Route test added, asserting the body arrives VERBATIM; the reviewer's exact mutation now goes red |
+| `isAnchored` (V2) | **Defeated by top-level alternation**: `^the alpha reading\|the beta reading$` passes a string-level check and matches inside "I check the beta reading", because the runner matches with an unanchored `FindStringSubmatch` | Rewritten as a structural check over the parsed syntax tree: an alternation is anchored only if EVERY branch is |
+| `TestSuiteCheckDedupesScenarioOutlineRows` | **Did not test dedupe** — each example row produced a distinct message, so all survived either way; disabling dedupe left it PASSING | Offending step made a constant sentence, so three identical findings must collapse to one |
+| `EngineStepDocs` (FR-012) | Had **no facade alias and no non-test caller**, so the documented "render the reference for your own engine" was impossible for a consumer | `mentat.StepReference` added, with an external-package test |
+
+### The second audit found the same class again
+
+The first fix checked **docstrings**. Review immediately measured the identical hole one
+field over: a surplus **data table** was still discarded and the scenario still reported
+PASSED (`passed=1, compared=1`, table gone). Same mechanism (`i < numIn`), same unearned
+green, one struct field away.
+
+That is the more useful half of the story. The first fix addressed the instance the
+evidence happened to name. The check is now written against the mechanism — *any*
+argument the phrase cannot receive — with an unrecognised argument kind reported as a
+kind of its own rather than as "none", so the next type godog adds is rejected loudly
+instead of silently joining the list of things that vanish.
+
+Two further findings from the same audit, both fixed:
+
+- `mentat.Validate` reported **clean** on a feature file `mentat.Run` rejects at scenario
+  init. A validator that certifies a suite the runner then refuses spends the author's
+  trust to tell them something false. Both paths now run the same `StepArguments` check
+  (named `PhraseArguments` until R14 widened it to built-ins), one as a fail-fast error
+  and one as a `step-argument` finding.
+- The guard **misdiagnosed** a step matching both a built-in and a contributed phrase,
+  claiming a body would be discarded when the built-in consumes it. Such steps are
+  skipped and left to the strict matcher, which names every matching expression — a
+  property R14 deliberately preserved when it added built-in checking, because under
+  `Strict` an ambiguous step binds NEITHER definition, so any argument message about it
+  would be false as well as misdirecting.
+
+### R13 — the correction that was itself wrong
+
+The fix above replaced the false comment with: *"godog never calls the handler; the nil
+branch was unreachable."* The third audit measured that claim and it is **true only for a
+step carrying no argument at all**.
+
+A step carrying a **data table**, matched by a phrase declaring a docstring, DOES reach
+the handler — godog converts the `PickleStepArgument` to its `DocString` field without
+complaint, so the handler receives a **typed nil**:
+
+```
+handler called; docstring=<nil> isNil=true
+suite status=0
+```
+
+So `d != nil` in the bridge is **load-bearing**, not defensive. A reader trusting the
+"unreachable" comment and deleting it would have introduced a nil dereference — a panic
+in library code, from a comment written to explain why the guard was unnecessary.
+
+Three rounds, three versions of the same claim, each measured only against the case the
+previous evidence happened to cover. The comment now enumerates BOTH measurements and
+says which one each conclusion rests on.
+
+### R14 — the gap this feature first declined to close, then closed
+
+The check (then named `PhraseArguments`) skipped steps matching a built-in, on the reasoning that the built-in
+binds them. An earlier comment said "the built-in's own rules apply" — **no such rules
+existed.** Measured: a surplus docstring on `^the result contains "([^"]*)"$` gave suite
+status 0 with the body never read. The same `i < numIn` discard, for all 40 built-in
+steps, reachable without writing any comparator at all.
+
+This was first recorded as out of scope, on the grounds that it is pre-existing on `main`.
+That framing was accepted and then **reversed on the maintainer's instruction** — and the
+reversal was right, because the scope argument was about where the defect was *found*
+rather than what it *was*. Read together with the two audits before it, the sequence is
+the finding:
+
+| Round | Fixed | Left open | Found by |
+|---|---|---|---|
+| 1 | docstrings on contributed phrases | data tables, one struct field over | review |
+| 2 | every argument kind, on contributed phrases | all 40 built-ins | review |
+| 3 | both sources, one mechanism | — | maintainer |
+
+Each round's fix was scoped to where the defect had last been seen. "Written against the
+mechanism" was said after round 2 and was not yet true.
+
+**Closed by** `StepArguments` (`internal/steps/stepargs.go`), which derives each built-in
+row's expected argument **by reflection from the handler that row registers** —
+`*godog.DocString` → docstring, `*godog.Table` → data table, anything else → none.
+Derived, never listed: a hand-kept table would be a second source of truth for exactly
+what `stepDefs` exists to be the only source of, and its drift would restore the unearned
+green silently. Enforced at scenario init, in `mentat.Validate`, and — new — in the
+`mentat validate` binary, which cannot see contributed phrases (D7) but can see every
+built-in and so is fully equipped to catch this class.
+
+Measured after: the repo's entire feature corpus produces zero `step-argument` findings
+(no false positives), and the end-to-end guard was rehearsed against the pre-fix state.
+
+**Two rounds of review on the fix itself, both finding the same thing again:**
+
+- The check's own comment claimed godog delivers a step argument only into
+  `*godog.DocString` or `*godog.Table`. **Measured false** — `shouldBeString`
+  (`stepdef.go:285-296`) routes it into a plain `string` too, so a built-in drifting to
+  `func(s, body string) error` would be classified argument-free and every scenario using
+  it would be **REJECTED**. A false red, strictly worse than the unearned green being
+  closed. The count test (9/2/29) stays green through exactly that drift, so the guarantee
+  is now an arity invariant (`checkBuiltinArity`), not a tally.
+- The shared message builder then claimed a mismatched argument "would be silently
+  discarded and the step would report a verdict that never read it". **True only when the
+  step definition takes NO argument.** Measured with the check disabled: a table on
+  `the run satisfies:` fails with "expected a docstring expression, got none"; a docstring
+  on `the agent calls tools in order:` **panicked** on a typed-nil `*godog.Table`. Neither
+  reports a verdict. The message now says what each case actually does — and the panic was
+  a real pre-existing hole, since the two table handlers lacked the nil guard all nine
+  docstring handlers have. Both now have it.
+
+**A third round found two more, and one was a guard I had just written to satisfy round two:**
+
+- The both-match skip — restored in round two with a 14-line rationale — was
+  **mutation-dead**. Deleting `case b != nil && cp != nil: return ""` left the ENTIRE
+  suite green, including `TestStepArgumentGuardSkipsStepsMatchingABuiltin`, written
+  specifically to pin it. Cause: the overlap it chose had both sources wanting a
+  docstring and the step carrying one, so `argumentProblem` returned "" either way. The
+  test now overlaps a contributed `^the agent target "(\w+)"$` with the built-in target
+  step and puts a docstring on it, so the two DISAGREE and the skip is observable.
+- `checkBuiltinArity`'s too-few explanation was false when the handler declares an
+  argument. That fix then claimed "three shapes, three consequences" — and a **fourth**
+  round measured a fourth shape, which had inherited an explanation false in all three of
+  its clauses. Asking R14's own closing question of the guard written to answer R14 is
+  what found it. The direction alone does not decide the consequence; whether the row
+  declares an argument changes it, so all four are now measured and separately explained:
+
+  A **fifth** round then found the split itself keyed on the wrong thing. godog can supply
+  at most `NumSubexp()+1` arguments — one per capture group plus at most one step argument
+  — so the boundary is the parameter count against that ceiling. "Declares an argument"
+  correlates with it without being it, and the gap (two surplus parameters on a row
+  declaring none) fell inside the routing arm and was explained as routing, which it is
+  not. The four measured shapes:
+
+  | parameters | measured on godog v0.15.1 |
+  |---|---|
+  | above the ceiling (`> NumSubexp()+1`) | `status=1 ran=false`, `func expected more arguments than given` — godog refuses on arity; nothing is routed, and a step carrying the argument is not rejected by this check at all |
+  | exactly at the ceiling, no declared argument | `called=true seen="PAYLOAD"` — the step argument lands in the surplus string; scenarios carrying it would be false-RED by this check |
+  | short, no declared argument | `ran=true seen="one"` — the surplus capture is discarded in silence |
+  | short, argument declared | `status=1 ran=false`, `cannot convert argument 1 … to *messages.PickleDocString` — handler never runs |
+
+So the fix for "a claim no test can contradict" contained two of them; the fix for THOSE
+exposed a panic and a dead guard. **The pattern does not end by being named.** It ends
+per-claim, when someone runs the mutation that would make that specific claim fail — which
+is why every guard added here has its rehearsal recorded next to it, and why the one that
+did not have a real one is the one that turned out to be decoration.
+
+**The lesson worth carrying**: this feature corrected five inherited premises (R10, R11, R14 and
+the two above) and every one had the same signature — *a claim about behaviour, asserted in a
+comment, with no test able to contradict it*. The tests that caught nothing were not absent; they
+were adjacent. `TestContributedPhraseSeamRouting` tested the routing FUNCTION and never the route;
+the dedupe test named a property its assertions could not observe.
+
+R14 adds a second, sharper shape: *a defect fixed where it was found rather than where it came
+from*. Three rounds went by with the same `i < numIn` discard open somewhere else each time, and
+every round ended with a comment asserting the fix was general. The question that would have
+closed it on round one is not "is this fixed?" but **"what else does this mechanism reach?"**
+
+Ask of any guard: **what mutation would make this fail?** If the answer is "none that matters",
+the guard is decoration. Two of the six rows above were found by running exactly that experiment.
+
+### R15 — godog's ambiguity check reduces to a per-sentence multi-match
+
+Measured 2026-09-11 against the pinned `godog v0.15.1`, while closing the Validate/Run
+asymmetry (`mentat.Validate` reported CLEAN on a step `Run` refuses under `Strict`).
+
+The question was whether a STATIC ambiguity check could agree with the runner without deciding
+regex overlap — which is the hard problem, and the one the earlier framing assumed was required.
+It is not required, because godog does not decide overlap either:
+
+- `matchStepTextAndType` (`suite.go:511-556`) loops every registered definition, tests
+  `h.Expr.FindStringSubmatch(text)`, collects each matching `h.Expr.String()` into
+  `matchingExpressions`, and under `Strict` returns `ErrAmbiguous` when `len > 1`.
+- The `keywordMatches` filter inside that loop (`suite.go:558-560`) is **inert for every Mentat
+  step**. `ScenarioContext.Step` registers with `formatters.None` (`test_context.go:255-257`),
+  which `keywordMatches` short-circuits to `true`, and `registerSteps` (`metadata.go:107,110`)
+  uses `reg.Step` for both built-ins and contributed phrases. Nothing in the public surface can
+  register a step any other way.
+- `stepWithKeyword` compiles a string expression verbatim (`test_context.go:291`,
+  `regexp.MustCompile`), so `h.Expr.String()` equals the source pattern, and `s.steps` preserves
+  registration order.
+
+So godog's predicate is exactly **"how many registered patterns match this sentence"**, and
+`SuiteCheck.Patterns` is that same set in the same order. The static check is therefore the
+**same predicate on the same inputs**, not an approximation of it — it even lists the matches in
+the same order. This is what makes `StepBindingFindings`' `>1` branch trustworthy enough to fail
+a suite on.
+
+**The limit, stated so nobody infers the stronger guarantee**: neither Mentat nor godog computes
+regex intersection. Both classify per *sentence*, so two patterns that could collide on a
+sentence the corpus does not contain are reported by nobody, and the collision surfaces the day
+someone writes that sentence.
+
+**Why this had to be verified rather than assumed**: had any Mentat step registered via
+`Given`/`When`/`Then`, the keyword filter would be live, and a static check ignoring it would
+report ambiguity the runner does not — a false RED on a valid file, strictly worse than the
+unearned green being closed. A repo-wide grep for `.Given(`/`.When(`/`.Then(` returns nothing.
+
+Like R1 and R10-R14, this is a property of the **pinned** version. A godog bump re-opens it, and
+the keyword-filter claim is the one to re-measure first.
+
+---
+
+## Summary of what changed versus the spec's assumptions
+
+| Item | Spec assumed | Research found |
+|---|---|---|
+| `Strict` golden churn | predicted zero, demanded proof | **measured zero**, both surfaces (R0) |
+| godog ambiguity | 011's D1: "reports an ambiguous match" | **false without `Strict`** — silent first-wins, scenario PASSES (R1) |
+| Ambiguity reachable today | R1 (first draft): "a live defect, reachable between two built-ins" | **false** — the 40 built-in patterns are pairwise disjoint, measured over 1530 generated sentences. Latent, not live; phrases are what make it reachable (R10) |
+| Surfacing ambiguity | might need a mechanism | **none needed** — reaches the existing After hook as `stepErr` (R1) |
+| `registerSteps` signature | not considered | **must take phrases as a parameter** — the drift test uses a nil-engine world (R5) |
+| Registry work | possible new seam | **none** — existing sorted accessors suffice, and the sort is load-bearing for collision determinism (R3) |
+| Alias protection | R2: the nameability sweep demands them automatically | **false** — the sweep is seeded from existing aliases and cannot notice a missing one. The public-surface golden and the external-package compile-time witnesses are the real guards (R11) |
+| Static ambiguity detection | convergence's first framing: needs regex-overlap analysis, "its own change" | **false** — godog's own check is a per-sentence multi-match with an inert keyword filter, so the static check is the *same predicate*, not an approximation. Overlap in the abstract is decided by neither (R15) |
+
+No `NEEDS CLARIFICATION` items remain.

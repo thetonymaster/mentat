@@ -25,7 +25,7 @@ func mustMkdir(t *testing.T, dir string) {
 	}
 }
 
-// defectsFeature seeds four authoring defect references at known lines:
+// defectsFeature seeds five authoring defect references at known lines:
 //
 //	line 3: unknown target ("ghost" is not a configured target)
 //	line 5: unbound step  ("the moon is made of cheese" matches no metadata pattern)
@@ -33,6 +33,14 @@ func mustMkdir(t *testing.T, dir string) {
 //	line 7: unknown shape ("missing") — flagged unknown-shape ONLY when the
 //	        expectations dir loads; when expectations fails to load the shape check
 //	        is skipped (a load failure must not balloon into false unknown-shapes).
+//	line 8: step argument  (a bound step carrying a docstring it does not declare)
+//
+// The last step is BOUND and its assertion is fine — the defect is that it carries a
+// docstring the step's handler never declared. The runner would discard it in silence and
+// report the step as passed, so a binary that did not check this would certify a suite
+// containing an expectation nobody reads. It needs no custom comparator to write, which
+// is exactly why the binary can and must catch it (contributed phrases it genuinely
+// cannot see — D7).
 const defectsFeature = `Feature: defects
   Scenario: many problems
     Given the agent target "ghost"
@@ -40,6 +48,10 @@ const defectsFeature = `Feature: defects
     Then the moon is made of cheese
     And the run satisfies "tokens <"
     And the run matches shape "missing"
+    And the result contains "hi"
+      """
+      never read by the step above
+      """
 `
 
 // cleanTagged is defect-free: known target, valid @runs tag, valid aggregate CEL.
@@ -53,7 +65,7 @@ Feature: tagged
 `
 
 // seedDefectCorpus writes a valid config, a MALFORMED expectations file (the
-// config/expectations defect class), and the four-defect feature. It returns the
+// config/expectations defect class), and the five-defect feature. It returns the
 // config path and the features dir. The Tempo endpoint is deliberately
 // unreachable — validate must never dial it (no network by construction).
 func seedDefectCorpus(t *testing.T) (cfgPath, featuresDir, expDir string) {
@@ -97,7 +109,7 @@ func classesIn(out string) map[string]bool {
 }
 
 // TestValidateCollectsAllFindings proves a single validate run reports every
-// authoring defect class it can — three feature defects plus the malformed
+// authoring defect class it can — four feature defects plus the malformed
 // expectations file — with exit 1, never stopping at the first finding. Because
 // the seeded expectations dir fails to load, the shape check is (correctly) skipped
 // here; genuine unknown-shape is covered by TestValidateUnavailableSourceDoesNotBalloon.
@@ -115,7 +127,7 @@ func TestValidateCollectsAllFindings(t *testing.T) {
 	}
 
 	got := classesIn(out.String())
-	for _, class := range []string{"unbound-step", "bad-cel", "unknown-target", "expectations"} {
+	for _, class := range []string{"unbound-step", "bad-cel", "unknown-target", "expectations", "step-argument"} {
 		if !got[class] {
 			t.Errorf("missing finding class %q in output:\n%s", class, out.String())
 		}
@@ -131,6 +143,11 @@ func TestValidateCollectsAllFindings(t *testing.T) {
 		"unknown-target": 3,
 		"unbound-step":   5,
 		"bad-cel":        6,
+		// The bound step carrying a docstring its handler never declared. This is the
+		// binary's half of the step-argument check: it cannot see contributed phrases,
+		// but every built-in row's declared argument is derived from the handler it
+		// registers, so this class is fully within its reach.
+		"step-argument": 8,
 	}
 	for class, line := range wantLines {
 		if !hasFindingAtLine(out.String(), featuresDir, class, line) {
@@ -602,5 +619,68 @@ func TestValidateBadFormatFlag(t *testing.T) {
 	}
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2 for a bad flag", code)
+	}
+}
+
+// TestValidateUsageStatesTheContributedPhraseLimit is T057's real assertion: the
+// limit must be STATED, not merely true.
+//
+// A compiled binary cannot see comparator-contributed phrases, so a suite written in
+// them reports every phrase as unbound here. That is structural and cannot be fixed
+// with a flag — which makes it a trap unless --help says so and points at the way out.
+// A user who hits a wall of unbound-step findings on a file they know is valid must be
+// able to find the explanation without reading the source.
+func TestValidateUsageStatesTheContributedPhraseLimit(t *testing.T) {
+	var buf bytes.Buffer
+	code, err := validateCmd([]string{"--help"}, &buf)
+	// --help is flag.ErrHelp, surfaced as a usage exit rather than success.
+	if err == nil && code == 0 {
+		t.Fatalf("validate --help returned success; want a usage exit\n%s", buf.String())
+	}
+	got := buf.String()
+	for _, want := range []string{
+		"BUILT-IN steps only",
+		"Comparator-contributed",
+		"compiled binary",
+		"library entry point",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("validate --help does not mention %q; the limit is a trap unless it is documented where a user meets it\n%s", want, got)
+		}
+	}
+}
+
+// TestValidateUsageListsTheChecksItPerforms guards the ENUMERATION in the usage text
+// rather than its mere existence.
+//
+// The usage line tells an author what `mentat validate` looks at, and convergence found
+// it had gone stale: the binary gained the step-argument check — a built-in step carrying
+// an argument its handler cannot receive — while the help still listed only the original
+// four. That omission is load-bearing, not cosmetic. The check is marked BREAKING
+// (authoring) in the CHANGELOG and fails suites that previously passed, so the first
+// place its victim looks is the text that did not mention it.
+//
+// Asserted per-check, so giving the binary a new finding class without documenting it
+// reddens here instead of shipping. `ambiguous-step` is deliberately NOT in this list:
+// the binary binds against built-in patterns only and no two of those are known to match
+// one sentence, so it is not a check this binary can report.
+func TestValidateUsageListsTheChecksItPerforms(t *testing.T) {
+	var buf bytes.Buffer
+	code, err := validateCmd([]string{"--help"}, &buf)
+	if err == nil && code == 0 {
+		t.Fatalf("validate --help returned success; want a usage exit\n%s", buf.String())
+	}
+	got := buf.String()
+	for _, want := range []string{
+		"step binding",
+		"step arguments",
+		"target",
+		"shape",
+		"CEL",
+		"@runs",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("validate --help does not name the %q check it performs\n%s", want, got)
+		}
 	}
 }

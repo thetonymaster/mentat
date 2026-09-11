@@ -33,6 +33,7 @@ import (
 	"github.com/thetonymaster/mentat/internal/config"
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/result"
+	"github.com/thetonymaster/mentat/internal/steps"
 	"github.com/thetonymaster/mentat/internal/trace"
 )
 
@@ -55,6 +56,37 @@ type Comparator = core.Comparator
 // is discovered by type assertion, so implementing it is opt-in and omitting it
 // breaks nothing.
 type ExpectationParser = core.ExpectationParser
+
+// PhraseContributor is the optional seam that lets a comparator declare the
+// Gherkin sentences which invoke it, so a feature file reads in the comparator's
+// own domain language instead of naming a registry key and handing it a payload.
+//
+// It is the sibling of ExpectationParser, not its replacement: both are optional,
+// both are discovered by type assertion, and a comparator may implement either,
+// both, or neither. Phrases are resolved once per engine build and are scoped to
+// that engine — two engines in one process never see each other's.
+type PhraseContributor = core.PhraseContributor
+
+// CaptureParser turns a contributed phrase's regex captures into the comparator's
+// own Expectation, the way ExpectationParser turns a docstring body into one.
+// Implement it alongside PhraseContributor when a phrase carries captures.
+type CaptureParser = core.CaptureParser
+
+// ContributedPhrase is one Gherkin sentence a comparator offers, with the
+// documentation the step reference renders. Its Pattern must be anchored
+// (`^…$`); Group, Summary and Example must be non-empty. Every rule is enforced
+// at engine build, naming the contributor and the offending value.
+type ContributedPhrase = core.ContributedPhrase
+
+// Finding is one located authoring defect a static check found: which file and line,
+// its class (a stable machine key such as "unbound-step", "bad-cel" or
+// "step-argument"), and a human message. Validate returns these.
+type Finding = steps.Finding
+
+// StepDoc is one row of the step reference: the group it belongs under, the registered
+// pattern, a one-line summary and one valid Gherkin example. StepReference returns
+// these.
+type StepDoc = steps.StepDoc
 
 // Judge is the semantic-verdict seam: a registrable adapter (WithJudge hook).
 type Judge = core.Judge

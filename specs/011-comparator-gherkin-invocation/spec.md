@@ -115,6 +115,10 @@ recorded here so 012's spec can start from it rather than re-deriving it.
 here the way 009 recorded its own renumbering, so the roadmap line and the spec directories
 never silently disagree.
 
+*(Superseded 2026-09-11, and left in place because it records what D1 decided rather than
+where the item ended up: 012's convergence took 013 for built-in step-pattern disjointness,
+so CLI/`mentatctl` UX is now **014**. The roadmap block in `CLAUDE.md` is authoritative.)*
+
 ### D2 — `ParseExpectation` receives the text and nothing else
 
 ```go
@@ -495,7 +499,8 @@ failing custom comparator, asserting a non-zero exit and a failing scenario in t
 
 - **Option B — comparator-contributed Gherkin phrases.** Deferred to **012**, with the full
   rationale and the A-is-a-subset-of-B relationship recorded in D1. CLI/`mentatctl` UX moves
-  to **013**.
+  to **013** — *renumbered again to 014 on 2026-09-11; see the note under D1's Renumbering
+  paragraph.*
 - **Custom aggregate comparators.** No `WithAggregateComparator` facade option exists, so
   there is nothing to invoke (D4). Publishing the aggregate registration path — the option,
   the factory type and the seam — is a candidate for its own spec, in the same

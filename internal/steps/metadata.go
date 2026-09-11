@@ -67,12 +67,47 @@ type stepRegistrar interface {
 
 var _ stepRegistrar = (*godog.ScenarioContext)(nil)
 
+// phraseStep is one comparator-contributed phrase prepared for registration: the
+// pattern to bind and the handler synthesized for it.
+//
+// registerSteps takes prepared pairs rather than raw ContributedPhrase values so
+// that the runner's handler-signature rules stay contained in phrase.go and
+// registration stays a single, dumb loop. Registration decides ORDER; phrase.go
+// decides what a handler is.
+type phraseStep struct {
+	pattern string
+	handler any
+}
+
 // registerSteps binds every step in the metadata table to reg, resolving each
-// handler selector against w. This is the sole registration path: the composition
-// closure delegates to it, and the drift test drives it with a spy.
-func registerSteps(reg stepRegistrar, w *world) {
+// handler selector against w, then binds the contributed phrases supplied for this
+// engine. This is the sole registration path: the composition closure delegates to
+// it, and the drift test drives it with a spy.
+//
+// # Why phrases are a PARAMETER and not read from w.eng
+//
+// This is a real constraint, not a style choice. The drift test calls registerSteps
+// with a ZERO world, so w.eng is nil (it only needs method values bound, never
+// invoked). Reaching through w.eng for phrases would panic there, and nil-guarding
+// it would be precisely the silent fallback No Silent Fallbacks forbids — the drift
+// test would assert over an empty set while believing it covered the real one.
+//
+// Passing the set in also satisfies the composition rule: this unit knows its input
+// type and nothing about who calls it.
+//
+// # Why built-ins register FIRST
+//
+// The runner returns the first matching step definition, so registration order
+// decides which pattern wins a collision. Built-ins first means a contributed phrase
+// can never displace one. Under Strict a genuine overlap surfaces as an ambiguity
+// failure naming every matching expression rather than resolving silently, but the
+// ordering is what makes the outcome deterministic in the first place.
+func registerSteps(reg stepRegistrar, w *world, phrases []phraseStep) {
 	for _, sd := range stepDefs {
 		reg.Step(sd.pattern, sd.handler(w))
+	}
+	for _, p := range phrases {
+		reg.Step(p.pattern, p.handler)
 	}
 }
 

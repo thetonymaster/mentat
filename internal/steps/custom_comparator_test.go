@@ -133,7 +133,7 @@ func withComparator(name string, c core.Comparator) engine.Option {
 func runInlineFeature(eng *engine.Engine, name, contents string) (int, string) {
 	var out bytes.Buffer
 	suite := godog.TestSuite{
-		ScenarioInitializer: Initializer(eng),
+		ScenarioInitializer: mustInit(Initializer(eng)),
 		Options: &godog.Options{
 			Format:          "pretty",
 			Output:          &out,
@@ -496,10 +496,13 @@ func TestCustomComparatorIsCompletenessSensitive(t *testing.T) {
 }
 
 // TestCustomComparatorDocNil pins FR-017: a malformed step with no docstring is
-// rejected with a descriptive error BEFORE doc.Content is touched. Seven of the eight
-// existing docstring handlers guard this; the eighth (responseBodyJSONContains,
-// steps.go:543) does not and panics — a pre-existing defect recorded in this
-// feature's research, not fixed here.
+// rejected with a descriptive error BEFORE doc.Content is touched.
+//
+// The note that used to sit here — "the eighth (responseBodyJSONContains, steps.go:543)
+// does not and panics … not fixed here" — is stale twice over. `0f9dcea` added that
+// guard (steps.go:596-598), and there are NINE docstring handlers, not eight; the line
+// number was already wrong when written. All nine guard their nil today, and as of the
+// step-argument work so do the two data-table handlers.
 //
 // Written and observed failing (by panic) before the guard existed, so the guard is
 // proven rather than assumed. Mirrors TestResultMeansDocNil.

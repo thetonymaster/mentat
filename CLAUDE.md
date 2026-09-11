@@ -115,10 +115,17 @@ from Tempo, and run **comparators** that assert how it behaved and what it produ
   `gen_ai.*` span forests and tool-call sequences. See `.claude/skills/traces`.
 - `/coverage` — run `go test` with coverage and enforce the 80% floor.
 
-<!-- SPECKIT START -->
+## Feature history and standing rules
+
+> These notes are **curated, not generated**. They sit above the `<!-- SPECKIT -->`
+> markers deliberately: the agent-context hook REPLACES everything between those
+> markers with a three-line pointer to the current plan, so anything kept inside them
+> is destroyed the next time that hook runs. Add feature retrospectives here, never
+> below the marker.
+
 Features 001–011 are shipped. **011-comparator-gherkin-invocation**
 (`specs/011-comparator-gherkin-invocation`, implemented 2026-09-10, all 37 tasks
-complete) is on branch `011-comparator-gherkin-invocation`, not yet merged. Both plan
+complete) is **merged to `main`** as `ec4efbc` (#39). Both plan
 invariants held: the public-surface golden changed **exactly once, by exactly two
 lines**, and no `stepDefs` drift-test assertion was edited anywhere in the branch —
 the operational test of D1's claim that this was Option A and not Option B.
@@ -179,9 +186,178 @@ are indistinguishable from test output alone.
 
 **Roadmap, renumbered by 011's D1:** 012 is comparator-contributed Gherkin phrases
 (Option B, a superset of 011 — nothing 011 builds is discarded); CLI/`mentatctl` UX
-moves from 012 to **013**. The 009 roadmap line
-(`specs/009-extension-surface-integrity/spec.md:143`) still shows the old numbering
-and should be corrected when 012 is specified.
+moves from 012 to 013. The 009 roadmap line
+(`specs/009-extension-surface-integrity/spec.md:143`) was corrected on 2026-09-10,
+along with its `:65` sibling that cited the range `010–012`.
+
+**Renumbered again 2026-09-11, by 012's convergence:** **013 is built-in step-pattern
+disjointness**, and CLI/`mentatctl` UX moves from 013 to **014**. See the roadmap entry
+after 012 below for why 013 exists.
+
+**012-comparator-gherkin-phrases** (`specs/012-comparator-gherkin-phrases`, implemented
+2026-09-11, all 69 tasks complete) is on branch `012-comparator-gherkin-phrases`.
+
+What landed: two OPTIONAL seams in `internal/core` — `PhraseContributor` (a comparator
+declares the Gherkin sentences that invoke it) and `CaptureParser` (its captures become
+the comparator's own Expectation) — plus `ContributedPhrase`, `Engine.ContributedPhrases`,
+a `reflect.MakeFunc` handler bridge in `internal/steps/phrase.go`, `mentat.Validate`, and
+`Strict: true` on `mentat.Run`'s godog options. Convergence added two finding classes:
+`step-argument` (Phase 9) and `ambiguous-step` (Phase 10) — see the godog notes below, since
+both are consequences of measured godog behaviour rather than design choices.
+
+The headline guarantee is **equivalence**: a contributed phrase and 011's generic step
+produce identical pass/fail, identical reason text, identical qualifiers and an identical
+expectation value (`custom_phrase_facade_test.go`). 011's path is provably untouched — the
+`Extend` row and `comparatorSatisfiedByDoc` are byte-identical, and the only edit to its
+test file is one mechanical `mustInit(...)` wrap.
+
+Four corrections this feature made to its own artifacts — the same shape as 011's, and
+worth reading before trusting the spec text:
+
+- **R10: the ambiguity defect is LATENT, not live.** R1's first draft claimed it was
+  "reachable between two built-in patterns today". Measured false — the 40 built-in
+  patterns are **pairwise disjoint** across 1530 generated sentences covering every
+  alternation branch, and registration is single-pathed. Contributed phrases are what
+  make it reachable, so `Strict` is a prerequisite of 012 rather than a separable bugfix.
+  Pinned by `TestBuiltinStepPatternsArePairwiseDisjoint`, which nothing asserted before.
+- **R11: the nameability sweep does NOT demand the new aliases.** R2 claimed 010 would
+  pay for itself here. Measured false — `TestFacadeNameabilitySweep` is SEEDED from the
+  aliases that already exist, so removing one removes its seed and nothing fires; and both
+  new seams are optional, so no published type references them. SC-008 still holds, via
+  the public-surface golden plus the external-package compile-time witnesses — the same
+  pair 011 used. **A gate's coverage is a property to measure, not to infer from its name.**
+- **`StepBindingFindings` had ONE non-test caller, not two** (`cmd/mentat/validate.go`).
+  Which is also why its `sync.Once` never bit: its only consumer was a single-shot CLI
+  process.
+- **Both stdout goldens captured godog's step-definition SOURCE LINE**
+  (`# metadata.go:75 -> *world`), so documenting `registerSteps` churned them with no
+  change to rendered output. Both normalizers now collapse the line number and keep the
+  filename. The e2e one was caught only by running `go test -tags e2e` — `make ci` does
+  not compile that lane.
+
+Three design decisions worth knowing before extending this:
+
+- `registerSteps` takes its phrases as a **parameter**, not from `w.eng`. The drift test
+  drives it with a zero `world` whose `eng` is nil; nil-guarding would be the silent
+  fallback that makes a drift test assert over an empty set while believing otherwise.
+- The drift gate became a **partition** (every registered pattern is either a `stepDefs`
+  row or a member of the supplied contributed set, counts adding up) rather than being
+  relaxed into an unchecked superset.
+- Validation lives in `internal/steps`, not `engine.Build`: `internal/engine` cannot import
+  `internal/steps`, and V4 (collision with a built-in) is a statement about `stepDefs`.
+  It runs at composition, so no scenario executes when a phrase is malformed.
+
+`docs/extending/phrases.md` is the authoring guide. `mentat steps` and `docs/steps.md`
+remain **built-in only** — a compiled binary cannot see a consumer's registrations, which
+is structural; use `mentat.Validate` and the engine-scoped renderer from your own test
+binary.
+
+Read `research.md` before touching anything godog-related. Everything below was
+**measured** against the pinned `godog v0.15.1`, and every one of these corrected a claim
+someone had previously asserted without testing:
+
+- **godog reports an ambiguous match only under `Strict`** (`suite.go:547-553`), and
+  `mentat.Run` did not set it (`run.go:411-419`). Measured: two patterns matching one
+  step resolve **silently to the first-registered one and the scenario PASSES** — the
+  After hook receives a nil `stepErr`. 011's D1 asserted the opposite. Enabling `Strict`
+  surfaces it through the existing After-hook path as a FAILED scenario naming every
+  matching expression — no new mechanism needed. The branch was **latent, not live**, at
+  `0f9dcea` (see R10 above); built-ins register first, so the phrase a contributed
+  collision would silently swallow is always the contributed one.
+- **godog SILENTLY DISCARDS any step argument the handler did not declare** — the
+  conversion loop runs `i < numIn`, so a step carrying a docstring **or a data table**,
+  matched by a phrase that takes none, runs on its captures alone and the scenario
+  reports **PASSED** with the argument never read. **Now closed for BOTH sources** by
+  `StepArguments` (`internal/steps/stepargs.go`) at scenario init, in `mentat.Validate`
+  and in the `mentat validate` binary, with an unrecognised argument kind rejected by
+  default so the next argument type godog adds is refused rather than silently joining
+  the list of things that vanish.
+
+  It took **three** attempts, each aimed at an instance rather than the mechanism, and
+  review found the same hole one step over every time: docstrings on phrases → data
+  tables on phrases (one struct field away) → **all 40 built-in steps** (no comparator
+  needed to reach it at all). The built-in half is the one worth remembering: it was
+  pre-existing on `main`, reachable by anyone who types a docstring under the wrong step,
+  and it survived two rounds of fixing *this exact defect* because each fix was scoped to
+  where the defect had been found rather than to what caused it.
+
+  The expected argument is **derived by reflection from each `stepDefs` row's handler
+  signature**, never listed beside it — a hand-kept list would be a second source of truth
+  for the thing `stepDefs` exists to be the only source of, and it would drift silently
+  back into the same unearned green. Pinned end-to-end by
+  `TestBuiltinStepWithSurplusArgumentMakesTheRunRed`, rehearsed against the pre-fix state
+  (`stepArgs := StepArguments{}` → suite status 0, "1 scenarios (1 passed)").
+
+  Two review rounds on the FIX found the same defect class inside it, twice: the comment
+  claiming godog delivers an argument only into `*godog.DocString`/`*godog.Table`
+  (**false** — a plain `string` parameter receives it too, so a drifting handler would
+  false-RED every scenario using its step; now an arity invariant, `checkBuiltinArity`),
+  and a message promising a silent pass in cases that actually fail loudly. Chasing the
+  second exposed a real panic: `toolsInOrder`/`servicesInOrder` dereferenced a typed-nil
+  `*godog.Table`, unlike all nine docstring handlers. Both now nil-guard.
+- **Enabling `Strict` churns zero goldens**, measured on both surfaces (`go test ./...`
+  and `go test -tags e2e` with the harness up). `make ci` does not compile the e2e lane,
+  so it is not evidence for this on its own.
+- godog accepts no `[]string` or variadic step handler (`internal/models/stepdef.go:222-233`)
+  and **silently discards surplus captures** (`stepdef.go:58`), so contributed phrases need
+  a `reflect.MakeFunc` bridge with arity derived from the pattern's `NumSubexp()`.
+- **godog's ambiguity check reduces to a per-sentence multi-match, so the static check is the
+  SAME predicate and not an approximation** (R15). `matchStepTextAndType`
+  (`suite.go:511-556`) returns `ErrAmbiguous` under `Strict` when more than one registered
+  expression matches, and its `keywordMatches` filter (`suite.go:558-560`) is **inert for every
+  Mentat step** — `ScenarioContext.Step` registers with `formatters.None`
+  (`test_context.go:255-257`) and `registerSteps` uses `reg.Step` for both halves
+  (`metadata.go:107,110`). Had any step registered via `Given`/`When`/`Then`, a static check
+  ignoring the keyword would false-RED valid files; a repo-wide grep confirms none does.
+
+  This closed the last Validate/Run asymmetry: `mentat.Validate` used to report **CLEAN** on a
+  step `Run` refuses as ambiguous, i.e. a validator certifying a suite the runner rejects —
+  the drift D7 exists to remove. `StepBindingFindings` (`internal/steps/precheck.go`) now
+  classifies every step by how many patterns match: `0` → `unbound-step`, `1` → clean, `>1` →
+  **`ambiguous-step`** naming every match in registration order. One function answers all three
+  because it is one question; a separate ambiguity check is how the two would drift apart again.
+
+  Reachable because pattern validation rejects only **identical** patterns, so two
+  distinct-but-overlapping contributed phrases coexist legally. It reaches suites through
+  `mentat.Validate`; from the binary it is unreachable **as measured, not structurally** — the
+  disjointness test substitutes nine fixed fillers, so it is evidence, not proof.
+
+  **Neither Mentat nor godog computes regex overlap.** Both classify per sentence, so a
+  collision on a sentence the corpus does not contain is reported by nobody.
+
+All five are properties of the **pinned** `godog v0.15.1`; a bump re-opens them.
+
+**Roadmap after 012:**
+
+- **013 — built-in step-pattern disjointness: prove it, or stop relying on it.** 012's
+  `ambiguous-step` class is unreachable from the `mentat validate` binary, and that is now
+  written down in three places — `contracts/validate-surface.md` §4, `CHANGELOG.md`, and the
+  doc comment on `StepBindingFindings` — as **measured, not structural**. The measurement is
+  `TestBuiltinStepPatternsArePairwiseDisjoint` (`internal/steps/metadata_test.go:286`), which
+  generates sentences from each pattern's own syntax tree, expanding every alternation branch
+  — but substitutes just **nine fixed fillers** (`"x"`, `""`, `"a b"`, `"1"`, `"2nd"`,
+  `"true"`, `"0.5"`, `"tool-name"`, `"a/b.c"`) into capture groups and character classes. Two
+  built-ins colliding only on a string no filler produces would pass it.
+
+  So "the 40 built-in patterns are pairwise disjoint" is **evidence, not proof**, and four
+  things rest on it: V4's rationale (rejecting a contributed pattern identical to a built-in's
+  is only meaningful if the built-in set is itself unambiguous); R10's "latent, not live"
+  finding; the binary's inability to report `ambiguous-step`; and `StepArguments.matchBuiltin`
+  (`internal/steps/stepargs.go:305`) returning the FIRST match as though it were the only one.
+
+  The overclaim was caught in review during 012's Phase 10: a draft of `validate-surface.md`
+  said "structurally unreachable" while its own next clause conceded the test "proves only over
+  generated sentences". It was corrected to "unreachable **as measured**", which is honest and
+  leaves the gap open — hence this feature.
+
+  Three routes, to weigh rather than assume: decide regex intersection for the built-in set
+  (RE2 makes emptiness-of-intersection decidable in principle; Go's stdlib exposes nothing for
+  it); widen the generator (more fillers is more evidence, never proof); or **stop relying on
+  the property** — have `matchBuiltin` report every match and route it through the
+  `ambiguous-step` path that already exists. Only the third removes the assumption instead of
+  strengthening it.
+
+- **014 — CLI/`mentatctl` UX.** Renumbered from 013 on 2026-09-11 by the entry above.
 
 Two standing rules 010 established — read these before touching the facade:
 
@@ -200,4 +376,9 @@ and other important information, read `specs/` as history — each feature dir c
 its `spec.md`, `plan.md`, `tasks.md`, and `contracts/`. When work is in flight, the
 current plan is the `plan.md` of the highest-numbered spec dir whose `tasks.md`
 still has unchecked tasks.
+
+<!-- SPECKIT START -->
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read the current plan
+at specs/012-comparator-gherkin-phrases/plan.md
 <!-- SPECKIT END -->

@@ -1,0 +1,259 @@
+# Baseline evidence for 012-comparator-gherkin-phrases (T002)
+
+Captured 2026-09-10 on branch `012-comparator-gherkin-phrases`, created from `main` at `0f9dcea`
+with the Tempo harness up (`make harness-up`, 8 containers).
+
+This is the **before** half of SC-009 (zero cost when unused) and SC-012 (`Strict` churns no
+golden). The **after** half is recorded by T006/T007 and re-confirmed by T066.
+
+---
+
+## 1. `go test ./...` — all non-e2e packages
+
+    all ok, 0 FAIL
+
+## 2. `go test -tags e2e -timeout 25m ./e2e/` — live Tempo
+
+    ok  github.com/thetonymaster/mentat/e2e  40.101s
+
+`make ci` does NOT compile this lane. A green `make ci` is not evidence for SC-012.
+
+## 3. Per-package coverage (`go test ./... -coverprofile=... && go tool cover -func=...`)
+
+| Package | Baseline coverage |
+|---|---|
+| `github.com/thetonymaster/mentat` (facade) | 99.1% |
+| `cmd/mentat` | **69.4%** |
+| `cmd/mentatctl` | **31.4%** |
+| `e2e` | 100.0% |
+| `internal/cel` | 87.3% |
+| `internal/comparator` | 95.0% |
+| `internal/config` | 100.0% |
+| `internal/core` | 100.0% |
+| `internal/correlate` | 98.8% |
+| `internal/ctl` | 91.0% |
+| `internal/driver` | 94.5% |
+| `internal/engine` | 95.2% |
+| `internal/expectations` | 91.6% |
+| `internal/judge` | 97.8% |
+| `internal/registry` | 90.3% |
+| `internal/report` | 95.1% |
+| `internal/result` | 100.0% |
+| `internal/steps` | 88.9% |
+| `internal/store` | 95.4% |
+| `internal/testio` | 92.9% |
+| `internal/trace` | 94.4% |
+| `tracelab/orderflow` | 93.4% |
+| `tracelab/orderflow/cmd/orderflow` | 48.6% |
+| `tracelab/researchbot` | 92.9% |
+
+### Note on the 80% floor (affects T063)
+
+`cmd/mentat` (69.4%) and `cmd/mentatctl` (31.4%) are **already below** the constitution's 80%
+per-package floor at `0f9dcea`. 012 touches `cmd/mentat`.
+
+T063's obligation is therefore read as: packages at or above 80% must stay at or above 80%;
+packages already below must **not regress**. This is recorded rather than silently assumed,
+because reinterpreting a gate without saying so is how gates quietly stop meaning anything.
+
+The packages 012 actually changes and their floors to hold:
+
+| Package | Baseline | Obligation |
+|---|---|---|
+| `internal/core` | 100.0% | stay ≥ 80% (expect ~100%) |
+| `internal/steps` | 88.9% | stay ≥ 80% |
+| `internal/engine` | 95.2% | stay ≥ 80% |
+| `github.com/thetonymaster/mentat` (facade) | 99.1% | stay ≥ 80% |
+| `cmd/mentat` | 69.4% | no regression below 69.4% |
+
+---
+
+## 3a. SC-009's "byte-identical" needs one caveat (found 2026-09-11)
+
+SC-009 says an engine with zero contributed phrases must produce **byte-identical** output to
+`0f9dcea` across every existing golden. Taken literally that is unachievable, and not for any
+behavioural reason.
+
+godog's pretty formatter annotates each step with the **source location** of the step definition
+it bound:
+
+    Given the agent target "bot"        # metadata.go:75 -> *world
+
+`testdata/golden-hermetic.txt` captured that verbatim, so adding a comment anywhere above the
+`reg.Step` loop in `metadata.go` churns the golden — `metadata.go:75` became `metadata.go:107`
+with the rendered output otherwise identical.
+
+**Resolution**: `normalizeGoldenStdout` now rewrites the line number to `<LINE>`, keeping the
+filename. Registration moving to a different file still churns the golden (a real change to the
+single registration path); the line within that file does not.
+
+SC-009 should be read as **byte-identical after the golden's own normalization** — which is
+already how it treats the trailing duration line (`<DURATION>`). This is a clarification of an
+existing convention rather than a new exemption.
+
+### A SECOND caveat: the golden clause holds, the behavioural clause no longer does
+
+Found at convergence (Phase 10 / T089, 2026-09-11). SC-009 carries two claims, and after
+Phase 9 they have different answers.
+
+**The golden clause still holds — measured.** With zero contributed phrases, `make ci` and an
+uncached `go test -tags e2e` are both green and no golden churns.
+
+**"Proving the feature costs nothing when unused" is no longer true of BEHAVIOUR.** Phase 9
+closed the built-in half of the step-argument gap, and that check runs for EVERY engine,
+including one that contributes nothing:
+
+    a suite that PASSED at 0f9dcea with a surplus docstring on a built-in step now FAILS.
+
+That is not a regression and it is not an accident. The scenario that used to pass was
+reporting a verdict that never read the expectation its author wrote — godog discarded the
+argument in silence. Failing it is the entire point. But it means the honest reading of SC-009
+is now:
+
+> An engine with zero contributed phrases produces byte-identical output *after normalization*
+> for every suite that was **already correct**. Suites relying on an argument being silently
+> discarded change verdict, deliberately.
+
+Recorded rather than reverted: this was a deliberate, maintainer-approved scope change, made
+after convergence surfaced that the defect reached all 40 built-in steps and not just
+contributed phrases. The alternative — scoping the fix to phrases to protect the letter of
+SC-009 — would have left the larger half of the defect in place to satisfy a success criterion,
+which is the tail wagging the dog. The CHANGELOG marks it **BREAKING (authoring)** for the same
+reason.
+
+---
+
+## 3b. Final coverage (T064) — measured at the committed state
+
+THREE earlier versions of this section recorded numbers that **did not reproduce**. Review
+caught the first two; convergence caught the third, after Phases 8-9 moved two packages and
+this section still showed the pre-Phase-8 figures. That is the same failure this feature kept
+finding in itself — and the section documenting how to avoid stale measurements went stale
+three times, which is worth more than the numbers it holds. The process is therefore recorded
+alongside the result:
+
+- measured with `-count=1` (a cached run reports the PREVIOUS code's figures — that is
+  how the first set survived);
+- `main`'s numbers taken from its own worktree at `0f9dcea`, because `git checkout main`
+  fails silently when main is checked out elsewhere and reports the current branch's
+  figures instead;
+- measured **after** the final commit, not partway through.
+
+| Package | `main` @ `0f9dcea` | branch (final) | Verdict |
+|---|---|---|---|
+| `github.com/thetonymaster/mentat` | 99.1% | **96.6%** | ≥ 80% ✓ |
+| `internal/core` | 100.0% | 100.0% | ≥ 80% ✓ |
+| `internal/engine` | 95.2% | **95.0%** | ≥ 80% ✓ |
+| `internal/steps` | 88.9% | **89.5%** | ≥ 80% ✓, above baseline |
+| `cmd/mentat` | 69.4% | **62.0%** | below baseline — arithmetic, see below |
+
+Commands: `go test -count=1 ./... -coverprofile=…` here; the same in a `main` worktree.
+
+Re-measured at convergence (Phase 10 / T088, 2026-09-11) after Phases 8-10 landed. `internal/
+engine` 93.6% -> 95.0% and `internal/steps` 89.2% -> 89.5%; `cmd/mentat` and the facade are
+unchanged, so the arithmetic explanation below still stands as written. Taken at the final
+branch content with every code change complete — the only edits after this measurement are to
+documentation, which cannot move a coverage figure. Both numbers reproduced across two
+independent uncached runs before being written down, which is the check the first stale set
+failed.
+
+### Why `cmd/mentat` fell — measured, not asserted
+
+| | statements | covered | % |
+|---|---|---|---|
+| `cmd/mentat` @ `main` | 281 | 195 | 69.4% |
+| `cmd/mentat` final | 187 | 116 | 62.0% |
+| `internal/steps` @ `main` | 442 | 393 | 88.9% |
+| `internal/steps` final | 753 | 672 | 89.2% |
+| **combined @ `main`** | 723 | 588 | **81.3%** |
+| **combined final** | 940 | 788 | **83.8%** |
+
+The feature-walking logic (`checkFeature`, `featureFiles`, `lineMap`, `newIDGen`,
+`dedupeSort`) MOVED from `cmd/mentat` into `internal/steps` so the CLI and the library
+validate entry point share one implementation. That removed 94 statements from
+`cmd/mentat`, **79 of them covered** — an 84%-covered block, well above the package's
+69.4% average. Removing an above-average block lowers the average; no coverage was lost,
+and the combined figure rose by 2.5 points.
+
+What remains uncovered in `cmd/mentat` is `main`, `usage` and `runMain` — 0% at baseline
+too, being the `os.Exit` shell the pure seams exist to keep untested.
+
+**Why `make ci` is green regardless**: the coverage gate
+(`.claude/skills/coverage/coverage.sh:44-47`) SKIPS `*/cmd/*`, `*/cmd`, `*/mocks` and
+`*/mocks/*`. `cmd/mentat` has therefore never been subject to the 80% floor and its
+number is informational. Stated because the argument above would otherwise look like
+what keeps CI green, and it is not.
+
+**Conclusion**: `cmd/mentat`'s regression is arithmetic and explained; every other
+touched package is above the floor, and `internal/steps` — where nearly all the new code
+lives — finished above its baseline.
+
+---
+
+## 4. Environment
+
+- Go 1.25.0
+- `github.com/cucumber/godog v0.15.1` (pinned — R0 and R1 are properties of this version)
+- `github.com/cucumber/messages/go/v21 v21.0.1`
+- Harness: `deploy-tempo-1`, `deploy-collector-1`, 6 orderflow SUTs, all up
+
+---
+
+## 5. After — SC-012 re-measured with `Strict: true` (T006/T007)
+
+Measured 2026-09-11, immediately after T005 added `Strict: true` to `run.go`.
+
+### T006 — `go test ./...` with `Strict: true`
+
+    all ok, FAIL count = 0     (identical to §1)
+
+Includes the hermetic stdout golden `mentat_golden_test.go`, which did not change.
+
+### T007 — `go test -tags e2e -timeout 25m ./e2e/` with `Strict: true`
+
+    ok  github.com/thetonymaster/mentat/e2e  39.554s     (baseline: 40.101s)
+
+Includes the SC-005 stdout golden, which did not change. Wall-clock varies run to run; what
+SC-012 asserts is that **golden content** does not, and no golden test failed.
+
+### Verdict
+
+**Zero churn on both surfaces.** R0's planning-time measurement reproduced at implementation
+time rather than inherited — which matters, because R1 (the other planning-time claim about
+godog) turned out to be partly false when re-checked (see R10).
+
+---
+
+## 6. Final verification (T066/T067), and the golden `make ci` could not see
+
+Run 2026-09-11 with the harness up, after all implementation.
+
+| Surface | Result |
+|---|---|
+| `gofmt -l .` | clean |
+| `go vet ./...` | clean |
+| `golangci-lint run ./...` | **0 issues** |
+| `go test ./...` | all ok, 0 FAIL |
+| `go test -tags e2e -run TestGolden ./e2e/` | `ok 15.866s` |
+| `go test -tags e2e -timeout 25m ./e2e/` | `ok 35.660s` (baseline 40.101s) |
+| `make ci` | PASS, including `COVERAGE GATE: PASS (all packages >= 80%)` |
+
+### The e2e golden caught what `make ci` structurally cannot
+
+The SC-005 stdout golden (`cmd/mentat/testdata/golden-green.txt`) captured the same
+step-definition source annotation §3a describes — `# metadata.go:75 -> *world` — and 012's
+documentation of `registerSteps` moved that line to 107. The e2e lane FAILED on it.
+
+`make ci` does not compile `//go:build e2e`, so nothing caught this until the e2e run. That is
+exactly why the spec refused to let a green `make ci` discharge SC-012, and it is the second time
+in this feature that running both surfaces was the only thing that worked.
+
+**Fix**: `normalizeStdout` in `e2e/golden_test.go` now applies the same line-number normalization
+as `normalizeGoldenStdout` in the root package, and the committed golden was regenerated
+(7 insertions, 7 deletions — every one of them a `metadata.go:NNN` → `metadata.go:<LINE>` token,
+no rendered content changed). The two goldens capture the same annotation and now treat it the
+same way; a comment on either side would otherwise churn one and not the other.
+
+**Standing lesson**: a green `make ci` is not evidence about the e2e goldens. Run
+`go test -tags e2e` after any change to step registration, and after any change to the
+FILE LAYOUT around it — not only to the step table.

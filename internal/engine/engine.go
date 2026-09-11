@@ -208,6 +208,62 @@ func (e *Engine) Comparators() []string {
 	return e.reg.Comparators()
 }
 
+// PhraseBinding pairs one contributed Gherkin phrase with the name of the
+// comparator that declared it.
+//
+// The pairing lives here rather than as a field on ContributedPhrase because the
+// binding is STRUCTURAL — a phrase is resolved through the comparator that offered
+// it, so there is nothing for an author to get wrong. A name field on the phrase
+// would be a second, forgeable statement of the same fact. Collision errors need
+// the contributor's name, which is why it is carried alongside rather than dropped.
+type PhraseBinding struct {
+	Comparator string
+	Phrase     core.ContributedPhrase
+}
+
+// ContributedPhrases returns every Gherkin phrase this engine's comparators
+// contribute, paired with its contributor, in sorted comparator-name order —
+// preserving each comparator's own declaration order within its block.
+//
+// It mirrors Comparators() exactly and adds NO registry: phrases are data already
+// reachable through the comparator registry, and a seventh registry for them would
+// be an abstraction with no second implementation.
+//
+// The sort is a CORRECTNESS requirement, not tidiness. The runner returns the first
+// matching step definition, so registration order decides which pattern wins a
+// collision; map iteration order would make an unchanged suite resolve differently
+// between runs. Registry.Comparators() already sorts — 011 added that for a
+// deterministic error message, and 012 makes it load-bearing.
+//
+// Scoped to this engine. Two engines in one process never observe each other's
+// phrases, which is the property the per-engine sealed registry established in 007
+// and which this accessor must not quietly undo.
+func (e *Engine) ContributedPhrases() ([]PhraseBinding, error) {
+	var out []PhraseBinding
+	for _, name := range e.reg.Comparators() {
+		c, ok := e.reg.Comparator(name)
+		if !ok {
+			// Unreachable today: name came from this same sealed registry's own
+			// listing. Reported rather than skipped anyway, because the failure mode
+			// of skipping is nasty and silent — the comparator's phrases vanish and
+			// every sentence using them reports as an unbound step, sending the author
+			// to look at their feature file for a defect that is in the registry.
+			return nil, fmt.Errorf("engine: comparator %q is listed by the registry but cannot be resolved from it", name)
+		}
+		pc, ok := c.(core.PhraseContributor)
+		if !ok {
+			// The seam is optional and discovered by type assertion. A comparator
+			// that does not implement it contributes nothing — this is what keeps
+			// every existing comparator working untouched.
+			continue
+		}
+		for _, p := range pc.ContributedPhrases() {
+			out = append(out, PhraseBinding{Comparator: name, Phrase: p})
+		}
+	}
+	return out, nil
+}
+
 // AggregateComparator resolves a named aggregate comparator from this engine's registry.
 func (e *Engine) AggregateComparator(name string) (core.AggregateComparator, bool) {
 	return e.reg.AggregateComparator(name)

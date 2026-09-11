@@ -174,8 +174,35 @@ one before.
 Update this page's taxonomy table in the same PR. A seam that exists in code but not in
 the table above has reintroduced exactly the drift this page was written to end.
 
+## Optional capabilities are not seams
+
+Some extension points are not registered at all. `ExpectationParser`,
+`PhraseContributor` and `CaptureParser` are **optional capabilities** an
+already-registered comparator may additionally implement, discovered by type assertion
+rather than by registration.
+
+They belong in neither the taxonomy table nor this checklist, and the reason is
+structural rather than editorial: every column above — registry ownership, registration
+style, sealing, public hook — is undefined for something that is never registered. An
+optional capability owns no registry entry, is never sealed, and has no `With*` option.
+
+The checklist that *does* apply to one is shorter:
+
+1. Declare the interface in `internal/core` and alias it on the facade (010's D5 forbids
+   declaring it at the facade when an internal package consumes it).
+2. Discover it by type assertion at the composition root — never by a registration call,
+   or it stops being optional.
+3. A comparator that does not implement it must keep working unchanged, and a test must
+   assert that implementing one capability does not imply another.
+4. Add a compile-time witness in an EXTERNAL test package
+   (`var _ mentat.Thing = (*yourStub)(nil)`). This is the guard that matters: the
+   nameability sweep is seeded from existing aliases and cannot notice a missing one,
+   so only an external package failing to build proves the type is truly nameable.
+5. Expect the public-surface golden to record the interface and its full method set.
+
 ## See also
 
+- [Contributing Gherkin phrases from a comparator](phrases.md) — a worked optional capability
 - [Stability policy](stability.md) — what changing the public surface obliges you to do
 - [Writing a custom Driver](driver.md)
 - [Writing a custom TraceStore](store.md)

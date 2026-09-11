@@ -73,14 +73,14 @@ type world struct {
 
 // Initializer binds the v1 grammar; results go to a discarded collector.
 // Existing callers are unaffected; results are not surfaced.
-func Initializer(eng *engine.Engine) func(*godog.ScenarioContext) {
+func Initializer(eng *engine.Engine) (func(*godog.ScenarioContext), error) {
 	return InitializerWithCollector(eng, report.NewCollector())
 }
 
 // InitializerWithCollector binds the v1 grammar and records one ScenarioResult per
 // scenario into col. Use this at the composition root to capture run reports. It runs
 // with no judge budget (unlimited) — today's behaviour.
-func InitializerWithCollector(eng *engine.Engine, col *report.Collector) func(*godog.ScenarioContext) {
+func InitializerWithCollector(eng *engine.Engine, col *report.Collector) (func(*godog.ScenarioContext), error) {
 	return InitializerWithBudget(eng, col, nil, nil)
 }
 
@@ -89,15 +89,43 @@ func InitializerWithCollector(eng *engine.Engine, col *report.Collector) func(*g
 // completed judge cost; when the running total crosses the ceiling (or a usage cannot
 // be priced) abort cancels the suite context so no NEW scenario starts a judge call.
 // A nil budget disables the check (unlimited); a nil abort makes the trip advisory.
-func InitializerWithBudget(eng *engine.Engine, col *report.Collector, budget *report.Budget, abort context.CancelFunc) func(*godog.ScenarioContext) {
+// It returns an error when this engine's comparator-contributed phrases cannot be
+// prepared — an uncompilable or malformed pattern, or a comparator that contributes a
+// phrase it cannot parse. That is reported HERE, at composition, rather than when a
+// scenario happens to use the phrase: a defect in the extension surface must stop the
+// suite before any SUT is driven, not produce one mysterious red scenario.
+func InitializerWithBudget(eng *engine.Engine, col *report.Collector, budget *report.Budget, abort context.CancelFunc) (func(*godog.ScenarioContext), error) {
+	// Phrases are resolved ONCE per initializer, not per scenario: the contributed
+	// set is a property of the engine, and re-resolving it per scenario would invite
+	// it to differ between them.
+	resolved, err := resolvePhrases(eng)
+	if err != nil {
+		return nil, err
+	}
+	// Prepared once: the step-argument agreement check for every built-in row plus
+	// this engine's contributed phrases.
+	stepArgs := newStepArguments(resolved)
+
 	return func(sc *godog.ScenarioContext) {
 		w := &world{eng: eng, col: col, budget: budget, abort: abort}
 
 		// Registration is table-driven: registerSteps binds every pattern in the
 		// stepDefs metadata table (metadata.go), which is the single source of truth
-		// shared by `mentat steps` / docs/steps.md. A drift test fails if any step is
-		// registered outside this table (see metadata_test.go).
-		registerSteps(sc, w)
+		// shared by `mentat steps` / docs/steps.md, then binds this engine's
+		// comparator-contributed phrases. A drift test proves registration is exactly
+		// the partition of those two sources (see metadata_test.go).
+		//
+		// The phrase set is passed in rather than read from w.eng: the drift test
+		// drives this path with a zero world whose eng is nil, so reaching through it
+		// would panic and nil-guarding it would be a silent fallback.
+		//
+		// Handlers bind to THIS scenario's world, exactly as the built-in handler
+		// selectors do — each scenario has its own evidence, context and ledger.
+		phrases := make([]phraseStep, 0, len(resolved))
+		for _, cp := range resolved {
+			phrases = append(phrases, cp.step(w))
+		}
+		registerSteps(sc, w, phrases)
 
 		// §7: compile every CEL expression in the scenario before any step runs,
 		// so a malformed expectation fails before an expensive SUT is driven.
@@ -119,6 +147,14 @@ func InitializerWithBudget(eng *engine.Engine, col *report.Collector, budget *re
 			}
 			if err := w.precheckShapePatterns(scenario.Steps); err != nil {
 				return ctx, err
+			}
+			// A step carrying an argument its step definition cannot receive —
+			// built-in row or contributed phrase alike — is rejected here, before
+			// any SUT is driven. The surplus
+			// direction is the important one: the runner discards the argument
+			// silently and the scenario reports PASSED on an expectation nobody read.
+			if err := stepArgs.check(scenario.Steps); err != nil {
+				return ctx, fmt.Errorf("scenario-init: %w", err)
 			}
 			return ctx, nil
 		})
@@ -145,7 +181,7 @@ func InitializerWithBudget(eng *engine.Engine, col *report.Collector, budget *re
 			}
 			return ctx, nil
 		})
-	}
+	}, nil
 }
 
 // tagNames extracts the Name field from godog PickleTag slice.
@@ -303,6 +339,14 @@ func addJudge(acc, add *core.JudgeUsage) *core.JudgeUsage {
 }
 
 func (w *world) toolsInOrder(tbl *godog.Table) error {
+	// Measured on godog v0.15.1: a step declaring a data table but carrying a DOCSTRING
+	// reaches this handler with a typed-nil *godog.Table, and dereferencing tbl.Rows is
+	// a panic in library code — forbidden by Constitution IV. StepArguments rejects that
+	// step at scenario init, so this is the last line of defence rather than the first,
+	// which is exactly how the nine docstring handlers already treat their own nil.
+	if tbl == nil {
+		return fmt.Errorf("tools-in-order: expected a data table, got none")
+	}
 	var order []string
 	for i, row := range tbl.Rows {
 		if len(row.Cells) == 0 {
@@ -519,6 +563,14 @@ func (w *world) responseStatus(code int) error {
 }
 
 func (w *world) servicesInOrder(tbl *godog.Table) error {
+	// Measured on godog v0.15.1: a step declaring a data table but carrying a DOCSTRING
+	// reaches this handler with a typed-nil *godog.Table, and dereferencing tbl.Rows is
+	// a panic in library code — forbidden by Constitution IV. StepArguments rejects that
+	// step at scenario init, so this is the last line of defence rather than the first,
+	// which is exactly how the nine docstring handlers already treat their own nil.
+	if tbl == nil {
+		return fmt.Errorf("services-in-order: expected a data table, got none")
+	}
 	var order []string
 	for i, row := range tbl.Rows {
 		if len(row.Cells) == 0 {

@@ -131,6 +131,80 @@ type ExpectationParser interface {
 	ParseExpectation(text string) (Expectation, error)
 }
 
+// ContributedPhrase is one Gherkin sentence a comparator offers, plus the
+// documentation the step reference needs to render it.
+//
+// It mirrors the internal stepDefs row field-for-field minus the handler, because
+// the reference renderers consume that shape and a contributed row must render
+// through the same path as a built-in — one view, not two.
+//
+// There is deliberately NO comparator-name field. The phrase is resolved THROUGH
+// the comparator that declared it, so the binding is structural. A name field
+// would be a second, forgeable statement of the same fact, and the first thing an
+// author could get wrong.
+type ContributedPhrase struct {
+	// Pattern is the regexp the runner matches against. It must be anchored
+	// (begin "^", end with an unescaped "$"): an unanchored pattern is the
+	// realistic way to swallow a neighbouring step, and every built-in pattern is
+	// already anchored, so the rule matches existing practice rather than imposing
+	// a new one.
+	Pattern string
+	// Group is the reference section heading this phrase belongs under. Non-empty.
+	Group string
+	// Summary is a one-line description of what the step asserts. Non-empty.
+	Summary string
+	// Example is one valid Gherkin usage of the phrase. Non-empty.
+	Example string
+}
+
+// PhraseContributor is the optional seam a comparator implements to declare the
+// Gherkin sentences that invoke it, so a feature file can read in the comparator's
+// own domain language instead of naming a registry key and handing it a payload.
+//
+// Like ExpectationParser it is OPTIONAL and discovered by TYPE ASSERTION, never by
+// registration: a comparator that does not implement it keeps working exactly as
+// before.
+//
+// It is consulted ONCE PER ENGINE BUILD, never per scenario. The returned slice is
+// treated as immutable; a comparator that mutates it afterwards has no effect on
+// the built engine, which is the correct outcome — the engine's seam registry is
+// sealed once built.
+type PhraseContributor interface {
+	ContributedPhrases() []ContributedPhrase
+}
+
+// CaptureParser turns a contributed phrase's regex captures into the comparator's
+// own Expectation. It is the SIBLING of ExpectationParser, which keeps its exact
+// signature and role: one receives a docstring body, the other the captures of the
+// sentence that matched.
+//
+// Widening ExpectationParser instead was rejected. It would break a public seam for
+// zero capability gain — Mentat synthesizes the runner binding either way, so
+// nothing forces the comparator-facing signature — and joining captures into one
+// string is lossy at the delimiter, making [] and [""] indistinguishable. That is
+// precisely the silent-corruption shape No Silent Fallbacks exists to prevent.
+//
+// Which seam serves a phrase is decided at engine build from the pattern's shape,
+// never guessed at runtime:
+//
+//	captures   docstring   seam
+//	no         yes         ExpectationParser (unchanged)
+//	yes        no          CaptureParser
+//	yes        yes         CaptureParser, docstring appended as the final capture
+//	no         no          CaptureParser with an empty capture list (constant expectation)
+//
+// caps holds the pattern's capture groups in order, always exactly as many as the
+// pattern declares — never truncated. A parser returning a nil Expectation with no
+// error is REFUSED rather than trusted, because forwarding it would let a
+// comparator that tolerates nil return a passing verdict for a step that asserted
+// nothing.
+//
+// Like ExpectationParser it receives text only: no context, no Evidence. Evidence
+// is the single channel through which a comparator sees run data.
+type CaptureParser interface {
+	ParseCaptures(caps []string) (Expectation, error)
+}
+
 // RunSpec is the driver input. The adapter applies RunID/Tags via its transport.
 type RunSpec struct {
 	Target  string
