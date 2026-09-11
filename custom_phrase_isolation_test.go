@@ -353,8 +353,8 @@ func (c *docPhrase) Compare(_ context.Context, _ mentat.Evidence, _ mentat.Expec
 	return mentat.Verdict{Pass: true}, nil
 }
 
-// TestDocstringMismatchIsRejectedBeforeTheStepRuns closes a hole review found after the
-// feature was otherwise complete, and it is worth stating plainly what the bug was.
+// TestStepArgumentMismatchIsRejectedBeforeTheStepRuns closes a hole review found after
+// the feature was otherwise complete — twice, which is the more useful part of the story.
 //
 // Measured on godog v0.15.1: a step carrying a docstring, matched by a phrase that
 // declares none, has its body SILENTLY DISCARDED — the argument conversion loop runs
@@ -367,15 +367,22 @@ func (c *docPhrase) Compare(_ context.Context, _ mentat.Evidence, _ mentat.Expec
 // docstring-ness is INFERRED from a trailing `:$` in the pattern — a convention an
 // author can simply forget.
 //
+// The FIRST fix checked docstrings only, and review immediately found the identical
+// hole one field over: a surplus DATA TABLE was still discarded and the scenario still
+// passed. That is why the check is now written against the mechanism — any argument the
+// phrase cannot receive — with an unrecognised argument kind rejected by default rather
+// than treated as "none".
+//
 // The opposite direction is also asserted. godog does fail there, so nothing was
 // silent, but its message ("func expected more arguments than given") names neither the
 // comparator nor the pattern, which is useless to someone with several phrases.
-func TestDocstringMismatchIsRejectedBeforeTheStepRuns(t *testing.T) {
+func TestStepArgumentMismatchIsRejectedBeforeTheStepRuns(t *testing.T) {
 	tests := []struct {
 		name     string
 		pattern  string
 		sentence string
 		body     string
+		table    string
 		wantSubs []string
 	}{
 		{
@@ -393,6 +400,18 @@ func TestDocstringMismatchIsRejectedBeforeTheStepRuns(t *testing.T) {
 			body:     "",
 			wantSubs: []string{"doc-phrase", strconv.Quote(`^the revenue matches (\w+):$`), "carries none"},
 		},
+		{
+			// Review found this one AFTER the docstring direction was fixed: the same
+			// mechanism, one field over. No contributed-phrase seam can receive a
+			// table — CaptureParser takes []string, ExpectationParser takes string —
+			// so a table here is always an expectation that cannot be read. Measured
+			// before the fix: passed=1, Compare ran, table gone.
+			name:     "step carries a data table no seam can receive",
+			pattern:  `^the revenue matches (\w+)$`,
+			sentence: "the revenue matches quarterly",
+			table:    "      | min | 4   |\n      | cur | USD |\n",
+			wantSubs: []string{"doc-phrase", "data table", "silently discarded"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -403,7 +422,8 @@ func TestDocstringMismatchIsRejectedBeforeTheStepRuns(t *testing.T) {
 			if tt.body != "" {
 				step += "      \"\"\"\n      " + tt.body + "\n      \"\"\"\n"
 			}
-			body := "Feature: docstring agreement\n  Scenario: mismatched\n" +
+			step += tt.table
+			body := "Feature: step-argument agreement\n  Scenario: mismatched\n" +
 				"    Given the agent target \"bot\"\n    When I run scenario \"any\"\n" + step
 
 			res, out, err := runIsolatedFeature(t, cmp, body)
@@ -466,5 +486,103 @@ func TestMatchingDocstringUsageStillRuns(t *testing.T) {
 				t.Errorf("Compare ran %d time(s), want 1", cmp.compared)
 			}
 		})
+	}
+}
+
+// TestStepArgumentGuardSkipsStepsMatchingABuiltin pins a misdiagnosis review caught.
+//
+// A contributed pattern can overlap a BUILT-IN step that legitimately takes an
+// argument. Built-ins register first, so either the built-in binds the step — and its
+// own rules apply — or the two genuinely collide, which the strict matcher reports by
+// naming every matching expression. Complaining "the body would be silently discarded"
+// about a step whose built-in handler consumes the body sends the author to the wrong
+// place entirely.
+func TestStepArgumentGuardSkipsStepsMatchingABuiltin(t *testing.T) {
+	// Overlaps the built-in `^the run satisfies:$`, which DOES take a docstring.
+	cmp := &docPhrase{pattern: `^the run (\w+):$`}
+	res, out, err := runIsolatedFeature(t, cmp, `Feature: overlap
+  Scenario: a built-in step that takes a body
+    Given the agent target "bot"
+    When I run scenario "any"
+    Then the run satisfies:
+      """
+      tokens < 5000
+      """
+`)
+	if err != nil {
+		t.Fatalf("harness error: %v\n%s", err, out)
+	}
+	reasons := strings.Join(res.Scenarios[0].Reasons, " ")
+	if strings.Contains(reasons, "silently discarded") {
+		t.Errorf("the step-argument guard claimed the body would be discarded, but the BUILT-IN step consumes it; the real defect is the overlap, which the strict matcher reports\ngot: %s", reasons)
+	}
+	// It still fails — the patterns genuinely collide — but for the right reason.
+	if !strings.Contains(reasons, "ambiguous") {
+		t.Errorf("want the ambiguity reported, got: %s", reasons)
+	}
+}
+
+// TestValidateAgreesWithRunOnStepArguments pins that the static and runtime paths
+// answer the same question about the same suite.
+//
+// Review measured them disagreeing: Validate reported `findings=[] err=<nil>` for a
+// feature file Run rejects at scenario init. A validator that certifies a suite the
+// runner then refuses is worse than no validator — it spends the author's trust to
+// tell them something false.
+func TestValidateAgreesWithRunOnStepArguments(t *testing.T) {
+	body := `Feature: agreement
+  Scenario: a surplus data table
+    Given the agent target "bot"
+    When I run scenario "any"
+    Then the revenue matches quarterly
+      | min | 4 |
+`
+	path := filepath.Join(t.TempDir(), "agree.feature")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write feature: %v", err)
+	}
+	cfg := mentat.Config{
+		Store:   "agree-reg",
+		Targets: map[string]mentat.Target{"bot": {Adapter: "agree-reg", Command: []string{"noop"}, MaxConcurrency: 1}},
+		Poll:    mentat.PollSpec{Interval: "1ms", StableFor: 1},
+	}
+	b := newBus()
+	opts := []mentat.Option{
+		mentat.WithFeatures(path),
+		mentat.WithDriver("agree-reg", func(mentat.Config) (mentat.Driver, error) {
+			return busDriver{bus: b, answer: "ok"}, nil
+		}),
+		mentat.WithStore("agree-reg", func(mentat.Config) (mentat.TraceStore, error) {
+			return busStore{bus: b}, nil
+		}),
+		mentat.WithComparator("doc-phrase", func(mentat.Config) (mentat.Comparator, error) {
+			return &docPhrase{pattern: `^the revenue matches (\w+)$`}, nil
+		}),
+	}
+
+	findings, err := mentat.Validate(context.Background(), cfg, opts...)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	var found bool
+	for _, f := range findings {
+		if f.Class == "phrase-argument" {
+			found = true
+			if f.Line == 0 {
+				t.Errorf("finding has no source line: %+v", f)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("Validate reported no phrase-argument finding for a suite Run rejects; the two paths must agree about the same file\ngot: %+v", findings)
+	}
+
+	// And the run really does reject it, or the agreement is vacuous.
+	res, err := mentat.Run(context.Background(), cfg, append(opts, mentat.WithConcurrency(1))...)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Passed != 0 {
+		t.Errorf("Run passed a suite Validate flagged; passed=%d", res.Passed)
 	}
 }

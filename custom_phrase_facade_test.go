@@ -489,3 +489,86 @@ func TestValidateRequiresFeaturePaths(t *testing.T) {
 		t.Errorf("error %q does not name the option the caller is missing", err)
 	}
 }
+
+// TestInspectionEntryPointsRejectBadInput covers the failure paths of the two new
+// inspection entry points.
+//
+// Both are documented as distinguishing "could not run" (an error) from "ran and found
+// defects" (findings). A caller who cannot tell those apart cannot use either safely,
+// so every way they refuse is asserted rather than assumed.
+func TestInspectionEntryPointsRejectBadInput(t *testing.T) {
+	b := newBus()
+	okStore := mentat.WithStore(phraseRegistryName, func(mentat.Config) (mentat.TraceStore, error) {
+		return busStore{bus: b}, nil
+	})
+	okDriver := mentat.WithDriver(phraseRegistryName, func(mentat.Config) (mentat.Driver, error) {
+		return busDriver{bus: b, answer: "ok"}, nil
+	})
+	cfg := mentat.Config{
+		Store:   phraseRegistryName,
+		Targets: map[string]mentat.Target{"bot": {Adapter: phraseRegistryName, Command: []string{"noop"}, MaxConcurrency: 1}},
+		Poll:    mentat.PollSpec{Interval: "1ms", StableFor: 1},
+	}
+
+	t.Run("a cancelled context refuses to start", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, err := mentat.StepReference(ctx, cfg, okStore); err == nil {
+			t.Error("StepReference ignored a cancelled context")
+		}
+		if _, err := mentat.Validate(ctx, cfg, mentat.WithFeatures("features"), okStore); err == nil {
+			t.Error("Validate ignored a cancelled context")
+		}
+	})
+
+	t.Run("a nil seam factory is named, not dereferenced", func(t *testing.T) {
+		_, err := mentat.StepReference(context.Background(), cfg, okStore, okDriver,
+			mentat.WithComparator("nil-cmp", nil))
+		if err == nil {
+			t.Fatal("StepReference accepted a nil comparator factory")
+		}
+		if !strings.Contains(err.Error(), "nil-cmp") {
+			t.Errorf("error %q does not name the offending registration", err)
+		}
+	})
+
+	t.Run("an unresolvable config is reported", func(t *testing.T) {
+		bad := mentat.Config{
+			Store:   phraseRegistryName,
+			Targets: map[string]mentat.Target{"bot": {Adapter: phraseRegistryName, Command: []string{"noop"}}},
+			Poll:    mentat.PollSpec{Interval: "not-a-duration", StableFor: 1},
+		}
+		if _, err := mentat.StepReference(context.Background(), bad, okStore, okDriver); err == nil {
+			t.Error("StepReference accepted a config that cannot resolve")
+		}
+	})
+}
+
+// TestInspectionDoesNotMutateTheCallersConfig pins the same defence Run makes. cfg
+// arrives by value but Targets is a map, so config.Resolve would otherwise write
+// resolved targets into the CALLER's Config — and inspecting a suite must not change
+// the configuration the caller then runs.
+func TestInspectionDoesNotMutateTheCallersConfig(t *testing.T) {
+	b := newBus()
+	cfg := mentat.Config{
+		Store:   phraseRegistryName,
+		Targets: map[string]mentat.Target{"bot": {Adapter: phraseRegistryName, Command: []string{"noop"}}},
+		Poll:    mentat.PollSpec{Interval: "1ms", StableFor: 1},
+	}
+	before := fmt.Sprintf("%+v", cfg.Targets["bot"])
+
+	if _, err := mentat.StepReference(context.Background(), cfg,
+		mentat.WithStore(phraseRegistryName, func(mentat.Config) (mentat.TraceStore, error) {
+			return busStore{bus: b}, nil
+		}),
+		mentat.WithDriver(phraseRegistryName, func(mentat.Config) (mentat.Driver, error) {
+			return busDriver{bus: b, answer: "ok"}, nil
+		}),
+	); err != nil {
+		t.Fatalf("StepReference: %v", err)
+	}
+
+	if got := fmt.Sprintf("%+v", cfg.Targets["bot"]); got != before {
+		t.Errorf("StepReference mutated the caller's Config:\n before: %s\n after:  %s", before, got)
+	}
+}

@@ -5,11 +5,13 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/cucumber/godog"
+	messages "github.com/cucumber/messages/go/v21"
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/engine"
 )
@@ -958,4 +960,151 @@ func TestContributedPhraseDocstringRoutePropagatesParseFailures(t *testing.T) {
 			t.Errorf("parse returned an expectation (%v) alongside an error", exp)
 		}
 	})
+}
+
+// --- step-argument agreement (found by review, twice) ---
+
+// TestStepArgumentKindNamesEveryArgument pins the reject-by-default property that makes
+// this a fix to the MECHANISM rather than to two instances.
+//
+// The runner discards any argument the handler did not declare, silently. So an
+// argument kind this code does not recognise must be reported as SOMETHING: returning
+// "" for it would quietly re-open the hole for the next type godog adds, which is
+// exactly how the data-table case survived the first fix.
+func TestStepArgumentKindNamesEveryArgument(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		arg  *messages.PickleStepArgument
+		want string
+	}{
+		{name: "no argument", arg: nil, want: ""},
+		{name: "docstring", arg: &messages.PickleStepArgument{DocString: &messages.PickleDocString{Content: "x"}}, want: "docstring"},
+		{name: "data table", arg: &messages.PickleStepArgument{DataTable: &messages.PickleTable{}}, want: "data table"},
+		{
+			// A populated argument struct with neither known field set stands in for
+			// an argument kind added by a future godog. It must NOT read as "none".
+			name: "unrecognised kind is still reported",
+			arg:  &messages.PickleStepArgument{},
+			want: "step argument of an unrecognised kind",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := stepArgumentKind(&messages.PickleStep{Text: "x", Argument: tt.arg})
+			if got != tt.want {
+				t.Errorf("stepArgumentKind = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestPhraseArgumentsProblemMessages covers every branch of the disagreement matrix and
+// asserts each message names the comparator, the pattern and the offending argument —
+// the three things an author needs to locate the mistake.
+func TestPhraseArgumentsProblemMessages(t *testing.T) {
+	t.Parallel()
+
+	captures := contributedPhrase{
+		comparator: "cap-cmp",
+		phrase:     core.ContributedPhrase{Pattern: `^the revenue matches (\w+)$`},
+		re:         regexp.MustCompile(`^the revenue matches (\w+)$`),
+		arity:      1,
+	}
+	docstring := contributedPhrase{
+		comparator: "doc-cmp",
+		phrase:     core.ContributedPhrase{Pattern: `^the revenue matches:$`},
+		re:         regexp.MustCompile(`^the revenue matches:$`),
+		wantsDoc:   true,
+	}
+	pa := newPhraseArguments([]contributedPhrase{captures, docstring})
+
+	docArg := &messages.PickleStepArgument{DocString: &messages.PickleDocString{Content: "x"}}
+	tableArg := &messages.PickleStepArgument{DataTable: &messages.PickleTable{}}
+
+	tests := []struct {
+		name     string
+		text     string
+		arg      *messages.PickleStepArgument
+		wantOK   bool
+		wantSubs []string
+	}{
+		{name: "captures phrase, no argument", text: "the revenue matches quarterly", wantOK: true},
+		{name: "docstring phrase, docstring", text: "the revenue matches:", arg: docArg, wantOK: true},
+		{
+			name: "captures phrase, surplus docstring", text: "the revenue matches quarterly", arg: docArg,
+			wantSubs: []string{"cap-cmp", strconv.Quote(`^the revenue matches (\w+)$`), "silently discarded"},
+		},
+		{
+			name: "captures phrase, surplus data table", text: "the revenue matches quarterly", arg: tableArg,
+			wantSubs: []string{"cap-cmp", "data table", "cannot receive one"},
+		},
+		{
+			name: "docstring phrase, missing body", text: "the revenue matches:",
+			wantSubs: []string{"doc-cmp", "carries none"},
+		},
+		{
+			name: "docstring phrase, given a table instead", text: "the revenue matches:", arg: tableArg,
+			wantSubs: []string{"doc-cmp", "data table", "expects a docstring body"},
+		},
+		{name: "step matching no contributed phrase is not our business", text: "something else entirely", arg: tableArg, wantOK: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := pa.stepProblem(&messages.PickleStep{Text: tt.text, Argument: tt.arg})
+			if tt.wantOK {
+				if got != "" {
+					t.Fatalf("legitimate usage rejected: %s", got)
+				}
+				return
+			}
+			if got == "" {
+				t.Fatal("a mismatched step argument was accepted; the runner would discard it silently and report a verdict that never read it")
+			}
+			for _, want := range tt.wantSubs {
+				if !strings.Contains(got, want) {
+					t.Errorf("message %q does not mention %q", got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestPhraseArgumentsIsInertWithoutPhrases pins SC-009 for this check: an engine with
+// no contributed phrases must do no work and reject nothing, so the common path is
+// unchanged by a feature it does not use.
+func TestPhraseArgumentsIsInertWithoutPhrases(t *testing.T) {
+	t.Parallel()
+
+	pa := newPhraseArguments(nil)
+	if len(pa.builtins) != 0 {
+		t.Errorf("built-in patterns were compiled for an engine with no phrases (%d); the common path must cost nothing", len(pa.builtins))
+	}
+	st := &messages.PickleStep{Text: "anything", Argument: &messages.PickleStepArgument{DataTable: &messages.PickleTable{}}}
+	if err := pa.check([]*messages.PickleStep{st}); err != nil {
+		t.Errorf("an engine with no contributed phrases rejected a step: %v", err)
+	}
+	if got := pa.Findings([]*messages.PickleStep{st}, Source{}); len(got) != 0 {
+		t.Errorf("want no findings, got %+v", got)
+	}
+}
+
+// TestEnginePhraseArgumentsPropagatesValidationFailure pins that the static path cannot
+// silently fall back to "no phrases" when an engine's phrases are malformed — that
+// would make Validate report clean on a suite whose engine cannot even be built.
+func TestEnginePhraseArgumentsPropagatesValidationFailure(t *testing.T) {
+	t.Parallel()
+
+	eng := customComparatorEngine(t, withComparator("bad", &validationComparator{
+		name:    "bad",
+		phrases: []core.ContributedPhrase{wellFormed(`unanchored`)},
+	}))
+	if _, err := EnginePhraseArguments(eng); err == nil {
+		t.Fatal("EnginePhraseArguments accepted an unanchored phrase")
+	}
 }

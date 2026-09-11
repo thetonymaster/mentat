@@ -93,49 +93,58 @@ existing convention rather than a new exemption.
 
 ---
 
-## 3b. Final coverage (T064), and why `cmd/mentat`'s percentage fell
+## 3b. Final coverage (T064) — re-measured, and why `cmd/mentat` fell
 
-| Package | Baseline | After | Verdict |
+An earlier version of this section recorded numbers that **did not reproduce**: review
+re-ran them and found root at 94.3% where 95.1% was written, and `internal/steps`
+annotated "above baseline" when it was equal. That is the same failure this feature kept
+finding in itself — a figure written down and never re-run. The numbers below were
+measured after the final commit, with `main`'s taken from its own worktree at `0f9dcea`
+rather than remembered.
+
+| Package | `main` @ `0f9dcea` | branch (final) | Verdict |
 |---|---|---|---|
-| `github.com/thetonymaster/mentat` | 99.1% | 95.1% | ≥ 80% ✓ |
+| `github.com/thetonymaster/mentat` | 99.1% | **96.1%** | ≥ 80% ✓ (below baseline; new error paths on two entry points) |
 | `internal/core` | 100.0% | 100.0% | ≥ 80% ✓ |
 | `internal/engine` | 95.2% | 95.0% | ≥ 80% ✓ |
-| `internal/steps` | 88.9% | **89.4%** | ≥ 80% ✓, above baseline |
+| `internal/steps` | 88.9% | **89.3%** | ≥ 80% ✓, above baseline |
 | `cmd/mentat` | 69.4% | **62.0%** | below baseline — see below |
 
-`cmd/mentat` was already under the constitution's 80% floor at `0f9dcea`, and §3a set the
-obligation for such packages as "no regression". That obligation is not met on the raw
-percentage, so here is the measurement rather than an assurance:
+Commands: `go test -count=1 ./... -coverprofile=…` on this branch; the same in
+`/private/tmp/mentat-main` for `main`. `-count=1` matters — a cached run reports the
+previous code's numbers, which is how the stale figures survived.
+
+### Why `cmd/mentat` fell, measured rather than asserted
 
 | | statements | covered | % |
 |---|---|---|---|
 | `cmd/mentat` baseline | 281 | 195 | 69.4% |
 | `cmd/mentat` after | 187 | 116 | 62.0% |
 | `internal/steps` baseline | 442 | 393 | 88.9% |
-| `internal/steps` after | 687 | 614 | 89.4% |
+| `internal/steps` after (at the point this was computed) | 687 | 614 | 89.4% |
 | **combined baseline** | 723 | 588 | **81.3%** |
 | **combined after** | 874 | 730 | **83.5%** |
 
 The feature-walking logic (`checkFeature`, `featureFiles`, `lineMap`, `newIDGen`,
 `dedupeSort`) MOVED from `cmd/mentat` into `internal/steps` so the CLI and the library
-validate entry point share one implementation. That removed 94 statements from `cmd/mentat`,
-**79 of them covered** — an 84%-covered block, well above the package's 69.4% average. Deleting
-an above-average block lowers the average; no coverage was lost.
+validate entry point share one implementation. That removed 94 statements from
+`cmd/mentat`, **79 of them covered** — an 84%-covered block, well above the package's
+69.4% average. Deleting an above-average block lowers the average; no coverage was lost,
+and the combined figure rose.
 
-Combined coverage across the two packages ROSE, and what remains uncovered in `cmd/mentat` is
-`main`, `usage` and `runMain` (0% at baseline too — they are the `os.Exit` shell the pure seams
-exist to keep untested). Every statement 012 added to `cmd/mentat` is covered, including the new
-`--help` text, which has its own test asserting the documented limit is actually printed.
+What remains uncovered in `cmd/mentat` is `main`, `usage` and `runMain` — 0% at baseline
+too, being the `os.Exit` shell the pure seams exist to keep untested.
 
-**Why `make ci` is green regardless**: the coverage gate (`.claude/skills/coverage/coverage.sh:44-47`) SKIPS `*/cmd/*`, `*/cmd`, `*/mocks` and `*/mocks/*`
-packages entirely. `cmd/mentat` has therefore never been subject to the 80% floor, and its
-number is informational. Stated here because the argument above would otherwise look like it is
-what keeps CI green, and it is not — leaving that unsaid is how a reader later concludes the
-gate covers something it does not.
+**Why `make ci` is green regardless**: the coverage gate
+(`.claude/skills/coverage/coverage.sh:44-47`) SKIPS `*/cmd/*`, `*/cmd`, `*/mocks` and
+`*/mocks/*`. `cmd/mentat` has therefore never been subject to the 80% floor and its
+number is informational. Stated because the argument above would otherwise look like
+what keeps CI green, and it is not.
 
-**Conclusion**: the raw percentage regressed, the underlying coverage did not. Recorded rather
-than waved through, because a number moving the wrong way deserves an explanation that can be
-checked.
+**Conclusion**: two packages sit below their baselines. `cmd/mentat`'s is arithmetic and
+explained above. The facade's 99.1% → 96.1% is real: `Validate` and `StepReference` added
+error paths, and the ones left uncovered are seam-construction failures already covered
+through `Run`. Both remain far above the floor.
 
 ---
 

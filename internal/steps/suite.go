@@ -42,6 +42,15 @@ type SuiteCheck struct {
 	// CheckShapes is likewise false when the expectations dir could not be read, so
 	// an unavailable source is never mistaken for "every reference is unknown".
 	CheckShapes bool
+	// Phrases carries the engine's contributed-phrase step-argument expectations. Its
+	// zero value checks nothing, which is correct for a compiled binary: it cannot see
+	// a consumer's phrases, so it must not guess about their arguments.
+	//
+	// It exists so a statically-validated suite and a run agree. Without it Validate
+	// reported CLEAN on a feature file that Run rejects at scenario init — the two
+	// answering differently about the same suite is the drift this whole surface is
+	// supposed to prevent.
+	Phrases PhraseArguments
 }
 
 // Paths resolves paths (directories walked recursively, files taken as-is) into
@@ -89,6 +98,7 @@ func (s SuiteCheck) Feature(path string) []Finding {
 		if s.CheckTargets {
 			out = append(out, TargetFindings(s.Targets, pk.Steps, src)...)
 		}
+		out = append(out, s.Phrases.Findings(pk.Steps, src)...)
 		out = append(out, CELFindings(s.Engine, pk.Steps, src)...)
 		if s.CheckShapes {
 			out = append(out, ShapePatternFindings(s.Engine, pk.Steps, src)...)

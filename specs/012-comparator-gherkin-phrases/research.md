@@ -348,6 +348,29 @@ independently before acting; both held.
 | `TestSuiteCheckDedupesScenarioOutlineRows` | **Did not test dedupe** — each example row produced a distinct message, so all survived either way; disabling dedupe left it PASSING | Offending step made a constant sentence, so three identical findings must collapse to one |
 | `EngineStepDocs` (FR-012) | Had **no facade alias and no non-test caller**, so the documented "render the reference for your own engine" was impossible for a consumer | `mentat.StepReference` added, with an external-package test |
 
+### The second audit found the same class again
+
+The first fix checked **docstrings**. Review immediately measured the identical hole one
+field over: a surplus **data table** was still discarded and the scenario still reported
+PASSED (`passed=1, compared=1`, table gone). Same mechanism (`i < numIn`), same unearned
+green, one struct field away.
+
+That is the more useful half of the story. The first fix addressed the instance the
+evidence happened to name. The check is now written against the mechanism — *any*
+argument the phrase cannot receive — with an unrecognised argument kind reported as a
+kind of its own rather than as "none", so the next type godog adds is rejected loudly
+instead of silently joining the list of things that vanish.
+
+Two further findings from the same audit, both fixed:
+
+- `mentat.Validate` reported **clean** on a feature file `mentat.Run` rejects at scenario
+  init. A validator that certifies a suite the runner then refuses spends the author's
+  trust to tell them something false. Both paths now run the same `PhraseArguments`
+  check, one as a fail-fast error and one as a `phrase-argument` finding.
+- The guard **misdiagnosed** a step matching both a built-in and a contributed phrase,
+  claiming a body would be discarded when the built-in consumes it. Such steps are now
+  skipped and left to the strict matcher, which names every matching expression.
+
 **The lesson worth carrying**: this feature corrected four inherited premises (R10, R11, and the
 two above) and every one had the same signature — *a claim about behaviour, asserted in a comment,
 with no test able to contradict it*. The tests that caught nothing were not absent; they were

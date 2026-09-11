@@ -599,6 +599,13 @@ func Validate(ctx context.Context, cfg Config, opts ...Option) ([]Finding, error
 		return nil, fmt.Errorf("mentat: %w", err)
 	}
 
+	// The same step-argument agreement check the scenario-init path runs, so Validate
+	// cannot report clean on a suite Run rejects.
+	phraseArgs, err := steps.EnginePhraseArguments(eng)
+	if err != nil {
+		return nil, fmt.Errorf("mentat: %w", err)
+	}
+
 	known := make(map[string]bool, len(cfg.Targets))
 	for name := range cfg.Targets {
 		known[name] = true
@@ -610,6 +617,7 @@ func Validate(ctx context.Context, cfg Config, opts ...Option) ([]Finding, error
 		Targets:      known,
 		CheckTargets: true,
 		CheckShapes:  true,
+		Phrases:      phraseArgs,
 	}.Paths(ro.featurePaths), nil
 }
 
@@ -623,7 +631,15 @@ func Validate(ctx context.Context, cfg Config, opts ...Option) ([]Finding, error
 //
 // cfg is taken by POINTER because config.Resolve writes back into it; the caller's copy
 // is defended by the Targets copy below, mirroring Run.
-func buildEngineForInspection(_ context.Context, cfg *Config, opts ...Option) (*engine.Engine, error) {
+//
+// ctx is honoured at entry only, and that limit is stated rather than hidden: none of
+// the composition calls below (BuildCorrelator, BuildStore, engine.Build) accepts a
+// context, because none of them performs I/O — they wire seams. The one place a
+// cancellable caller can be served today is refusing to start.
+func buildEngineForInspection(ctx context.Context, cfg *Config, opts ...Option) (*engine.Engine, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("mentat: %w", err)
+	}
 	var ro runOptions
 	for _, opt := range opts {
 		opt(&ro)

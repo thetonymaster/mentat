@@ -102,6 +102,8 @@ func InitializerWithBudget(eng *engine.Engine, col *report.Collector, budget *re
 	if err != nil {
 		return nil, err
 	}
+	// Prepared once: the step-argument agreement check for this engine's phrases.
+	phraseArgs := newPhraseArguments(resolved)
 
 	return func(sc *godog.ScenarioContext) {
 		w := &world{eng: eng, col: col, budget: budget, abort: abort}
@@ -145,11 +147,11 @@ func InitializerWithBudget(eng *engine.Engine, col *report.Collector, budget *re
 			if err := w.precheckShapePatterns(scenario.Steps); err != nil {
 				return ctx, err
 			}
-			// A step whose docstring presence disagrees with the contributed phrase it
-			// matches is rejected here, before any SUT is driven. The surplus-body
-			// direction is the important one: the runner would discard the body
-			// silently and report the scenario PASSED.
-			if err := checkPhraseDocstrings(resolved, scenario.Steps); err != nil {
+			// A step carrying an argument the contributed phrase it matches cannot
+			// receive is rejected here, before any SUT is driven. The surplus
+			// direction is the important one: the runner discards the argument
+			// silently and the scenario reports PASSED on an expectation nobody read.
+			if err := phraseArgs.check(scenario.Steps); err != nil {
 				return ctx, fmt.Errorf("scenario-init: %w", err)
 			}
 			return ctx, nil

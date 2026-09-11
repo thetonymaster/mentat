@@ -111,6 +111,15 @@ error names your comparator and the offending value.
 5. **A contributed pattern may not equal a built-in step's.** Built-ins register first,
    so a duplicate would be permanently shadowed and its assertion would never run.
 
+6. **A step must carry exactly the argument its phrase declares.** Checked at scenario
+   init, before any SUT is driven, and by `mentat.Validate`. This is the rule you are
+   most likely to trip, because docstring-ness is inferred from that `:$` and the
+   convention is easy to forget:
+   - A body on a phrase that declares none would be **silently discarded** by the
+     runner and the step would report a verdict that never read it.
+   - A **data table** can never be received: `CaptureParser` takes `[]string` and
+     `ExpectationParser` takes `string`, so no seam accepts one.
+
 A phrase whose comparator implements no matching parser seam is rejected at build too:
 a sentence that can never produce an expectation is an authoring defect, not a runtime
 surprise waiting for the first person to write it.
