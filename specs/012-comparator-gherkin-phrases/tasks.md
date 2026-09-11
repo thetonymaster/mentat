@@ -197,20 +197,20 @@ written in contributed phrases and assert zero `unbound-step` findings.
 
 ### Tests for User Story 4 (REQUIRED — Test-First) ⚠️
 
-- [ ] T048 [P] [US4] Write the FAILING renderer test in `internal/steps/docs_test.go`: the engine-scoped reference contains every built-in row plus each contributed phrase with its group, summary and example (FR-012) (go-test-writer, red)
-- [ ] T049 [P] [US4] Write the FAILING contiguity test: contributed phrases render in contiguous group blocks **after** the built-in groups even when a phrase declares an existing group name (e.g. `"Shape"`), which would otherwise duplicate a heading (FR-014, R9, `docs_test.go:43`) (go-test-writer, red)
-- [ ] T050 [P] [US4] Write the FAILING test in `cmd/mentat/steps_cmd_test.go` asserting `mentat steps` output and `docs/steps.md` render the built-in rows **byte-identically** to baseline (FR-013, SC-006) (go-test-writer, red)
-- [ ] T051 [US4] Write the FAILING test for the library validate entry point: a suite written in contributed phrases yields **zero** `unbound-step` findings when validated against an engine that has them (FR-011, SC-005) (go-test-writer, red)
+- [X] T048 [P] [US4] Write the FAILING renderer test in `internal/steps/docs_test.go`: the engine-scoped reference contains every built-in row plus each contributed phrase with its group, summary and example (FR-012) (go-test-writer, red)
+- [X] T049 [P] [US4] Write the FAILING contiguity test: contributed phrases render in contiguous group blocks **after** the built-in groups even when a phrase declares an existing group name (e.g. `"Shape"`), which would otherwise duplicate a heading (FR-014, R9, `docs_test.go:43`) (go-test-writer, red)
+- [X] T050 [P] [US4] Write the FAILING test in `cmd/mentat/steps_cmd_test.go` asserting `mentat steps` output and `docs/steps.md` render the built-in rows **byte-identically** to baseline (FR-013, SC-006) (go-test-writer, red)
+- [X] T051 [US4] Write the FAILING test for the library validate entry point: a suite written in contributed phrases yields **zero** `unbound-step` findings when validated against an engine that has them (FR-011, SC-005) (go-test-writer, red)
 
 ### Implementation for User Story 4
 
-- [ ] T052 [US4] Implement the engine-scoped reference renderer, reusing the `StepDoc` shape so both paths render from one view; confirm T048/T049 green (go-test-writer, green)
-- [ ] T053 [US4] Confirm `TestStepDocsMirrorsTable` (`docs_test.go:12`) still proves the built-in view lossless (go-coder)
-- [ ] T054 [US4] Add the library validate entry point to `run.go` accepting the same `Option`s `mentat.Run` accepts and returning `[]Finding`; alias `steps.Finding` (`precheck.go:23-28`) on the facade in `mentat.go`. See [contracts/validate-surface.md](./contracts/validate-surface.md). Confirm T051 green (go-test-writer, green)
-- [ ] T055 [US4] Keep `cmd/mentat/validate.go`'s current strictness for built-in steps; add **no** manifest flag and no second source of phrase truth (FR-011a, D7) (go-coder)
-- [ ] T056 [P] [US4] Add the sentence to `cmd/mentat/steps_cmd.go`'s generated intro stating contributed phrases are engine-scoped and not listed there; regenerate with `go generate ./...` and confirm the built-in rows in `docs/steps.md` are byte-identical (FR-013) (go-coder)
-- [ ] T057 [P] [US4] Document in `cmd/mentat/validate.go`'s help text and `docs/` that a compiled binary cannot see contributed phrases, pointing at the library entry point (FR-011a) (go-coder)
-- [ ] T058 [US4] Confirm T050 green (go-coder)
+- [X] T052 [US4] Implement the engine-scoped reference renderer, reusing the `StepDoc` shape so both paths render from one view; confirm T048/T049 green (go-test-writer, green)
+- [X] T053 [US4] Confirm `TestStepDocsMirrorsTable` (`docs_test.go:12`) still proves the built-in view lossless (go-coder)
+- [X] T054 [US4] Add the library validate entry point to `run.go` accepting the same `Option`s `mentat.Run` accepts and returning `[]Finding`; alias `steps.Finding` (`precheck.go:23-28`) on the facade in `mentat.go`. See [contracts/validate-surface.md](./contracts/validate-surface.md). Confirm T051 green (go-test-writer, green)
+- [X] T055 [US4] Keep `cmd/mentat/validate.go`'s current strictness for built-in steps; add **no** manifest flag and no second source of phrase truth (FR-011a, D7) (go-coder)
+- [X] T056 [P] [US4] Add the sentence to `cmd/mentat/steps_cmd.go`'s generated intro stating contributed phrases are engine-scoped and not listed there; regenerate with `go generate ./...` and confirm the built-in rows in `docs/steps.md` are byte-identical (FR-013) (go-coder)
+- [X] T057 [P] [US4] Document in `cmd/mentat/validate.go`'s help text and `docs/` that a compiled binary cannot see contributed phrases, pointing at the library entry point (FR-011a) (go-coder)
+- [X] T058 [US4] Confirm T050 green (go-coder)
 
 **Checkpoint**: All four user stories independently functional.
 

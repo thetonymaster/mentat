@@ -1,20 +1,12 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
-	"path/filepath"
-	"sort"
-	"strconv"
-	"strings"
 
-	gherkin "github.com/cucumber/gherkin/go/v26"
-	messages "github.com/cucumber/messages/go/v21"
 	"github.com/thetonymaster/mentat/internal/comparator"
 	"github.com/thetonymaster/mentat/internal/config"
 	"github.com/thetonymaster/mentat/internal/core"
@@ -32,6 +24,19 @@ func validateCmd(args []string, stdout io.Writer) (int, error) {
 	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
 	fs.SetOutput(stdout)
 	cfgPath := fs.String("config", "mentat.yaml", "config file")
+	// The limit is stated in --help rather than left for a user to discover as a
+	// wall of false unbound-step findings on a feature file that is actually valid.
+	fs.Usage = func() {
+		fmt.Fprint(stdout, "usage: mentat validate [paths...] [--config FILE] [--format text|json]\n\n"+
+			"Statically checks feature files: step binding, target and shape references,\n"+
+			"CEL expressions and @runs tags. Drives no SUT and contacts no store.\n\n"+
+			"Checks BUILT-IN steps only. Comparator-contributed Gherkin phrases are scoped\n"+
+			"to the engine that registered them, and a compiled binary cannot reach a\n"+
+			"consumer's Go registrations, so a suite written in contributed phrases will\n"+
+			"report them as unbound here. Validate such a suite from your own test binary\n"+
+			"via the library entry point, which builds the same engine your run will use.\n\n")
+		fs.PrintDefaults()
+	}
 	format := fs.String("format", "text", "output format: text (human-readable) or json")
 	// flag.FlagSet stops parsing at the first positional, so we resume after each
 	// path to accept flags interspersed with the positional paths (the documented
@@ -127,22 +132,21 @@ func runValidate(cfgPath string, paths []string) []steps.Finding {
 		stepPats: steps.BuiltinStepPatterns(),
 	}
 
-	files, pathFindings := featureFiles(paths)
-	findings = append(findings, pathFindings...)
-	if len(files) == 0 {
-		// An empty suite is a mistake, not a pass (No Silent Fallbacks).
-		findings = append(findings, steps.Finding{
-			File:    strings.Join(paths, ", "),
-			Class:   "no-features",
-			Message: fmt.Sprintf("no .feature files found under %s", strings.Join(paths, ", ")),
-		})
-		return dedupeSort(findings)
-	}
-
-	for _, f := range files {
-		findings = append(findings, checkFeature(f, known, chk, configOK, expOK)...)
-	}
-	return dedupeSort(findings)
+	// One implementation of "walk the suite and collect findings", shared with the
+	// library validate entry point. What differs between the two is the DATA: this
+	// path supplies BUILT-IN step patterns only, because a compiled binary cannot see
+	// a consumer's Go registrations. See the note on stepPats above.
+	pre := findings
+	out := steps.SuiteCheck{
+		Engine:       chk,
+		Patterns:     chk.stepPats,
+		Targets:      known,
+		CheckTargets: configOK,
+		CheckShapes:  expOK,
+	}.Paths(paths)
+	// Config/expectations findings gathered before the walk are folded in and
+	// re-sorted, so the output stays one deterministically ordered list.
+	return steps.DedupeSortFindings(append(pre, out...))
 }
 
 // checker is validate's steps.PrecheckEngine: real comparators for CEL
@@ -174,169 +178,6 @@ func (c checker) AggregateComparator(name string) (core.AggregateComparator, boo
 
 func (c checker) ShapePattern(name string) ([]comparator.ShapeExpectation, bool) {
 	return c.pats.Get(name)
-}
-
-// checkFeature parses one feature file, generates its pickles, and runs every
-// precheck against each pickle — resolving each finding's source line via the AST.
-// configOK/expOK omit the target and shape-pattern checks respectively when their
-// source failed to load, so an unavailable source is never mistaken for "every
-// reference is unknown".
-func checkFeature(path string, known map[string]bool, chk checker, configOK, expOK bool) []steps.Finding {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return []steps.Finding{{File: path, Class: "read", Message: err.Error()}}
-	}
-	gen := newIDGen()
-	doc, err := gherkin.ParseGherkinDocument(bytes.NewReader(data), gen)
-	if err != nil {
-		// A malformed feature is a hard finding, never a silent skip.
-		return []steps.Finding{{File: path, Class: "parse", Message: err.Error()}}
-	}
-	lm := lineMap(doc)
-	src := steps.Source{File: path, Line: func(id string) int { return lm[id] }}
-
-	var out []steps.Finding
-	for _, pk := range gherkin.Pickles(*doc, path, gen) {
-		out = append(out, steps.RunsTagFindings(pk.Tags, src)...)
-		out = append(out, steps.StepBindingFindings(chk.stepPats, pk.Steps, src)...)
-		if configOK {
-			out = append(out, steps.TargetFindings(known, pk.Steps, src)...)
-		}
-		out = append(out, steps.CELFindings(chk, pk.Steps, src)...)
-		if expOK {
-			out = append(out, steps.ShapePatternFindings(chk, pk.Steps, src)...)
-		}
-	}
-	return out
-}
-
-// featureFiles resolves the given paths (dirs walked recursively, files taken
-// as-is) into a sorted, de-duplicated list of *.feature files. A path that cannot
-// be stat'd is itself a finding — never silently ignored.
-func featureFiles(paths []string) ([]string, []steps.Finding) {
-	var files []string
-	var findings []steps.Finding
-	seen := map[string]bool{}
-	add := func(p string) {
-		if strings.HasSuffix(p, ".feature") && !seen[p] {
-			seen[p] = true
-			files = append(files, p)
-		}
-	}
-	for _, p := range paths {
-		info, err := os.Stat(p)
-		if err != nil {
-			findings = append(findings, steps.Finding{File: p, Class: "path", Message: err.Error()})
-			continue
-		}
-		if !info.IsDir() {
-			add(p)
-			continue
-		}
-		walkErr := filepath.WalkDir(p, func(path string, d fs.DirEntry, werr error) error {
-			// An unreadable subtree is a reported finding, never a silent omission:
-			// record it and keep walking siblings (return nil, not the error).
-			if werr != nil {
-				findings = append(findings, steps.Finding{File: path, Class: "path", Message: werr.Error()})
-				return nil
-			}
-			if !d.IsDir() {
-				add(path)
-			}
-			return nil
-		})
-		if walkErr != nil {
-			findings = append(findings, steps.Finding{File: p, Class: "path", Message: walkErr.Error()})
-		}
-	}
-	sort.Strings(files)
-	return files, findings
-}
-
-// lineMap maps each AST node id (Step/Tag) to its 1-based source line, so a pickle
-// step or tag can be located back to the feature file line it came from.
-func lineMap(doc *messages.GherkinDocument) map[string]int {
-	m := map[string]int{}
-	if doc.Feature == nil {
-		return m
-	}
-	addSteps := func(ss []*messages.Step) {
-		for _, s := range ss {
-			if s.Location != nil {
-				m[s.Id] = int(s.Location.Line)
-			}
-		}
-	}
-	addTags := func(ts []*messages.Tag) {
-		for _, tg := range ts {
-			if tg.Location != nil {
-				m[tg.Id] = int(tg.Location.Line)
-			}
-		}
-	}
-	addTags(doc.Feature.Tags)
-	for _, ch := range doc.Feature.Children {
-		if ch.Background != nil {
-			addSteps(ch.Background.Steps)
-		}
-		if ch.Scenario != nil {
-			addTags(ch.Scenario.Tags)
-			addSteps(ch.Scenario.Steps)
-		}
-		if ch.Rule != nil {
-			addTags(ch.Rule.Tags)
-			for _, rc := range ch.Rule.Children {
-				if rc.Background != nil {
-					addSteps(rc.Background.Steps)
-				}
-				if rc.Scenario != nil {
-					addTags(rc.Scenario.Tags)
-					addSteps(rc.Scenario.Steps)
-				}
-			}
-		}
-	}
-	return m
-}
-
-// newIDGen returns a fresh monotonic id source; sharing one instance across
-// ParseGherkinDocument and Pickles keeps AST node ids and pickle ids collision-free
-// so pickle AstNodeIds resolve back into lineMap.
-func newIDGen() func() string {
-	var n int
-	return func() string {
-		n++
-		return strconv.Itoa(n)
-	}
-}
-
-// dedupeSort removes identical findings (a scenario outline expands to one pickle
-// per row, which would otherwise duplicate line-identical findings) and orders them
-// deterministically by file, line, class, then message.
-func dedupeSort(fs []steps.Finding) []steps.Finding {
-	seen := map[steps.Finding]bool{}
-	out := make([]steps.Finding, 0, len(fs))
-	for _, f := range fs {
-		if seen[f] {
-			continue
-		}
-		seen[f] = true
-		out = append(out, f)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		a, b := out[i], out[j]
-		switch {
-		case a.File != b.File:
-			return a.File < b.File
-		case a.Line != b.Line:
-			return a.Line < b.Line
-		case a.Class != b.Class:
-			return a.Class < b.Class
-		default:
-			return a.Message < b.Message
-		}
-	})
-	return out
 }
 
 func renderText(w io.Writer, fs []steps.Finding) error {

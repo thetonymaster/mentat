@@ -235,3 +235,147 @@ func TestContributedPhraseNeedsNoComparatorNameOrPayload(t *testing.T) {
 			cmp.compared, want, out)
 	}
 }
+
+// --- US4: the library validate entry point ---
+
+// TestValidateSeesContributedPhrases is FR-011/SC-005: a suite written entirely in
+// contributed phrases must produce ZERO unbound-step findings when validated against
+// an engine that has them.
+//
+// This is the gap `mentat validate` structurally cannot close. A consumer's
+// WithComparator calls are compiled into THEIR binary; a prebuilt mentat executable
+// cannot reach them, so applied to this feature file it would report one unbound-step
+// per phrase — a false red on a valid suite, from the command whose only job is
+// certifying that a suite is well-formed.
+func TestValidateSeesContributedPhrases(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "phrases.feature")
+	body := `Feature: written in contributed phrases
+  Scenario: no built-in assertion step appears here
+    Given the agent target "bot"
+    When I run scenario "any"
+    Then the revenue floor is 4 USD
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write feature: %v", err)
+	}
+
+	cfg := mentat.Config{
+		Store: phraseRegistryName,
+		Targets: map[string]mentat.Target{
+			"bot": {Adapter: phraseRegistryName, Command: []string{"noop"}, MaxConcurrency: 1},
+		},
+		Poll: mentat.PollSpec{Interval: "1ms", StableFor: 1},
+	}
+	b := newBus()
+	findings, err := mentat.Validate(context.Background(), cfg,
+		mentat.WithFeatures(path),
+		mentat.WithDriver(phraseRegistryName, func(mentat.Config) (mentat.Driver, error) {
+			return busDriver{bus: b, answer: "ok"}, nil
+		}),
+		mentat.WithStore(phraseRegistryName, func(mentat.Config) (mentat.TraceStore, error) {
+			return busStore{bus: b}, nil
+		}),
+		mentat.WithComparator("revenue-shape", func(mentat.Config) (mentat.Comparator, error) {
+			return &phraseRevenue{}, nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Validate returned an error: %v", err)
+	}
+	for _, f := range findings {
+		if f.Class == "unbound-step" {
+			t.Errorf("valid feature file reported as broken: %s:%d [%s] %s", f.File, f.Line, f.Class, f.Message)
+		}
+	}
+	if len(findings) != 0 {
+		t.Errorf("want no findings for a valid suite, got %d: %+v", len(findings), findings)
+	}
+}
+
+// TestValidateStillReportsGenuinelyUnboundSteps is the other half, and the one that
+// keeps the first honest. An engine-aware validator that reported nothing would also
+// pass the test above — so a genuinely misspelled step must still be caught.
+func TestValidateStillReportsGenuinelyUnboundSteps(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "typo.feature")
+	body := `Feature: a typo
+  Scenario: a sentence no comparator contributed and no built-in matches
+    Given the agent target "bot"
+    When I run scenario "any"
+    Then the revenue flooor is 4 USD
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write feature: %v", err)
+	}
+
+	cfg := mentat.Config{
+		Store: phraseRegistryName,
+		Targets: map[string]mentat.Target{
+			"bot": {Adapter: phraseRegistryName, Command: []string{"noop"}, MaxConcurrency: 1},
+		},
+		Poll: mentat.PollSpec{Interval: "1ms", StableFor: 1},
+	}
+	b := newBus()
+	findings, err := mentat.Validate(context.Background(), cfg,
+		mentat.WithFeatures(path),
+		mentat.WithDriver(phraseRegistryName, func(mentat.Config) (mentat.Driver, error) {
+			return busDriver{bus: b, answer: "ok"}, nil
+		}),
+		mentat.WithStore(phraseRegistryName, func(mentat.Config) (mentat.TraceStore, error) {
+			return busStore{bus: b}, nil
+		}),
+		mentat.WithComparator("revenue-shape", func(mentat.Config) (mentat.Comparator, error) {
+			return &phraseRevenue{}, nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Validate returned an error: %v", err)
+	}
+	var unbound int
+	for _, f := range findings {
+		if f.Class == "unbound-step" {
+			unbound++
+			if !strings.Contains(f.Message, "flooor") {
+				t.Errorf("finding does not quote the offending sentence: %q", f.Message)
+			}
+		}
+	}
+	if unbound != 1 {
+		t.Fatalf("want exactly 1 unbound-step finding for a misspelled step, got %d: %+v", unbound, findings)
+	}
+}
+
+// TestValidateRejectsAMalformedPhraseBeforeCheckingFiles pins that Validate reports a
+// BUILD failure as an error rather than as findings. The distinction matters: findings
+// mean "validation ran and your suite has defects", an error means "validation could
+// not run at all". Collapsing the two would let a broken extension surface report a
+// clean suite.
+func TestValidateRejectsAMalformedPhraseBeforeCheckingFiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "any.feature")
+	if err := os.WriteFile(path, []byte("Feature: x\n  Scenario: y\n    Then whatever\n"), 0o600); err != nil {
+		t.Fatalf("write feature: %v", err)
+	}
+	cfg := mentat.Config{
+		Store:   phraseRegistryName,
+		Targets: map[string]mentat.Target{"bot": {Adapter: phraseRegistryName, Command: []string{"noop"}, MaxConcurrency: 1}},
+		Poll:    mentat.PollSpec{Interval: "1ms", StableFor: 1},
+	}
+	b := newBus()
+	_, err := mentat.Validate(context.Background(), cfg,
+		mentat.WithFeatures(path),
+		mentat.WithDriver(phraseRegistryName, func(mentat.Config) (mentat.Driver, error) {
+			return busDriver{bus: b, answer: "ok"}, nil
+		}),
+		mentat.WithStore(phraseRegistryName, func(mentat.Config) (mentat.TraceStore, error) {
+			return busStore{bus: b}, nil
+		}),
+		mentat.WithComparator("bad", func(mentat.Config) (mentat.Comparator, error) {
+			return &brokenPhrase{pattern: `unanchored`}, nil
+		}),
+	)
+	if err == nil {
+		t.Fatal("Validate accepted an unanchored contributed pattern; a build failure must be an error, not a finding")
+	}
+	if !strings.Contains(err.Error(), "anchored") {
+		t.Errorf("error %q does not say what was wrong", err)
+	}
+}

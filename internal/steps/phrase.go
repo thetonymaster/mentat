@@ -409,3 +409,94 @@ func isAnchored(pattern string) bool {
 func declaresDocstring(pattern string) bool {
 	return strings.HasSuffix(pattern, ":$")
 }
+
+// contributedGroupPrefix qualifies every contributed group heading in the
+// engine-scoped reference.
+//
+// It is what makes the contiguity guarantee unconditional. The markdown generator
+// emits one heading per group by watching for the group to CHANGE, so a group that
+// reappears later produces a duplicate heading. Contributed phrases render after the
+// built-in groups, so a comparator declaring an existing name (e.g. "Shape") would
+// reopen a closed block. Qualifying the name makes that impossible regardless of what
+// authors choose — and it also tells a reader which rows are built in and which came
+// from their own comparators, which the bare name does not.
+const contributedGroupPrefix = "Extension: "
+
+// EngineStepDocs returns the complete step reference for ONE engine: the built-in
+// rows in table order, followed by this engine's contributed phrases.
+//
+// Contributed phrases are emitted in contiguous blocks by qualified group, in
+// first-seen order — which, because resolution is sorted by comparator name, is
+// deterministic between runs of an unchanged engine.
+//
+// Two comparators declaring the same group name share one block rather than opening
+// two, so an author's grouping intent survives even across modules.
+func EngineStepDocs(eng *engine.Engine) ([]StepDoc, error) {
+	phrases, err := resolvePhrases(eng)
+	if err != nil {
+		return nil, err
+	}
+	out := StepDocs()
+	if len(phrases) == 0 {
+		// The overwhelmingly common engine contributes nothing and must render
+		// byte-identically to the built-in-only reference.
+		return out, nil
+	}
+
+	type block struct {
+		group string
+		docs  []StepDoc
+	}
+	var blocks []*block
+	index := make(map[string]*block, len(phrases))
+
+	for _, cp := range phrases {
+		group := contributedGroupPrefix + cp.phrase.Group
+		b, ok := index[group]
+		if !ok {
+			b = &block{group: group}
+			index[group] = b
+			blocks = append(blocks, b)
+		}
+		b.docs = append(b.docs, StepDoc{
+			Group:   group,
+			Pattern: cp.phrase.Pattern,
+			Summary: cp.phrase.Summary,
+			Example: cp.phrase.Example,
+		})
+	}
+	for _, b := range blocks {
+		out = append(out, b.docs...)
+	}
+	return out, nil
+}
+
+// EngineStepPatterns compiles the step-pattern set ONE engine binds against: the
+// built-in rows plus that engine's contributed phrases, in registration order.
+//
+// This is what makes an engine-aware "unbound-step" finding trustworthy. The
+// built-in-only set answers a different question — "does any BUILT-IN step match?" —
+// and using it on a suite written in contributed phrases reports a valid file as
+// broken.
+func EngineStepPatterns(eng *engine.Engine) (StepPatterns, error) {
+	phrases, err := resolvePhrases(eng)
+	if err != nil {
+		return nil, err
+	}
+	pats := BuiltinStepPatterns()
+	if len(phrases) == 0 {
+		return pats, nil
+	}
+	contributed := make([]string, 0, len(phrases))
+	for _, cp := range phrases {
+		contributed = append(contributed, cp.phrase.Pattern)
+	}
+	// Already validated as compilable by resolvePhrases, but compiled through the
+	// same error-returning path rather than a second MustCompile: one way to compile
+	// a contributed pattern, not two.
+	extra, err := CompileStepPatterns(contributed)
+	if err != nil {
+		return nil, err
+	}
+	return append(pats, extra...), nil
+}

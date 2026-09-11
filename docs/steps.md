@@ -9,6 +9,12 @@ for every registered step, grouped by concern, followed by the cross-cutting
 grammar shared across steps: selectors, quantifiers, ordinals, and the CEL
 variables available to `the run satisfies` and `the runs satisfy`.
 
+This page lists Mentat's **built-in** steps only. A comparator registered through
+`WithComparator` may also contribute its own Gherkin phrases; those are scoped to
+the engine that registered them, so a compiled `mentat` binary cannot see them and
+they cannot appear here. Render the reference for your own engine — built-ins plus
+your contributed phrases — from your own test binary instead.
+
 ## Steps
 
 ### Drive

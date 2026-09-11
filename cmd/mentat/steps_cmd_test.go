@@ -153,3 +153,38 @@ func TestStepsCmdWritesFile(t *testing.T) {
 		t.Errorf("-o file (%d bytes) differs from stdout (%d bytes)", len(got), stdoutBuf.Len())
 	}
 }
+
+// TestStepsCmdRendersBuiltinRowsOnly is FR-013/SC-006: `mentat steps` renders the
+// BUILT-IN rows and nothing else, and renders them byte-identically to what it
+// rendered before contributed phrases existed.
+//
+// A compiled binary cannot see a consumer's Go registrations, so listing contributed
+// phrases here is impossible rather than merely unimplemented. What the page CAN do is
+// say so, which is the difference between a limitation and a trap: a reader who does
+// not find their own phrase here needs to know why, not conclude it is unregistered.
+func TestStepsCmdRendersBuiltinRowsOnly(t *testing.T) {
+	var buf bytes.Buffer
+	if err := stepsCmd([]string{"--format", "md"}, &buf); err != nil {
+		t.Fatalf("stepsCmd: %v", err)
+	}
+	got := buf.String()
+
+	// Every built-in row appears, with its pattern as a heading.
+	for _, d := range steps.StepDocs() {
+		if !strings.Contains(got, "#### `"+d.Pattern+"`") {
+			t.Errorf("built-in pattern %q is missing from the rendered reference", d.Pattern)
+		}
+	}
+
+	// No contributed group can appear: the renderer reads StepDocs(), not an engine.
+	if strings.Contains(got, "Extension: ") {
+		t.Error("the binary rendered a contributed group heading; it has no engine and cannot have resolved one")
+	}
+
+	// And the limit is stated rather than left to be discovered.
+	for _, want := range []string{"built-in", "WithComparator", "scoped to"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the generated page does not mention %q; a reader who cannot find their own phrase must be told why", want)
+		}
+	}
+}

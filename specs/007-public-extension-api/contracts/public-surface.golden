@@ -53,6 +53,10 @@ field (ExtractConfig)[02] Pattern string
 field (ExtractPolicy)[00] Mode string
 field (ExtractPolicy)[01] Marker string
 field (ExtractPolicy)[02] Pattern *regexp.Regexp
+field (Finding)[00] File string
+field (Finding)[01] Line int
+field (Finding)[02] Class string
+field (Finding)[03] Message string
 field (HTTP)[00] URL string
 field (HTTP)[01] Method string
 field (HTTP)[02] Headers map[string]string
@@ -162,6 +166,7 @@ field (Verdict)[03] Detail *AggregateDetail
 field (Verdict)[04] Judge *JudgeUsage
 func LoadConfig(path string) (Config, error)
 func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error)
+func Validate(ctx context.Context, cfg Config, opts ...Option) ([]Finding, error)
 func WithComparator(name string, f ComparatorFactory) Option
 func WithConcurrency(n int) Option
 func WithDriver(name string, f DriverFactory) Option
@@ -213,6 +218,7 @@ type Expectation = core.Expectation
 type ExpectationParser = core.ExpectationParser
 type ExtractConfig = config.ExtractConfig
 type ExtractPolicy = core.ExtractPolicy
+type Finding = steps.Finding
 type HTTP = config.HTTP
 type HTTPSpec = core.HTTPSpec
 type Judge = core.Judge
