@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	messages "github.com/cucumber/messages/go/v21"
 	"github.com/thetonymaster/mentat/internal/core"
 )
 
@@ -317,5 +318,68 @@ func TestEngineStepPatternsRejectsAMalformedPhrase(t *testing.T) {
 
 	if _, err := EngineStepPatterns(eng); err == nil {
 		t.Fatal("EngineStepPatterns accepted an unanchored phrase")
+	}
+}
+
+// TestEngineStepChecksResolvesOnceForBothDerivations pins the entry point the static
+// validator uses. Both derivations must come from ONE resolution: two resolutions are
+// two chances to disagree about which phrases an engine has, and the entire value of
+// the engine-aware path is that it answers about exactly one engine.
+func TestEngineStepChecksResolvesOnceForBothDerivations(t *testing.T) {
+	t.Parallel()
+
+	eng := customComparatorEngine(t, withComparator("revenue-shape", &validationComparator{
+		name: "revenue-shape",
+		phrases: []core.ContributedPhrase{
+			wellFormed(`^the revenue floor is (\d+)$`),
+			wellFormed(`^the revenue matches:$`),
+		},
+	}))
+
+	pats, args, err := EngineStepChecks(eng)
+	if err != nil {
+		t.Fatalf("EngineStepChecks: %v", err)
+	}
+
+	// The pattern half must agree with the standalone accessor.
+	standalone, err := EngineStepPatterns(eng)
+	if err != nil {
+		t.Fatalf("EngineStepPatterns: %v", err)
+	}
+	if len(pats) != len(standalone) {
+		t.Errorf("EngineStepChecks returned %d patterns, EngineStepPatterns %d; the two must not build different sets from the same phrases", len(pats), len(standalone))
+	}
+
+	// The argument half must actually be armed — a zero PhraseArguments would silently
+	// check nothing, which is exactly the failure the shared resolution prevents.
+	problem := args.stepProblem(&messages.PickleStep{
+		Text:     "the revenue floor is 4",
+		Argument: &messages.PickleStepArgument{DataTable: &messages.PickleTable{}},
+	})
+	if problem == "" {
+		t.Error("the returned PhraseArguments accepted a surplus data table; it was not armed with this engine's phrases")
+	}
+}
+
+// TestEngineStepChecksPropagatesValidationFailure pins that neither derivation is
+// returned when the phrases are malformed — a caller must not get a usable pattern set
+// alongside a broken argument check, or it would validate against half an engine.
+func TestEngineStepChecksPropagatesValidationFailure(t *testing.T) {
+	t.Parallel()
+
+	eng := customComparatorEngine(t, withComparator("bad", &validationComparator{
+		name:    "bad",
+		phrases: []core.ContributedPhrase{wellFormed(`unanchored`)},
+	}))
+
+	pats, args, err := EngineStepChecks(eng)
+	if err == nil {
+		t.Fatal("EngineStepChecks accepted an unanchored phrase")
+	}
+	if pats != nil {
+		t.Errorf("a pattern set was returned alongside the error (%d patterns)", len(pats))
+	}
+	if len(args.phrases) != 0 {
+		t.Error("an armed PhraseArguments was returned alongside the error")
 	}
 }

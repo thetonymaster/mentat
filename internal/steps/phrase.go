@@ -110,16 +110,25 @@ func makeStepHandler(arity int, wantsDoc bool, fn func(caps []string, body strin
 		// The docstring parameter is present in the signature only when declared, and
 		// is always last.
 		//
-		// hasBody is NOT a runtime guard against a missing body — measured on godog
-		// v0.15.1, a step that omits a declared docstring never reaches this handler
-		// at all: the argument count check fails first (`len(sd.Args) < numIn`,
-		// internal/models/stepdef.go) and the step dies with "func expected more
-		// arguments than given". An earlier version of this comment claimed godog
-		// passed a typed nil here. It does not, and the nil branch was unreachable.
+		// The nil check below is LOAD-BEARING, and the exact reason took two
+		// corrections to get right, so it is worth stating precisely. Measured on the
+		// pinned godog v0.15.1:
 		//
-		// Mismatches in BOTH directions are caught at scenario init instead, by
-		// checkPhraseDocstrings, which can name the comparator and the pattern —
-		// godog's own message names neither.
+		//   - Step carries NO argument: the handler is never reached. The argument
+		//     count check fails first (`len(sd.Args) < numIn`,
+		//     internal/models/stepdef.go) and the step dies with "func expected more
+		//     arguments than given".
+		//   - Step carries a DATA TABLE: the handler IS reached, with a TYPED NIL
+		//     *godog.DocString — godog converts the PickleStepArgument to its
+		//     DocString field without complaint (stepdef.go). Dropping `d != nil`
+		//     would turn that into a nil dereference, i.e. a panic in library code.
+		//
+		// An earlier version of this comment asserted the branch was unreachable,
+		// citing only the first measurement. It was wrong about the second.
+		//
+		// Mentat never reaches either case in practice because PhraseArguments
+		// rejects both at scenario init, naming the comparator and the pattern where
+		// godog's own message names neither. This stays as the last line of defence.
 		var body string
 		var hasBody bool
 		if wantsDoc {
@@ -560,6 +569,12 @@ func EngineStepPatterns(eng *engine.Engine) (StepPatterns, error) {
 	if err != nil {
 		return nil, err
 	}
+	return stepPatternsFor(phrases)
+}
+
+// stepPatternsFor is the pattern-set half of EngineStepChecks, shared so the two entry
+// points cannot build different sets from the same phrases.
+func stepPatternsFor(phrases []contributedPhrase) (StepPatterns, error) {
 	pats := BuiltinStepPatterns()
 	if len(phrases) == 0 {
 		return pats, nil
@@ -648,12 +663,21 @@ func (p PhraseArguments) Findings(steps []*messages.PickleStep, src Source) []Fi
 // stepProblem returns "" when st is fine, or a message naming the comparator, the
 // pattern and the offending argument.
 //
-// A step that ALSO matches a built-in pattern is skipped. The built-ins register first,
-// so either the built-in binds it — in which case the built-in's own rules apply and
-// any complaint from here would be false — or the two genuinely collide, which is an
-// ambiguity for the runner's strict matcher to report by naming every matching
-// expression. Claiming "the body would be silently discarded" about a step whose
-// built-in handler consumes the body would send the author to the wrong place.
+// # Steps that also match a built-in are skipped, and what that leaves open
+//
+// Built-ins register first, so such a step either binds the built-in or collides with
+// it, and a collision is an ambiguity the strict matcher reports by naming every
+// matching expression. Complaining "the body would be silently discarded" about a step
+// whose built-in handler consumes the body would send the author to the wrong place.
+//
+// What this does NOT do — stated because an earlier version of this comment implied
+// otherwise by saying "the built-in's own rules apply", and no such rules exist:
+// **built-in steps have no argument-agreement check of their own.** Measured on godog
+// v0.15.1, a surplus docstring on a built-in step is discarded by the same `i < numIn`
+// loop and the scenario reports PASSED. That is a pre-existing defect on `main`,
+// unrelated to contributed phrases, and deliberately out of this feature's scope — but
+// it is a real unearned green and it is not handled here. Closing it means deriving
+// each stepDefs row's expected argument from its handler signature; see the spec's R12.
 func (p PhraseArguments) stepProblem(st *messages.PickleStep) string {
 	if len(p.phrases) == 0 {
 		return ""
@@ -711,4 +735,23 @@ func stepArgumentKind(st *messages.PickleStep) string {
 	default:
 		return "step argument of an unrecognised kind"
 	}
+}
+
+// EngineStepChecks resolves this engine's contributed phrases ONCE and returns both
+// derivations a static validator needs: the pattern set feature text is bound against,
+// and the step-argument agreement check.
+//
+// Callers wanting both must not resolve twice. Beyond the wasted regex compilation, two
+// resolutions are two chances to disagree about which phrases an engine has — and the
+// whole point of the engine-aware path is that it answers about exactly one engine.
+func EngineStepChecks(eng *engine.Engine) (StepPatterns, PhraseArguments, error) {
+	phrases, err := resolvePhrases(eng)
+	if err != nil {
+		return nil, PhraseArguments{}, err
+	}
+	pats, err := stepPatternsFor(phrases)
+	if err != nil {
+		return nil, PhraseArguments{}, err
+	}
+	return pats, newPhraseArguments(phrases), nil
 }

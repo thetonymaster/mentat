@@ -33,6 +33,7 @@ import (
 	"github.com/thetonymaster/mentat/internal/config"
 	"github.com/thetonymaster/mentat/internal/core"
 	"github.com/thetonymaster/mentat/internal/result"
+	"github.com/thetonymaster/mentat/internal/steps"
 	"github.com/thetonymaster/mentat/internal/trace"
 )
 
@@ -76,6 +77,16 @@ type CaptureParser = core.CaptureParser
 // (`^…$`); Group, Summary and Example must be non-empty. Every rule is enforced
 // at engine build, naming the contributor and the offending value.
 type ContributedPhrase = core.ContributedPhrase
+
+// Finding is one located authoring defect a static check found: which file and line,
+// its class (a stable machine key such as "unbound-step", "bad-cel" or
+// "phrase-argument"), and a human message. Validate returns these.
+type Finding = steps.Finding
+
+// StepDoc is one row of the step reference: the group it belongs under, the registered
+// pattern, a one-line summary and one valid Gherkin example. StepReference returns
+// these.
+type StepDoc = steps.StepDoc
 
 // Judge is the semantic-verdict seam: a registrable adapter (WithJudge hook).
 type Judge = core.Judge

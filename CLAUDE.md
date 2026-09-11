@@ -258,13 +258,17 @@ someone had previously asserted without testing:
   matching expression — no new mechanism needed. The branch was **latent, not live**, at
   `0f9dcea` (see R10 above); built-ins register first, so the phrase a contributed
   collision would silently swallow is always the contributed one.
-- **godog SILENTLY DISCARDS a docstring the handler did not declare** — the argument
-  conversion loop runs `i < numIn`, so a step carrying a body matched by a phrase that
-  takes none runs on its captures alone and the scenario reports **PASSED**, with the
-  body never read. Found by review after the feature was otherwise complete. Closed by
-  `checkPhraseDocstrings` at scenario init, which also replaces godog's own
-  "expected more arguments than given" (which names neither comparator nor pattern) for
-  the opposite mismatch.
+- **godog SILENTLY DISCARDS any step argument the handler did not declare** — the
+  conversion loop runs `i < numIn`, so a step carrying a docstring **or a data table**,
+  matched by a phrase that takes none, runs on its captures alone and the scenario
+  reports **PASSED** with the argument never read. Found by review twice: the first fix
+  handled docstrings and left tables open, one struct field away. Closed for contributed
+  phrases by `PhraseArguments` at scenario init and in `mentat.Validate`, with an
+  unrecognised argument kind rejected by default.
+  **Still open for BUILT-IN steps** (measured: surplus docstring on `the result contains`
+  → suite status 0, body never read). Pre-existing on `main`, out of 012's scope, and
+  the obvious follow-up — closing it means deriving each `stepDefs` row's expected
+  argument from its handler signature.
 - **Enabling `Strict` churns zero goldens**, measured on both surfaces (`go test ./...`
   and `go test -tags e2e` with the harness up). `make ci` does not compile the e2e lane,
   so it is not evidence for this on its own.
@@ -272,7 +276,7 @@ someone had previously asserted without testing:
   and **silently discards surplus captures** (`stepdef.go:58`), so contributed phrases need
   a `reflect.MakeFunc` bridge with arity derived from the pattern's `NumSubexp()`.
 
-All three are properties of the **pinned** `godog v0.15.1`; a bump re-opens them.
+All four are properties of the **pinned** `godog v0.15.1`; a bump re-opens them.
 
 **Roadmap after 012:** CLI/`mentatctl` UX is **013**.
 

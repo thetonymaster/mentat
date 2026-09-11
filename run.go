@@ -522,15 +522,6 @@ func engineOptions(logger *slog.Logger, ro runOptions) ([]engine.Option, error) 
 	return buildOpts, nil
 }
 
-// Finding is one located authoring defect a static check found: which file and line,
-// its class (a stable machine key such as "unbound-step" or "bad-cel"), and a human
-// message. Validate returns these.
-type Finding = steps.Finding
-
-// StepDoc is one row of the step reference: the group it belongs under, the registered
-// pattern, a one-line summary and one valid Gherkin example.
-type StepDoc = steps.StepDoc
-
 // StepReference returns the complete step reference for the engine the SAME options
 // would build: Mentat's built-in steps followed by the Gherkin phrases this engine's
 // own comparators contribute, each under an "Extension: " group heading.
@@ -574,6 +565,11 @@ func StepReference(ctx context.Context, cfg Config, opts ...Option) ([]StepDoc, 
 // what steps and comparators exist, then reads feature files. A returned error means
 // validation could not RUN (a bad config, a malformed contributed phrase); findings
 // mean it ran and the suite has defects.
+//
+// It checks EVERY scenario in the given paths, including ones a WithTags expression
+// would exclude from a run. The asymmetry is deliberate and safe in that direction —
+// Validate is stricter than Run, never more permissive — and it means a defect cannot
+// hide behind a tag filter until the day someone runs that tag.
 func Validate(ctx context.Context, cfg Config, opts ...Option) ([]Finding, error) {
 	if len(opts) == 0 {
 		return nil, fmt.Errorf("mentat: Validate: no options; pass at least WithFeatures(...)")
@@ -594,14 +590,10 @@ func Validate(ctx context.Context, cfg Config, opts ...Option) ([]Finding, error
 	// The engine-aware pattern set: built-ins PLUS this engine's contributed phrases.
 	// This is the whole difference from the CLI path, and the reason an "unbound-step"
 	// from here means what it says.
-	pats, err := steps.EngineStepPatterns(eng)
-	if err != nil {
-		return nil, fmt.Errorf("mentat: %w", err)
-	}
-
-	// The same step-argument agreement check the scenario-init path runs, so Validate
-	// cannot report clean on a suite Run rejects.
-	phraseArgs, err := steps.EnginePhraseArguments(eng)
+	// One resolution feeding both derivations. Resolving twice recompiled every
+	// contributed pattern for no benefit, and left two places that could disagree
+	// about which phrases this engine has.
+	pats, phraseArgs, err := steps.EngineStepChecks(eng)
 	if err != nil {
 		return nil, fmt.Errorf("mentat: %w", err)
 	}

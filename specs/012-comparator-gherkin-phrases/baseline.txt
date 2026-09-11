@@ -93,44 +93,46 @@ existing convention rather than a new exemption.
 
 ---
 
-## 3b. Final coverage (T064) — re-measured, and why `cmd/mentat` fell
+## 3b. Final coverage (T064) — measured at the committed state
 
-An earlier version of this section recorded numbers that **did not reproduce**: review
-re-ran them and found root at 94.3% where 95.1% was written, and `internal/steps`
-annotated "above baseline" when it was equal. That is the same failure this feature kept
-finding in itself — a figure written down and never re-run. The numbers below were
-measured after the final commit, with `main`'s taken from its own worktree at `0f9dcea`
-rather than remembered.
+Two earlier versions of this section recorded numbers that **did not reproduce**. Review
+caught both. That is the same failure this feature kept finding in itself, so the
+process is recorded alongside the result:
+
+- measured with `-count=1` (a cached run reports the PREVIOUS code's figures — that is
+  how the first set survived);
+- `main`'s numbers taken from its own worktree at `0f9dcea`, because `git checkout main`
+  fails silently when main is checked out elsewhere and reports the current branch's
+  figures instead;
+- measured **after** the final commit, not partway through.
 
 | Package | `main` @ `0f9dcea` | branch (final) | Verdict |
 |---|---|---|---|
-| `github.com/thetonymaster/mentat` | 99.1% | **96.1%** | ≥ 80% ✓ (below baseline; new error paths on two entry points) |
+| `github.com/thetonymaster/mentat` | 99.1% | **96.6%** | ≥ 80% ✓ |
 | `internal/core` | 100.0% | 100.0% | ≥ 80% ✓ |
-| `internal/engine` | 95.2% | 95.0% | ≥ 80% ✓ |
-| `internal/steps` | 88.9% | **89.3%** | ≥ 80% ✓, above baseline |
-| `cmd/mentat` | 69.4% | **62.0%** | below baseline — see below |
+| `internal/engine` | 95.2% | 93.6% | ≥ 80% ✓ |
+| `internal/steps` | 88.9% | **89.2%** | ≥ 80% ✓, above baseline |
+| `cmd/mentat` | 69.4% | **62.0%** | below baseline — arithmetic, see below |
 
-Commands: `go test -count=1 ./... -coverprofile=…` on this branch; the same in
-`/private/tmp/mentat-main` for `main`. `-count=1` matters — a cached run reports the
-previous code's numbers, which is how the stale figures survived.
+Commands: `go test -count=1 ./... -coverprofile=…` here; the same in a `main` worktree.
 
-### Why `cmd/mentat` fell, measured rather than asserted
+### Why `cmd/mentat` fell — measured, not asserted
 
 | | statements | covered | % |
 |---|---|---|---|
-| `cmd/mentat` baseline | 281 | 195 | 69.4% |
-| `cmd/mentat` after | 187 | 116 | 62.0% |
-| `internal/steps` baseline | 442 | 393 | 88.9% |
-| `internal/steps` after (at the point this was computed) | 687 | 614 | 89.4% |
-| **combined baseline** | 723 | 588 | **81.3%** |
-| **combined after** | 874 | 730 | **83.5%** |
+| `cmd/mentat` @ `main` | 281 | 195 | 69.4% |
+| `cmd/mentat` final | 187 | 116 | 62.0% |
+| `internal/steps` @ `main` | 442 | 393 | 88.9% |
+| `internal/steps` final | 753 | 672 | 89.2% |
+| **combined @ `main`** | 723 | 588 | **81.3%** |
+| **combined final** | 940 | 788 | **83.8%** |
 
 The feature-walking logic (`checkFeature`, `featureFiles`, `lineMap`, `newIDGen`,
 `dedupeSort`) MOVED from `cmd/mentat` into `internal/steps` so the CLI and the library
 validate entry point share one implementation. That removed 94 statements from
 `cmd/mentat`, **79 of them covered** — an 84%-covered block, well above the package's
-69.4% average. Deleting an above-average block lowers the average; no coverage was lost,
-and the combined figure rose.
+69.4% average. Removing an above-average block lowers the average; no coverage was lost,
+and the combined figure rose by 2.5 points.
 
 What remains uncovered in `cmd/mentat` is `main`, `usage` and `runMain` — 0% at baseline
 too, being the `os.Exit` shell the pure seams exist to keep untested.
@@ -141,10 +143,9 @@ too, being the `os.Exit` shell the pure seams exist to keep untested.
 number is informational. Stated because the argument above would otherwise look like
 what keeps CI green, and it is not.
 
-**Conclusion**: two packages sit below their baselines. `cmd/mentat`'s is arithmetic and
-explained above. The facade's 99.1% → 96.1% is real: `Validate` and `StepReference` added
-error paths, and the ones left uncovered are seam-construction failures already covered
-through `Run`. Both remain far above the floor.
+**Conclusion**: `cmd/mentat`'s regression is arithmetic and explained; every other
+touched package is above the floor, and `internal/steps` — where nearly all the new code
+lives — finished above its baseline.
 
 ---
 

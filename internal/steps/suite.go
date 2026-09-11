@@ -50,6 +50,11 @@ type SuiteCheck struct {
 	// reported CLEAN on a feature file that Run rejects at scenario init — the two
 	// answering differently about the same suite is the drift this whole surface is
 	// supposed to prevent.
+	//
+	// The agreement is one-directional by design: this walks EVERY scenario in the
+	// corpus, including ones a run's tag expression would skip. Validate is therefore
+	// stricter than Run, never more permissive, so a defect cannot hide behind a tag
+	// filter until the day someone runs that tag.
 	Phrases PhraseArguments
 }
 

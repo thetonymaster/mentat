@@ -341,8 +341,8 @@ independently before acting; both held.
 
 | Finding | Measured | Fix |
 |---|---|---|
-| A comment claimed godog passes a typed nil for a missing declared docstring, so the nil branch was "real rather than defensive" | **False.** `status=1, handlerCalled=false` — godog never calls the handler (`len(sd.Args) < numIn`), so the branch was unreachable and its descriptive error could never reach an author | Comment corrected; `checkPhraseDocstrings` raises the error at scenario init where it IS reachable |
-| A step carrying a docstring, matched by a phrase declaring none | **`status=0, handlerCalled=true`, body discarded, scenario PASSES.** A green verdict from a comparator that never read the author's expectation body — reachable through the public surface, because docstring-ness is inferred from a `:$` convention an author can forget | Rejected at scenario init in both directions, before any SUT is driven |
+| A comment claimed godog passes a typed nil for a missing declared docstring, so the nil branch was "real rather than defensive" | **Partly false, and the correction was itself partly false** — see R13 | The error moved to `PhraseArguments` at scenario init, where it IS reachable; the nil check stays, because R13 shows it is load-bearing after all |
+| A step carrying an argument the matched phrase cannot receive | **`status=0, handlerCalled=true`, argument discarded, scenario PASSES.** A green verdict from a comparator that never read the author's expectation — reachable through the public surface, because docstring-ness is inferred from a `:$` convention an author can forget | Rejected at scenario init AND in `mentat.Validate`, before any SUT is driven, for every argument kind |
 | The `ExpectationParser` (docstring) route | **Zero test coverage.** Mutating the body to a constant left the whole suite green. The lint-cleanup commit had deleted the only stub built for it | Route test added, asserting the body arrives VERBATIM; the reviewer's exact mutation now goes red |
 | `isAnchored` (V2) | **Defeated by top-level alternation**: `^the alpha reading\|the beta reading$` passes a string-level check and matches inside "I check the beta reading", because the runner matches with an unanchored `FindStringSubmatch` | Rewritten as a structural check over the parsed syntax tree: an alternation is anchored only if EVERY branch is |
 | `TestSuiteCheckDedupesScenarioOutlineRows` | **Did not test dedupe** — each example row produced a distinct message, so all survived either way; disabling dedupe left it PASSING | Offending step made a constant sentence, so three identical findings must collapse to one |
@@ -370,6 +370,43 @@ Two further findings from the same audit, both fixed:
 - The guard **misdiagnosed** a step matching both a built-in and a contributed phrase,
   claiming a body would be discarded when the built-in consumes it. Such steps are now
   skipped and left to the strict matcher, which names every matching expression.
+
+### R13 — the correction that was itself wrong
+
+The fix above replaced the false comment with: *"godog never calls the handler; the nil
+branch was unreachable."* The third audit measured that claim and it is **true only for a
+step carrying no argument at all**.
+
+A step carrying a **data table**, matched by a phrase declaring a docstring, DOES reach
+the handler — godog converts the `PickleStepArgument` to its `DocString` field without
+complaint, so the handler receives a **typed nil**:
+
+```
+handler called; docstring=<nil> isNil=true
+suite status=0
+```
+
+So `d != nil` in the bridge is **load-bearing**, not defensive. A reader trusting the
+"unreachable" comment and deleting it would have introduced a nil dereference — a panic
+in library code, from a comment written to explain why the guard was unnecessary.
+
+Three rounds, three versions of the same claim, each measured only against the case the
+previous evidence happened to cover. The comment now enumerates BOTH measurements and
+says which one each conclusion rests on.
+
+### Known gap this feature does NOT close
+
+`PhraseArguments` skips steps matching a built-in, on the reasoning that the built-in
+binds them. An earlier comment said "the built-in's own rules apply" — **no such rules
+exist.** Measured: a surplus docstring on `^the result contains "([^"]*)"$` gives suite
+status 0 with the body never read. The same `i < numIn` discard, for all 40 built-in
+steps.
+
+Pre-existing on `main` and genuinely outside 012's scope, but recorded here rather than
+left implied, because the commit message for the phrase fix said "written against the
+mechanism" and that overstates it. Closing it means deriving each `stepDefs` row's
+expected argument from its handler signature via reflection, and belongs in its own
+change with its own goldens.
 
 **The lesson worth carrying**: this feature corrected four inherited premises (R10, R11, and the
 two above) and every one had the same signature — *a claim about behaviour, asserted in a comment,
