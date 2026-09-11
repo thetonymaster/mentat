@@ -39,10 +39,26 @@ const (
 // goldens guard.
 var godogGoldenDurationLine = regexp.MustCompile(`(?m)^(?:\d+h)?(?:\d+m)?\d+(?:\.\d+)?(?:ns|µs|us|ms|s)$`)
 
+// godogGoldenStepDefLine matches the "# <file>.go:<line> -> *world" annotation
+// godog's pretty formatter appends to each step: the SOURCE LOCATION of the step
+// definition it bound.
+//
+// The line number is normalized because it is an artifact of where the reg.Step
+// call happens to sit in metadata.go, not a property of the rendered output. Left
+// raw, adding a comment anywhere above that loop churns this golden — which both
+// trains readers to regenerate goldens reflexively and makes "the output is
+// byte-identical" unachievable for reasons that have nothing to do with behaviour.
+//
+// The FILENAME is deliberately kept. Registration moving to a different file is a
+// real change to the single registration path and must still churn the golden;
+// only the line within that file is noise.
+var godogGoldenStepDefLine = regexp.MustCompile(`(\w+\.go):\d+( -> )`)
+
 // normalizeGoldenStdout replaces the nondeterministic total-duration summary line with a
 // fixed placeholder so the run's stdout is byte-stable across invocations.
 func normalizeGoldenStdout(b []byte) string {
-	return godogGoldenDurationLine.ReplaceAllString(string(b), "<DURATION>")
+	s := godogGoldenDurationLine.ReplaceAllString(string(b), "<DURATION>")
+	return godogGoldenStepDefLine.ReplaceAllString(s, "${1}:<LINE>${2}")
 }
 
 // TestGoldenHermeticStdout is the SC-004 hermetic proof: mentat.Run's pretty stdout is
