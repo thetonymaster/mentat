@@ -443,12 +443,19 @@ anything.
   (`phrase.go:565`) has exactly **one** caller, inside `EngineStepChecks` — which is why FR-017 is
   satisfied by location rather than by discipline (research.md R6).
 
-  **And the helper MUST be unexported, with the findings returned from `EngineStepChecks`.** An
-  exported `PatternOverlapFindings` in `internal/steps` would be callable from `steps.go:101` —
-  so FR-017 would rest on "`run.go` happens to be its only caller today", which is discipline
-  wearing the word structural. Unexported, invoked from inside the one function scenario init does
-  not call, and surfaced to `mentat.Validate` as a return value: then the run path cannot reach
-  these findings even by a future mistake, which is the whole claim R6 makes.
+  **The findings MUST be computed inside `EngineStepChecks` and returned from it**, not by a
+  function any caller can invoke independently.
+
+  Precisely what that buys, because an earlier draft of this paragraph overstated it. That draft
+  said the helper "MUST be unexported" so it could not be called from `steps.go:101`. **Unexporting
+  does not achieve that**: scenario init lives in the *same package*, so an unexported helper is
+  exactly as callable from there. Unexporting only stops other packages — `run.go`, `cmd/mentat` —
+  from reaching past `EngineStepChecks`, which is worth having but is not the guarantee.
+
+  The guarantee is the call graph: scenario init calls `resolvePhrases` directly and never calls
+  `EngineStepChecks`, so findings produced only inside `EngineStepChecks` cannot reach the run
+  path. That is what R6 measured, and it is what FR-017 rests on. Keep the helper unexported as
+  defence in depth; do not describe that as the structural property.
 
   Not at `engine.Build` either: `internal/steps` imports `internal/engine`, so the reverse is a
   cycle and a findings-producing check cannot live in the engine. Same constraint 012 recorded when
@@ -503,8 +510,17 @@ anything.
   contains a sentence in the overlap (FR-006, FR-013).
 - **SC-004**: Every site asserting disjointness states that it is **decided**; no site still cites
   the nine fillers as the basis for the claim. A reader can state the basis without opening a test.
-- **SC-005**: Every existing suite produces byte-identical findings and verdicts before and after
-  this feature — the single-match path is untouched (FR-003).
+- **SC-005**: Every existing suite whose patterns do **not** overlap produces byte-identical
+  findings and verdicts before and after this feature — the single-match path is untouched
+  (FR-003).
+
+  The qualifier was added during implementation, because the unqualified form was false and a
+  green run would have hidden it. 012's `TestValidateReportsAnAmbiguousStepNamingBothPatterns`
+  drives two genuinely overlapping contributed phrases, so it now reports the per-pattern-pair
+  overlap **in addition to** the per-sentence ambiguity — from one finding to two. That is FR-014
+  working, not FR-003 breaking: what FR-003 protects is the argument-diagnosis path for a step
+  exactly one definition matches, and an overlapping pair is not that. A success criterion has to
+  say which it means.
 - **SC-006**: No new module dependency appears in `go.mod`.
 - **SC-007**: The gate decides **every pair** over the built-in set — 780 pairs at 40 patterns —
   reports zero intersecting, and records the pair count and wall clock as measured (FR-016).

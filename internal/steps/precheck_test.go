@@ -290,7 +290,7 @@ func TestStepBindingFindingsAgreesWithTheRunnerOnAmbiguity(t *testing.T) {
 	// top of it. Derived through EngineStepChecks rather than hand-listed, so it is
 	// the set that engine actually binds.
 	eng := customComparatorEngine(t)
-	pats, _, err := EngineStepChecks(eng)
+	pats, _, _, err := EngineStepChecks(eng)
 	if err != nil {
 		t.Fatalf("EngineStepChecks: %v", err)
 	}

@@ -394,3 +394,115 @@ func stepOn(n *nfa, cl map[uint32]bool, r rune) map[uint32]bool {
 	}
 	return next
 }
+
+// PatternSource says where a step pattern came from. It exists so a pattern-overlap
+// finding can name the contributing comparator, which is the only thing that makes such
+// a finding actionable for a consumer.
+type PatternSource int
+
+const (
+	// SourceBuiltin is a stepDefs row.
+	SourceBuiltin PatternSource = iota
+	// SourceContributed is a phrase a comparator declared.
+	SourceContributed
+)
+
+// LabelledPattern is one step pattern with its provenance.
+//
+// StepPatterns is []*regexp.Regexp and has discarded both the pattern STRING and where
+// it came from by the time a check sees it. A finding needs both.
+type LabelledPattern struct {
+	// Pattern is the regex source, as registered.
+	Pattern string
+	// Source distinguishes a stepDefs row from a contributed phrase.
+	Source PatternSource
+	// Comparator names the contributing comparator; empty for built-ins.
+	Comparator string
+}
+
+// labelledPatternsFor returns the pattern set in REGISTRATION ORDER — built-ins first,
+// in stepDefs table order, then contributed phrases in resolution order.
+//
+// Order is significant, not incidental: registration order is what decides which
+// definition godog binds when two match, so a report listing patterns out of order
+// would misdescribe the runtime.
+func labelledPatternsFor(phrases []contributedPhrase) []LabelledPattern {
+	docs := StepDocs()
+	out := make([]LabelledPattern, 0, len(docs)+len(phrases))
+	for _, d := range docs {
+		out = append(out, LabelledPattern{Pattern: d.Pattern, Source: SourceBuiltin})
+	}
+	for _, cp := range phrases {
+		out = append(out, LabelledPattern{
+			Pattern:    cp.phrase.Pattern,
+			Source:     SourceContributed,
+			Comparator: cp.comparator,
+		})
+	}
+	return out
+}
+
+// patternOverlapFindings decides every pair involving at least one CONTRIBUTED pattern
+// and reports each overlap as a `pattern-overlap` finding carrying its witness.
+//
+// # Why contributed pairs only
+//
+// Built-in × built-in is the CI gate's job (TestBuiltinStepPatternsAreDecidedDisjoint).
+// Deciding it again here would cost every Validate call 780 decisions to re-derive a
+// property CI already proves, and — worse — would report to a consumer a defect they
+// cannot fix.
+//
+// # Why this is not fatal
+//
+// Overlap between two independently-authored comparators is a POTENTIAL failure: it
+// becomes real only for a sentence inside the overlap, which still fails loudly at run
+// time through godog's Strict plus the per-sentence `ambiguous-step` finding. Refusing
+// to build would make two otherwise-usable comparators mutually exclusive for a consumer
+// whose feature files never enter the overlap. We own stepDefs and can simply not ship
+// an overlapping pair; we do not own consumers' comparators. See 013 D5.
+//
+// # Why it lives here and not beside the fail-fast precheck
+//
+// This is called from EngineStepChecks, which scenario init does not call — it calls
+// resolvePhrases directly. So these findings cannot reach the run path. That call-graph
+// fact, not this function's unexported name, is what makes FR-017 structural: an
+// unexported function is equally callable from elsewhere in this package.
+//
+// A refusal from the decider is returned as an error, never swallowed: a pattern the
+// decider cannot model is a fact the author needs, and treating it as "no overlap" would
+// be the silent fallback the decider exists to remove.
+func patternOverlapFindings(labelled []LabelledPattern, src Source) ([]Finding, error) {
+	var out []Finding
+	for i := 0; i < len(labelled); i++ {
+		for j := i + 1; j < len(labelled); j++ {
+			if labelled[i].Source == SourceBuiltin && labelled[j].Source == SourceBuiltin {
+				continue
+			}
+			got, err := Intersects(labelled[i].Pattern, labelled[j].Pattern)
+			if err != nil {
+				return nil, fmt.Errorf("deciding overlap between %s and %s: %w",
+					describeLabelled(labelled[i]), describeLabelled(labelled[j]), err)
+			}
+			if !got.Intersects {
+				continue
+			}
+			out = append(out, Finding{
+				File:  src.File,
+				Class: "pattern-overlap",
+				Message: fmt.Sprintf(
+					"%s and %s can both match the same step, for example %q; under Strict neither definition binds, so any feature file containing such a step fails as ambiguous",
+					describeLabelled(labelled[i]), describeLabelled(labelled[j]), got.Witness),
+			})
+		}
+	}
+	return out, nil
+}
+
+// describeLabelled names a pattern in the author's terms: a contributed phrase is
+// identified by its comparator, because that is what the author can change.
+func describeLabelled(lp LabelledPattern) string {
+	if lp.Source == SourceContributed {
+		return fmt.Sprintf("the phrase %q contributed by comparator %q", lp.Pattern, lp.Comparator)
+	}
+	return fmt.Sprintf("the built-in step %q", lp.Pattern)
+}

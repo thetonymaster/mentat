@@ -68,10 +68,16 @@ type SuiteCheck struct {
 	// `ambiguous-step` over Patterns, which is the finding Run's own ambiguity failure
 	// corresponds to. The two answer the same way about the same suite.
 	//
-	// What neither answers is regex OVERLAP in the abstract — mentat does not compute it,
-	// and the runner does not either. Both classify per sentence, so two patterns that
-	// could collide on a sentence no scenario in the corpus contains are reported by
-	// nobody, and nothing here should be read as claiming otherwise.
+	// What neither of these answers is regex OVERLAP in the abstract. Both classify per
+	// sentence, so a collision on a sentence no scenario in the corpus contains is
+	// invisible to both.
+	//
+	// Something else does answer it now. Feature 013 added Intersects (disjoint.go),
+	// which decides emptiness-of-intersection for a pattern pair without any corpus;
+	// the built-in set is gated by it in CI, and pairs involving a contributed pattern
+	// are reported as `pattern-overlap` by mentat.Validate. An earlier version of this
+	// comment said mentat "does not compute it", which was true when written and is the
+	// claim 013 was raised to retire.
 	Arguments StepArguments
 }
 

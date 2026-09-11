@@ -261,7 +261,7 @@ func TestEngineStepChecksIncludesContributedPhrases(t *testing.T) {
 		phrases: []core.ContributedPhrase{wellFormed(`^the revenue floor is (\d+)$`)},
 	}))
 
-	pats, _, err := EngineStepChecks(eng)
+	pats, _, _, err := EngineStepChecks(eng)
 	if err != nil {
 		t.Fatalf("EngineStepChecks: %v", err)
 	}
@@ -295,7 +295,7 @@ func TestEngineStepChecksIncludesContributedPhrases(t *testing.T) {
 func TestEngineStepChecksWithoutContributionsIsBuiltinsOnly(t *testing.T) {
 	t.Parallel()
 
-	pats, _, err := EngineStepChecks(customComparatorEngine(t))
+	pats, _, _, err := EngineStepChecks(customComparatorEngine(t))
 	if err != nil {
 		t.Fatalf("EngineStepChecks: %v", err)
 	}
@@ -336,7 +336,7 @@ func TestEngineStepChecksResolvesOnceForBothDerivations(t *testing.T) {
 		},
 	}))
 
-	pats, args, err := EngineStepChecks(eng)
+	pats, args, _, err := EngineStepChecks(eng)
 	if err != nil {
 		t.Fatalf("EngineStepChecks: %v", err)
 	}
@@ -381,7 +381,7 @@ func TestEngineStepChecksPropagatesValidationFailure(t *testing.T) {
 		phrases: []core.ContributedPhrase{wellFormed(`unanchored`)},
 	}))
 
-	pats, args, err := EngineStepChecks(eng)
+	pats, args, _, err := EngineStepChecks(eng)
 	if err == nil {
 		t.Fatal("EngineStepChecks accepted an unanchored phrase")
 	}
