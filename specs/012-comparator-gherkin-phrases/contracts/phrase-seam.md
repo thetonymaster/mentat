@@ -87,9 +87,20 @@ take a `[]string` — godog's restriction is invisible to extension authors.
 
 ## Stability obligations
 
-- Both seams appear in the **public-surface golden** with their full method sets, and the
-  facade nameability sweep (`surface_test.go`) demands their aliases automatically because they
-  appear in a published seam's method set — 010 paying for itself again (SC-008, FR-015).
+- Both seams appear in the **public-surface golden** with their full method sets (SC-008,
+  FR-015). The golden is what demands them, together with the compile-time witnesses in
+  `custom_phrase_facade_test.go` (`var _ mentat.PhraseContributor = …` in an external test
+  package, so a missing alias is a build failure).
+
+  > **Corrected 2026-09-11 (R11).** This bullet claimed the facade nameability sweep "demands
+  > their aliases automatically because they appear in a published seam's method set — 010
+  > paying for itself again". **Measured false**, twice over: `TestFacadeNameabilitySweep` is
+  > SEEDED from the aliases that already exist, so removing one removes its seed and nothing
+  > fires; and both seams are **optional**, discovered by type assertion, so they appear in no
+  > published seam's method set to be walked to. 010 does not pay for itself here. SC-008 still
+  > holds — via the golden plus the witnesses, the same pair 011 used — but it holds because
+  > someone chose those guards, not automatically. **A gate's coverage is a property to measure,
+  > not to infer from its name.**
 - `ContributedPhrase`'s exported fields are frozen in the golden as struct field lines (009's
   US1 widened the golden to cover exported struct fields).
 - 011's `ExpectationParser` line in the golden **must not change**. Its stability is the

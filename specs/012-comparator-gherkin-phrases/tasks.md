@@ -326,3 +326,24 @@ alongside US1: shipping US1 without it means shipping a latent cross-run contami
 - Commit per task or logical group, Conventional Commits, files staged individually.
 - If a godog behaviour surprises you, re-read [research.md](./research.md) before changing code —
   two of this feature's premises came from 011's D1 and **one was false**.
+
+---
+
+## Phase 8: Convergence
+
+Appended by `/speckit-converge` on 2026-09-11, with T001–T069 complete and `go test ./...` green
+(0 FAIL). **No functional gap was found** — every FR and SC has a code and test witness, and
+nothing is `missing`. Four of these five are the signature this feature kept finding in itself
+(R10–R13): a claim asserted in prose that an adjacent measurement contradicts. The Phase 1
+contracts are where it survived, because the corrections landed in `research.md`, `plan.md`,
+`quickstart.md` and `CLAUDE.md` and stopped there.
+
+`tasks.md` is append-only here, so the "live defect" wording at lines 98 and 247 is left as the
+historical record of what was believed when those tasks were written; T072 corrects the contract
+a future feature will actually read.
+
+- [X] T070 Correct `specs/012-comparator-gherkin-phrases/contracts/validate-surface.md:79`, which claims "**No path reports a valid file as broken**" — measured false on 2026-09-11: `mentat validate` over a suite written in a contributed phrase emits `[unbound-step] no step matches "the revenue floor is 4 USD"` and exits 1, the behaviour the contract's own table at `:77` and `docs/extending/phrases.md:199-200` both describe. Scope the claim to the engine-aware library path and state the binary's deliberate limit (D7/FR-011a) beside it, so 013's CLI work inherits the measurement and not the slogan per SC-005 (contradicts)
+- [X] T071 Reconcile `contracts/phrase-seam.md:90-92` and `data-model.md:52` with R11 — both still assert the facade nameability sweep "demands their aliases automatically", measured false: `TestFacadeNameabilitySweep` is seeded from the aliases that already exist, so removing one removes its seed and nothing fires, and both seams are optional so no published type references them. Name the real guards as T062 and `quickstart.md:174-177` already do — `TestPublicSurfaceGolden` plus the external-package compile-time witnesses in `custom_phrase_facade_test.go` per SC-008 (contradicts)
+- [X] T072 Reconcile `contracts/step-registration.md:85` with R10 — it still states the ambiguity defect "is a live defect at `0f9dcea`, reachable between two built-in patterns today", measured false: the 40 built-in patterns are pairwise disjoint across 1530 generated sentences covering every alternation branch, so the defect was **latent** until contributed phrases made it reachable. `plan.md:23-29` carries this correction and the contract does not per D8 (contradicts)
+- [X] T073 Remove `EngineStepPatterns` (`internal/steps/phrase.go:567`) and `EnginePhraseArguments` (`:625`) or give them a production caller — both are exported with **zero non-test callers** since `EngineStepChecks` (`run.go:596`) became the single resolve-once entry point, and `EnginePhraseArguments`'s doc comment still claims it is "exported so the static validate path runs the SAME check", which that path no longer does. Re-point `suite_test.go:252-350` and `phrase_test.go:1097-1108` at whatever survives; note that the `:345-350` cross-check can only fire if someone edits one of two wrappers that both delegate to `stepPatternsFor`, so today it guards a path nothing runs per plan: no unreachable step state (unrequested)
+- [X] T074 Add `docs/extending/phrases.md` to README.md's extension-guide list (`README.md:282-287`), which names driver, store, comparator, judge, evidence and stability but not the contributed-phrase authoring path this feature shipped — it is currently reachable only from `comparator.md:207` and `new-seam.md:205` per FR-017 (partial)

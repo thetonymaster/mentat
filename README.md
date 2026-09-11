@@ -274,14 +274,15 @@ Mentat's seams — driver, store, comparator, judge — are public interfaces on
 `github.com/thetonymaster/mentat` facade, so you can drive or grade anything
 *without forking*: register a custom adapter at the `mentat.Run` call. Custom
 **drivers**, **stores**, and **judges** then work in `mentat.yaml` and feature files
-exactly like a built-in. A custom **comparator** registers and composes today, but
-invoking one from a `.feature` step needs new Gherkin grammar and is deferred to a
-future spec — so it is not yet callable from feature files. The guides under
-[`docs/extending`](docs/extending) walk each seam:
+exactly like a built-in. A custom **comparator** is callable from a feature file two
+ways: by name through one generic step, or through a Gherkin sentence the comparator
+declares itself — `Then the revenue floor is 4 USD`. Both produce identical verdicts.
+The guides under [`docs/extending`](docs/extending) walk each seam:
 
 - [Writing a custom Driver](docs/extending/driver.md)
 - [Writing a custom TraceStore](docs/extending/store.md)
 - [Writing a custom Comparator](docs/extending/comparator.md)
+- [Contributing Gherkin phrases from a comparator](docs/extending/phrases.md) — the comparator's own domain language
 - [Writing a custom Judge](docs/extending/judge.md)
 - [The Evidence a comparator inspects](docs/extending/evidence.md) — the shared vocabulary
 - [Stability policy (pre-1.0)](docs/extending/stability.md) — how the public surface changes

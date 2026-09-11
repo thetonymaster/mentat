@@ -76,10 +76,31 @@ Out of scope for 012, and recorded so it is a **layer, never a fork**.
 | Library validate entry point | yes (engine-aware) | same, statically |
 | `mentat validate` binary | no (structurally) | no **built-in** step matches; the docs state contributed phrases are out of reach |
 
-**No path reports a valid file as broken** (SC-005). The binary does not soften its finding class
-for built-in steps — a genuinely misspelled built-in step still fails there, which is the reason
-the rejected "soft finding class" option was not taken: it would have weakened the gate for
-everyone to accommodate a case the binary cannot see.
+**No ENGINE-AWARE path reports a valid file as broken** (SC-005). The binary is outside that
+scope by D7/FR-011a, and the distinction is load-bearing rather than pedantic.
+
+> **Corrected at convergence (T073/T070, measured 2026-09-11).** This line previously read "No
+> path reports a valid file as broken", which contradicted the table directly above it and was
+> the more memorable half. Measured against the shipped feature, using the worked example from
+> [`docs/extending/phrases.md`](../../../docs/extending/phrases.md):
+>
+> ```
+> $ mentat validate -config mentat.yaml phrase.feature
+> phrase.feature:3: [unbound-step] no step matches "the revenue floor is 4 USD"
+> validate: 1 issue(s) found          # exit 1
+> ```
+>
+> The binary **does** report that valid file as broken, exactly as the table says it must: a
+> compiled binary cannot reach a consumer's `WithComparator` calls, and no flag closes that. The
+> same sentence a reader is told to write in `phrases.md` fails the binary's check. 013 is
+> CLI/`mentatctl` UX and inherits this contract, so it is corrected here rather than footnoted.
+
+Consumers reach SC-005's guarantee through `mentat.Validate`, which builds their engine — that
+is the whole reason D7 published it.
+
+The binary does not soften its finding class for built-in steps — a genuinely misspelled built-in
+step still fails there, which is the reason the rejected "soft finding class" option was not
+taken: it would have weakened the gate for everyone to accommodate a case the binary cannot see.
 
 ---
 

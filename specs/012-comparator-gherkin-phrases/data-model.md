@@ -48,9 +48,18 @@ assertion**, never by registration — the same discovery model 011 chose for `E
 (`internal/core/core.go:114-132`), so a comparator that does not implement it keeps working
 exactly as today (FR-004, D1).
 
-Declared in `internal/core` (R2): the type appears in a published seam's method set, so 010's
-nameability sweep demands a facade alias automatically (SC-008), and 010's D5 forbids declaring
-it at the facade because `internal/steps` consumes it.
+Declared in `internal/core` (R2) because 010's D5 forbids declaring it at the facade —
+`internal/steps` consumes it.
+
+> **Corrected 2026-09-11 (R11).** This paragraph also claimed the type "appears in a published
+> seam's method set, so 010's nameability sweep demands a facade alias automatically (SC-008)".
+> **Measured false.** `TestFacadeNameabilitySweep` is SEEDED from the aliases that already exist
+> and walks outward, so deleting an alias deletes its seed and nothing fires. Both seams are
+> optional and discovered by type assertion, so no published type references them either. What
+> actually guards the aliases, both measured: `TestPublicSurfaceGolden` (which reports "symbols
+> in golden but NOT present now") and the compile-time witnesses in
+> `custom_phrase_facade_test.go` — the same pair 011 used for `ExpectationParser`. See R11 and
+> tasks.md T062.
 
 ## 3. Capture-parser seam
 

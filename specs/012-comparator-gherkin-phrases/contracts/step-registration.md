@@ -82,8 +82,22 @@ strict=true  -> suiteStatus=1 firstRan=false secondRan=false
 
 Three things this fixes and one it avoids:
 
-- **It is a live defect at `0f9dcea`**, reachable between two built-in patterns today — hence
-  SC-011 is a regression test that MUST be observed failing before the fix (FR-007b).
+- **It is a LATENT defect at `0f9dcea`**, not a live one, and contributed phrases are what make
+  it reachable. SC-011 is still observed failing before the fix (FR-007b) — at the
+  step-registration level, since the collision cannot be constructed through the public surface
+  at `0f9dcea`.
+
+  > **Corrected 2026-09-11 (R10).** This bullet read "**It is a live defect at `0f9dcea`**,
+  > reachable between two built-in patterns today". **Measured false**: the 40 built-in patterns
+  > are **pairwise disjoint** across 1530 generated sentences covering every alternation branch,
+  > and registration is single-pathed, so nothing reaches godog's ambiguous branch through the
+  > public surface at `0f9dcea`. Pinned by `TestBuiltinStepPatternsArePairwiseDisjoint`, which
+  > nothing asserted before.
+  >
+  > This does not weaken the case for `Strict` — it sharpens it. `Strict` is a **prerequisite**
+  > of this feature, sequenced first so the flag lands before step 4 makes the branch reachable,
+  > rather than an independent bugfix 012 happens to carry. `plan.md:23-29` carries the same
+  > correction; this contract did not until convergence (T072).
 - **No new surfacing mechanism is needed.** The ambiguity reaches Mentat's After hook as a
   non-nil `stepErr`, so `Pass: stepErr == nil` (`steps.go:127`) records a FAILED scenario with
   the message as its reason. `mentat.Run` discarding the suite status is irrelevant.
