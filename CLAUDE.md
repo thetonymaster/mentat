@@ -115,10 +115,17 @@ from Tempo, and run **comparators** that assert how it behaved and what it produ
   `gen_ai.*` span forests and tool-call sequences. See `.claude/skills/traces`.
 - `/coverage` — run `go test` with coverage and enforce the 80% floor.
 
-<!-- SPECKIT START -->
+## Feature history and standing rules
+
+> These notes are **curated, not generated**. They sit above the `<!-- SPECKIT -->`
+> markers deliberately: the agent-context hook REPLACES everything between those
+> markers with a three-line pointer to the current plan, so anything kept inside them
+> is destroyed the next time that hook runs. Add feature retrospectives here, never
+> below the marker.
+
 Features 001–011 are shipped. **011-comparator-gherkin-invocation**
 (`specs/011-comparator-gherkin-invocation`, implemented 2026-09-10, all 37 tasks
-complete) is on branch `011-comparator-gherkin-invocation`, not yet merged. Both plan
+complete) is **merged to `main`** as `ec4efbc` (#39). Both plan
 invariants held: the public-surface golden changed **exactly once, by exactly two
 lines**, and no `stepDefs` drift-test assertion was edited anywhere in the branch —
 the operational test of D1's claim that this was Option A and not Option B.
@@ -223,4 +230,9 @@ and other important information, read `specs/` as history — each feature dir c
 its `spec.md`, `plan.md`, `tasks.md`, and `contracts/`. When work is in flight, the
 current plan is the `plan.md` of the highest-numbered spec dir whose `tasks.md`
 still has unchecked tasks.
+
+<!-- SPECKIT START -->
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read the current plan
+at specs/012-comparator-gherkin-phrases/plan.md
 <!-- SPECKIT END -->
