@@ -141,14 +141,14 @@ process cannot observe each other's phrases.
 
 ### Tests for User Story 2 (REQUIRED — Test-First) ⚠️
 
-- [ ] T030 [P] [US2] Write the FAILING isolation test in `custom_phrase_isolation_test.go` (repo root, mirroring `mentat_run_reentrancy_test.go`): engines A and B with disjoint contributed phrases, run A→B **and** B→A, asserting each binds only its own. Both orders are required — a first-writer-wins cache passes one and fails the other (go-test-writer, red)
-- [ ] T031 [P] [US2] Write the FAILING test asserting a phrase belonging to engine A is reported unbound under engine B, with the same wording any unknown step gets (go-test-writer, red)
+- [X] T030 [P] [US2] Write the FAILING isolation test in `custom_phrase_isolation_test.go` (repo root, mirroring `mentat_run_reentrancy_test.go`): engines A and B with disjoint contributed phrases, run A→B **and** B→A, asserting each binds only its own. Both orders are required — a first-writer-wins cache passes one and fails the other (go-test-writer, red)
+- [X] T031 [P] [US2] Write the FAILING test asserting a phrase belonging to engine A is reported unbound under engine B, with the same wording any unknown step gets (go-test-writer, red)
 
 ### Implementation for User Story 2
 
-- [ ] T032 [US2] Confirm T030/T031 go green on the Phase 2 foundation (per-engine resolution T018, no package cache T009). If either fails, a package-level cache survives somewhere — find it rather than adding a guard (go-test-writer, green)
-- [ ] T033 [US2] Add a `t.Parallel()` concurrent-run variant of T030 and run the package under `-race`, so concurrent engines are covered and not only sequential ones (go-test-writer)
-- [ ] T034 [US2] Grep `internal/steps` and `internal/engine` for any remaining package-level mutable state (`sync.Once`, package `var` caches) and record the result in `internal/steps/phrase.go`'s package doc — FR-010 is "none survives", not "the one we knew about is gone" (go-reviewer, `pair`)
+- [X] T032 [US2] Confirm T030/T031 go green on the Phase 2 foundation (per-engine resolution T018, no package cache T009). If either fails, a package-level cache survives somewhere — find it rather than adding a guard (go-test-writer, green)
+- [X] T033 [US2] Add a `t.Parallel()` concurrent-run variant of T030 and run the package under `-race`, so concurrent engines are covered and not only sequential ones (go-test-writer)
+- [X] T034 [US2] Grep `internal/steps` and `internal/engine` for any remaining package-level mutable state (`sync.Once`, package `var` caches) and record the result in `internal/steps/phrase.go`'s package doc — FR-010 is "none survives", not "the one we knew about is gone" (go-reviewer, `pair`)
 
 **Checkpoint**: US1 and US2 both work; the reentrancy property 007 established is not re-opened.
 

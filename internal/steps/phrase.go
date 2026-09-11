@@ -15,7 +15,32 @@ import (
 // Nothing above it — not the comparator seams, not registration, not the world —
 // sees them. That containment is what frees the CaptureParser seam to take a plain
 // []string: godog's restrictions are invisible to extension authors because Mentat
-// synthesizes the binding rather than asking them to satisfy it.
+// synthesizes the binding rather than asking them to satisfy it. It is also why
+// *godog.DocString is dereferenced here and converted to (body, hasBody) before going
+// anywhere else — one nil check, in one place, instead of one per consumer.
+//
+// # Package-level mutable state: none survives (FR-010)
+//
+// FR-010 is "no package-level mutable step state survives", not "the one we knew about
+// is gone", so the whole package was audited on 2026-09-11 rather than only
+// precheck.go's deleted sync.Once. What remains at package scope in internal/steps:
+//
+//   - stepDefs (metadata.go) — the built-in step table. Written once at init, never
+//     mutated; the drift tests fail if registration and it ever disagree.
+//   - reTarget, reSatisfies*, reRuns*, reMatchesShape, reSpanOrdinal — compiled
+//     regexes over literal patterns. Immutable after init.
+//   - stringType / docType / errorType (this file) — reflect.Type values for handler
+//     synthesis. Immutable after init.
+//   - two interface-satisfaction assertions (`var _ T = ...`), which hold no state.
+//
+// internal/engine has no package-level vars at all; its sync.Once (resolveOnce) is a
+// FIELD on Engine, so it is per-engine and carries the isolation property rather than
+// breaking it.
+//
+// Nothing above is per-engine data. Anything that varies by engine — the contributed
+// phrase set, the compiled step-pattern set — is a value threaded through as a
+// parameter, which is the whole point: a second engine in one process must never be
+// answered with the first engine's data.
 
 var (
 	stringType = reflect.TypeOf("")
