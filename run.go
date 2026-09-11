@@ -406,8 +406,18 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 	defer budgetCancel()
 
 	col := report.NewCollector()
+	// Building the initializer resolves this engine's comparator-contributed Gherkin
+	// phrases. A malformed one — an uncompilable or unanchored pattern, a phrase whose
+	// comparator cannot parse it — fails HERE, before any feature is loaded or any SUT
+	// driven, and names the contributing comparator. An authoring defect in the
+	// extension surface must not surface as a single mysterious red scenario partway
+	// through a suite.
+	init, err := steps.InitializerWithBudget(eng, col, budget, budgetCancel)
+	if err != nil {
+		return Results{}, fmt.Errorf("mentat: %w", err)
+	}
 	suite := godog.TestSuite{
-		ScenarioInitializer: steps.InitializerWithBudget(eng, col, budget, budgetCancel),
+		ScenarioInitializer: init,
 		Options: &godog.Options{
 			Format:         "pretty",
 			Paths:          ro.featurePaths,

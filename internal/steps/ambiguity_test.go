@@ -157,7 +157,7 @@ func ambiguityProbe(t *testing.T, strict bool) (sr result.ScenarioResult, out st
 
 	eng := customComparatorEngine(t)
 	col := report.NewCollector()
-	base := InitializerWithCollector(eng, col)
+	base := mustInit(InitializerWithCollector(eng, col))
 
 	var buf bytes.Buffer
 	suite := godog.TestSuite{

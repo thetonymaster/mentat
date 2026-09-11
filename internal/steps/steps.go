@@ -73,14 +73,14 @@ type world struct {
 
 // Initializer binds the v1 grammar; results go to a discarded collector.
 // Existing callers are unaffected; results are not surfaced.
-func Initializer(eng *engine.Engine) func(*godog.ScenarioContext) {
+func Initializer(eng *engine.Engine) (func(*godog.ScenarioContext), error) {
 	return InitializerWithCollector(eng, report.NewCollector())
 }
 
 // InitializerWithCollector binds the v1 grammar and records one ScenarioResult per
 // scenario into col. Use this at the composition root to capture run reports. It runs
 // with no judge budget (unlimited) — today's behaviour.
-func InitializerWithCollector(eng *engine.Engine, col *report.Collector) func(*godog.ScenarioContext) {
+func InitializerWithCollector(eng *engine.Engine, col *report.Collector) (func(*godog.ScenarioContext), error) {
 	return InitializerWithBudget(eng, col, nil, nil)
 }
 
@@ -89,11 +89,19 @@ func InitializerWithCollector(eng *engine.Engine, col *report.Collector) func(*g
 // completed judge cost; when the running total crosses the ceiling (or a usage cannot
 // be priced) abort cancels the suite context so no NEW scenario starts a judge call.
 // A nil budget disables the check (unlimited); a nil abort makes the trip advisory.
-func InitializerWithBudget(eng *engine.Engine, col *report.Collector, budget *report.Budget, abort context.CancelFunc) func(*godog.ScenarioContext) {
+// It returns an error when this engine's comparator-contributed phrases cannot be
+// prepared — an uncompilable or malformed pattern, or a comparator that contributes a
+// phrase it cannot parse. That is reported HERE, at composition, rather than when a
+// scenario happens to use the phrase: a defect in the extension surface must stop the
+// suite before any SUT is driven, not produce one mysterious red scenario.
+func InitializerWithBudget(eng *engine.Engine, col *report.Collector, budget *report.Budget, abort context.CancelFunc) (func(*godog.ScenarioContext), error) {
 	// Phrases are resolved ONCE per initializer, not per scenario: the contributed
-	// set is a property of the engine, and re-resolving it for every scenario would
-	// invite it to differ between them.
-	var phrases []phraseStep
+	// set is a property of the engine, and re-resolving it per scenario would invite
+	// it to differ between them.
+	resolved, err := resolvePhrases(eng)
+	if err != nil {
+		return nil, err
+	}
 
 	return func(sc *godog.ScenarioContext) {
 		w := &world{eng: eng, col: col, budget: budget, abort: abort}
@@ -107,6 +115,13 @@ func InitializerWithBudget(eng *engine.Engine, col *report.Collector, budget *re
 		// The phrase set is passed in rather than read from w.eng: the drift test
 		// drives this path with a zero world whose eng is nil, so reaching through it
 		// would panic and nil-guarding it would be a silent fallback.
+		//
+		// Handlers bind to THIS scenario's world, exactly as the built-in handler
+		// selectors do — each scenario has its own evidence, context and ledger.
+		phrases := make([]phraseStep, 0, len(resolved))
+		for _, cp := range resolved {
+			phrases = append(phrases, cp.step(w))
+		}
 		registerSteps(sc, w, phrases)
 
 		// §7: compile every CEL expression in the scenario before any step runs,
@@ -155,7 +170,7 @@ func InitializerWithBudget(eng *engine.Engine, col *report.Collector, budget *re
 			}
 			return ctx, nil
 		})
-	}
+	}, nil
 }
 
 // tagNames extracts the Name field from godog PickleTag slice.

@@ -77,7 +77,7 @@ func TestFileStoreOfflineReplayRunsGreen(t *testing.T) {
 	col := report.NewCollector()
 	var out bytes.Buffer
 	suite := godog.TestSuite{
-		ScenarioInitializer: InitializerWithCollector(eng, col),
+		ScenarioInitializer: mustInit(InitializerWithCollector(eng, col)),
 		Options: &godog.Options{
 			Format:          "pretty",
 			Output:          &out,

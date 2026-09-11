@@ -95,7 +95,7 @@ func runMetaSemantic(t *testing.T, eng *engine.Engine) (int, string) {
 	t.Helper()
 	var out bytes.Buffer
 	suite := godog.TestSuite{
-		ScenarioInitializer: Initializer(eng),
+		ScenarioInitializer: mustInit(Initializer(eng)),
 		Options: &godog.Options{
 			Format: "pretty",
 			Output: &out,

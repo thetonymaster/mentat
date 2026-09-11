@@ -133,7 +133,7 @@ func withComparator(name string, c core.Comparator) engine.Option {
 func runInlineFeature(eng *engine.Engine, name, contents string) (int, string) {
 	var out bytes.Buffer
 	suite := godog.TestSuite{
-		ScenarioInitializer: Initializer(eng),
+		ScenarioInitializer: mustInit(Initializer(eng)),
 		Options: &godog.Options{
 			Format:          "pretty",
 			Output:          &out,

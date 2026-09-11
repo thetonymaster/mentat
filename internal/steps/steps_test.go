@@ -83,7 +83,7 @@ func TestFeatureExercisesGrammarAgainstFakeEngine(t *testing.T) {
 `
 	var out bytes.Buffer
 	suite := godog.TestSuite{
-		ScenarioInitializer: Initializer(eng),
+		ScenarioInitializer: mustInit(Initializer(eng)),
 		Options: &godog.Options{
 			Format:          "pretty",
 			Output:          &out,
@@ -124,7 +124,7 @@ func TestFeatureGoesRedOnBadScenario(t *testing.T) {
 `
 	var out bytes.Buffer
 	suite := godog.TestSuite{
-		ScenarioInitializer: Initializer(eng),
+		ScenarioInitializer: mustInit(Initializer(eng)),
 		Options: &godog.Options{
 			Format:          "pretty",
 			Output:          &out,
@@ -351,7 +351,7 @@ func TestCELStep(t *testing.T) {
 			eng := buildEng(t, happyTrace())
 			var out bytes.Buffer
 			suite := godog.TestSuite{
-				ScenarioInitializer: Initializer(eng),
+				ScenarioInitializer: mustInit(Initializer(eng)),
 				Options: &godog.Options{
 					Format:          "pretty",
 					Output:          &out,
@@ -432,7 +432,7 @@ func TestCELScenarioInitFailsBeforeDrive(t *testing.T) {
 `
 	var out bytes.Buffer
 	suite := godog.TestSuite{
-		ScenarioInitializer: Initializer(eng),
+		ScenarioInitializer: mustInit(Initializer(eng)),
 		Options: &godog.Options{
 			Format:          "pretty",
 			Output:          &out,
@@ -582,7 +582,7 @@ func TestRegexStep(t *testing.T) {
 			eng := buildEng(t, happyTrace())
 			var out bytes.Buffer
 			suite := godog.TestSuite{
-				ScenarioInitializer: Initializer(eng),
+				ScenarioInitializer: mustInit(Initializer(eng)),
 				Options: &godog.Options{
 					Format:          "pretty",
 					Output:          &out,
@@ -708,7 +708,7 @@ func TestSingleRunDriveFailureGoesRed(t *testing.T) {
 			eng := failingDriveEngine(t, errors.New("store down"))
 			var out bytes.Buffer
 			suite := godog.TestSuite{
-				ScenarioInitializer: Initializer(eng),
+				ScenarioInitializer: mustInit(Initializer(eng)),
 				Options: &godog.Options{
 					Format:          "pretty",
 					Output:          &out,
@@ -835,7 +835,7 @@ func TestRunsSatisfiesStep(t *testing.T) {
 `
 	var out bytes.Buffer
 	suite := godog.TestSuite{
-		ScenarioInitializer: Initializer(runsEngine(t, happyTrace())),
+		ScenarioInitializer: mustInit(Initializer(runsEngine(t, happyTrace()))),
 		Options: &godog.Options{
 			Format:          "pretty",
 			Output:          &out,
@@ -921,7 +921,7 @@ func TestMultirunGoesRedOnBadDistribution(t *testing.T) {
 `
 	var out bytes.Buffer
 	suite := godog.TestSuite{
-		ScenarioInitializer: Initializer(badDistEngine(t, 5, 10)),
+		ScenarioInitializer: mustInit(Initializer(badDistEngine(t, 5, 10))),
 		Options: &godog.Options{
 			Format:          "pretty",
 			Output:          &out,
@@ -949,7 +949,7 @@ func TestMultirunGoesGreenOnGoodDistribution(t *testing.T) {
 `
 	var out bytes.Buffer
 	suite := godog.TestSuite{
-		ScenarioInitializer: Initializer(badDistEngine(t, 9, 10)),
+		ScenarioInitializer: mustInit(Initializer(badDistEngine(t, 9, 10))),
 		Options: &godog.Options{
 			Format:          "pretty",
 			Output:          &out,
@@ -977,7 +977,7 @@ func TestSingleRunStepRejectedInMultirunScenario(t *testing.T) {
 `
 	var out bytes.Buffer
 	suite := godog.TestSuite{
-		ScenarioInitializer: Initializer(runsEngine(t, happyTrace())),
+		ScenarioInitializer: mustInit(Initializer(runsEngine(t, happyTrace()))),
 		Options: &godog.Options{
 			Format:          "pretty",
 			Output:          &out,
@@ -1026,7 +1026,7 @@ func TestInitializer_CollectsResults(t *testing.T) {
 `
 	var out bytes.Buffer
 	suite := godog.TestSuite{
-		ScenarioInitializer: InitializerWithCollector(eng, col),
+		ScenarioInitializer: mustInit(InitializerWithCollector(eng, col)),
 		Options: &godog.Options{
 			Format:          "pretty",
 			Output:          &out,
@@ -1064,7 +1064,7 @@ func TestInitializer_DerivationDegradationKeepsVerdict(t *testing.T) {
 `
 	var out bytes.Buffer
 	suite := godog.TestSuite{
-		ScenarioInitializer: InitializerWithCollector(eng, col),
+		ScenarioInitializer: mustInit(InitializerWithCollector(eng, col)),
 		Options: &godog.Options{
 			Format:          "pretty",
 			Output:          &out,
@@ -1112,7 +1112,7 @@ func TestInitializer_CollectsFailingAggregateDetail(t *testing.T) {
 `
 	var out bytes.Buffer
 	suite := godog.TestSuite{
-		ScenarioInitializer: InitializerWithCollector(eng, col),
+		ScenarioInitializer: mustInit(InitializerWithCollector(eng, col)),
 		Options: &godog.Options{
 			Format:          "pretty",
 			Output:          &out,
@@ -1176,7 +1176,7 @@ func runShapePatternFeature(t *testing.T, eng *engine.Engine, feature string) (i
 	t.Helper()
 	var out bytes.Buffer
 	suite := godog.TestSuite{
-		ScenarioInitializer: Initializer(eng),
+		ScenarioInitializer: mustInit(Initializer(eng)),
 		Options: &godog.Options{
 			Format:          "pretty",
 			Output:          &out,
@@ -1407,7 +1407,7 @@ func TestResultToolStep(t *testing.T) {
 			eng := buildEng(t, spanResultTrace())
 			var out bytes.Buffer
 			suite := godog.TestSuite{
-				ScenarioInitializer: Initializer(eng),
+				ScenarioInitializer: mustInit(Initializer(eng)),
 				Options: &godog.Options{
 					Format:          "pretty",
 					Output:          &out,
@@ -1479,7 +1479,7 @@ func TestResultAttrStep(t *testing.T) {
 			eng := buildEng(t, spanResultTrace())
 			var out bytes.Buffer
 			suite := godog.TestSuite{
-				ScenarioInitializer: Initializer(eng),
+				ScenarioInitializer: mustInit(Initializer(eng)),
 				Options: &godog.Options{
 					Format:          "pretty",
 					Output:          &out,
@@ -1588,7 +1588,7 @@ func TestFeatureExercisesShapeGrammar(t *testing.T) {
 `
 	var out bytes.Buffer
 	suite := godog.TestSuite{
-		ScenarioInitializer: Initializer(eng),
+		ScenarioInitializer: mustInit(Initializer(eng)),
 		Options: &godog.Options{
 			Format:          "pretty",
 			Output:          &out,
@@ -1625,7 +1625,7 @@ func TestFeatureGoesRedOnBadShape(t *testing.T) {
 `
 	var out bytes.Buffer
 	suite := godog.TestSuite{
-		ScenarioInitializer: Initializer(eng),
+		ScenarioInitializer: mustInit(Initializer(eng)),
 		Options: &godog.Options{
 			Format:          "pretty",
 			Output:          &out,
@@ -1652,7 +1652,7 @@ func TestSpanResultGoesRedOnBadResult(t *testing.T) {
 `
 	var out bytes.Buffer
 	suite := godog.TestSuite{
-		ScenarioInitializer: Initializer(eng),
+		ScenarioInitializer: mustInit(Initializer(eng)),
 		Options: &godog.Options{
 			Format:          "pretty",
 			Output:          &out,

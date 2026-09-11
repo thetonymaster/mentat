@@ -35,7 +35,14 @@ func ReplayFeature(ctx context.Context, eng *engine.Engine, runID, featurePath, 
 		// as stepErr and records the scenario as failed.
 		Strict: true,
 	}
-	suite := godog.TestSuite{ScenarioInitializer: steps.Initializer(eng), Options: &opts}
+	// A comparator contributing a malformed Gherkin phrase is rejected here, before
+	// the suite runs, so the replay fails with the authoring defect named rather than
+	// with one inscrutable red scenario.
+	init, err := steps.Initializer(eng)
+	if err != nil {
+		return fmt.Errorf("replay: %w", err)
+	}
+	suite := godog.TestSuite{ScenarioInitializer: init, Options: &opts}
 	if status := suite.Run(); status != 0 {
 		return fmt.Errorf("replay: feature failed against run %s (status %d)", runID, status)
 	}
