@@ -416,6 +416,27 @@ func Run(ctx context.Context, cfg Config, opts ...Option) (Results, error) {
 			Concurrency:    concurrency,
 			Tags:           ro.tags,
 			StopOnFailure:  ro.failFast,
+			// Strict makes an AMBIGUOUS step a hard failure. godog gates that check
+			// on this flag (suite.go:547-553); with it off, two patterns matching one
+			// sentence resolve SILENTLY to the first registered and the scenario
+			// PASSES — the After hook receives a nil stepErr, so `Pass: stepErr == nil`
+			// records a green verdict nobody wrote (measured: spec 012 research R1,
+			// pinned by internal/steps.TestAmbiguousStepIsRecordedAsFailed).
+			//
+			// Registration order is built-ins first, so a colliding comparator-
+			// contributed phrase would be the silently shadowed one and its assertion
+			// would never run. That is a Constitution IV silent fallback, and it is
+			// why this flag is a PREREQUISITE of contributed phrases rather than an
+			// independent hardening: without phrases the ambiguous branch is
+			// unreachable (the 40 built-in patterns are pairwise disjoint), and with
+			// them it is one authoring mistake away.
+			//
+			// It costs nothing elsewhere. Strict's other effect is failing UNDEFINED
+			// and PENDING steps; mentat registers no pending steps, and an undefined
+			// step already fails through the collector (011's
+			// TestUndefinedStepFailsTheRun). Measured across both golden surfaces —
+			// `go test ./...` and the //go:build e2e lane — with zero churn.
+			Strict: true,
 		},
 	}
 
