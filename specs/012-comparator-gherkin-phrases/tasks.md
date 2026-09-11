@@ -83,9 +83,9 @@ after phrases exist), and this work is a prerequisite of 012, not a separable bu
 
 ### Per-engine registration (R5, FR-002, FR-005)
 
-- [ ] T011 Write the FAILING partition test in `internal/steps/metadata_test.go`: drive `registerSteps` with the spy and a known non-empty phrase set, and assert every registered pattern is **either** a `stepDefs` row **or** a member of that set, with counts adding up. Keep the existing bidirectional equality for the built-in half (go-test-writer, red)
-- [ ] T012 Change `registerSteps` (`internal/steps/metadata.go:73`) to `registerSteps(reg stepRegistrar, w *world, phrases []ContributedPhrase)` and update the call site at `internal/steps/steps.go:100`. **Do not** reach through `w.eng` — the drift test passes a zero `world` whose `eng` is nil (`metadata_test.go:40`), and nil-guarding it would be the silent fallback Constitution IV forbids (go-test-writer, green)
-- [ ] T013 Confirm `TestNoDirectStepRegistration` (`metadata_test.go:129`) and `TestStepMetadataFieldsPresent` (`metadata_test.go:95`) still pass unchanged — registration must stay single-pathed (go-coder)
+- [X] T011 Write the FAILING partition test in `internal/steps/metadata_test.go`: drive `registerSteps` with the spy and a known non-empty phrase set, and assert every registered pattern is **either** a `stepDefs` row **or** a member of that set, with counts adding up. Keep the existing bidirectional equality for the built-in half (go-test-writer, red)
+- [X] T012 Change `registerSteps` (`internal/steps/metadata.go:73`) to `registerSteps(reg stepRegistrar, w *world, phrases []ContributedPhrase)` and update the call site at `internal/steps/steps.go:100`. **Do not** reach through `w.eng` — the drift test passes a zero `world` whose `eng` is nil (`metadata_test.go:40`), and nil-guarding it would be the silent fallback Constitution IV forbids (go-test-writer, green)
+- [X] T013 Confirm `TestNoDirectStepRegistration` (`metadata_test.go:129`) and `TestStepMetadataFieldsPresent` (`metadata_test.go:95`) still pass unchanged — registration must stay single-pathed (go-coder)
 
 ### The seams and the engine accessor (R2, R3)
 

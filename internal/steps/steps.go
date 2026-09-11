@@ -90,14 +90,24 @@ func InitializerWithCollector(eng *engine.Engine, col *report.Collector) func(*g
 // be priced) abort cancels the suite context so no NEW scenario starts a judge call.
 // A nil budget disables the check (unlimited); a nil abort makes the trip advisory.
 func InitializerWithBudget(eng *engine.Engine, col *report.Collector, budget *report.Budget, abort context.CancelFunc) func(*godog.ScenarioContext) {
+	// Phrases are resolved ONCE per initializer, not per scenario: the contributed
+	// set is a property of the engine, and re-resolving it for every scenario would
+	// invite it to differ between them.
+	var phrases []phraseStep
+
 	return func(sc *godog.ScenarioContext) {
 		w := &world{eng: eng, col: col, budget: budget, abort: abort}
 
 		// Registration is table-driven: registerSteps binds every pattern in the
 		// stepDefs metadata table (metadata.go), which is the single source of truth
-		// shared by `mentat steps` / docs/steps.md. A drift test fails if any step is
-		// registered outside this table (see metadata_test.go).
-		registerSteps(sc, w)
+		// shared by `mentat steps` / docs/steps.md, then binds this engine's
+		// comparator-contributed phrases. A drift test proves registration is exactly
+		// the partition of those two sources (see metadata_test.go).
+		//
+		// The phrase set is passed in rather than read from w.eng: the drift test
+		// drives this path with a zero world whose eng is nil, so reaching through it
+		// would panic and nil-guarding it would be a silent fallback.
+		registerSteps(sc, w, phrases)
 
 		// §7: compile every CEL expression in the scenario before any step runs,
 		// so a malformed expectation fails before an expensive SUT is driven.
