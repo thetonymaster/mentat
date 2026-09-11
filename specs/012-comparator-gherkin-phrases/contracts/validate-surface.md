@@ -1,0 +1,93 @@
+# Contract: the validate surface (library entry point + the binary's documented limit)
+
+**Fulfils**: FR-009, FR-011, FR-011a, FR-012, FR-015. Decision: [D7](../spec.md).
+Research: [R6](../research.md), [R7](../research.md).
+
+---
+
+## The problem this closes
+
+`mentat validate` does not build an engine. It constructs a `checker` by hand
+(`cmd/mentat/validate.go:117`) holding a `cel` and an `aggregate-cel` comparator and nothing
+else — deliberately: no registry, no store, no driver. A Go consumer's `WithComparator` calls
+live in **their** module and cannot reach a compiled `mentat` binary.
+
+Applied unchanged to a suite using contributed phrases, `StepBindingFindings`
+(`precheck.go:95`, called at `validate.go:185`) emits one `unbound-step` finding per phrase: a
+**false red on a valid feature file**, from the one command whose entire job is certifying that
+a suite is well-formed.
+
+No flag closes that gap. Only running the consumer's code does.
+
+---
+
+## 1. The library entry point (FR-011)
+
+A facade function accepting the same `Option`s `mentat.Run` accepts, returning the existing
+`Finding` values. The consumer already assembles those options to run their suite; reusing them
+means validation sees **exactly** the engine the run will use.
+
+- Returns `[]Finding` — `steps.Finding` (`precheck.go:23-28`), aliased on the facade. Legal
+  under 010's D5 because it is declared in `internal/steps`, beneath root, not at it (R7).
+- Collect-all, not fail-fast: `Finding` exists precisely because the prechecks return every
+  defect rather than stopping at the first (`precheck.go:16-22`).
+- Contributed phrases are checked **strictly** here — an `unbound-step` from this path means
+  what it says, because the pattern set is the engine's own (R6).
+- Reuses the existing precheck logic verbatim. This entry point is a composition of existing
+  parts, not a second implementation of validation.
+
+## 2. The binary keeps its strictness and documents its limit (FR-011a)
+
+`mentat validate` keeps its current behaviour for built-in steps, and its documentation states
+plainly that contributed phrases are outside what a compiled binary can see, pointing at the
+library entry point.
+
+**It gains no manifest flag and no second source of phrase truth.**
+
+### Why the manifest was rejected (recorded because it is the intuitive option)
+
+Having the consumer emit a manifest of their phrases for the binary to read appears to preserve
+a single command. It does not pay:
+
+1. **Generating the manifest already requires running the consumer's Go code**, so it removes no
+   dependency — it only relocates it.
+2. The standalone-lint benefit therefore only materialises if the file is **committed**, at
+   which point it can drift from the engine that produced it.
+3. Closing that drift means rebuilding the `stepDefs` drift-test machinery for a second
+   artifact — in a feature whose entire purpose is protecting a single-source-of-truth
+   invariant.
+
+### The path that stays open
+
+If a standalone lint job is later genuinely wanted, the manifest becomes a **generated** artifact
+rendered by this entry point and guarded by a byte-identity regeneration test — the same
+`go:generate` + golden pattern `docs/steps.md` already uses (`cmd/mentat/steps_cmd.go:3`). The
+engine stays authoritative and the drift gate is structural rather than remembered.
+
+Out of scope for 012, and recorded so it is a **layer, never a fork**.
+
+---
+
+## 3. Finding semantics after this feature
+
+| Path | Sees contributed phrases | `unbound-step` means |
+|---|---|---|
+| Scenario-init precheck | yes (engine-aware) | the step binds nothing that will run |
+| Library validate entry point | yes (engine-aware) | same, statically |
+| `mentat validate` binary | no (structurally) | no **built-in** step matches; the docs state contributed phrases are out of reach |
+
+**No path reports a valid file as broken** (SC-005). The binary does not soften its finding class
+for built-in steps — a genuinely misspelled built-in step still fails there, which is the reason
+the rejected "soft finding class" option was not taken: it would have weakened the gate for
+everyone to accommodate a case the binary cannot see.
+
+---
+
+## 4. What this contract does not change
+
+- `Finding`'s shape (`File`, `Line`, `Class`, `Message`) — unchanged.
+- The `PrecheckEngine` consumer-defined interface keeps serving both `*engine.Engine` and
+  validate's lightweight `checker` (`precheck.go:64-70`); comparators still never see a store or
+  driver (Constitution I).
+- `mentat validate`'s exit-code semantics and its other finding classes (`bad-cel`,
+  `unknown-target`, `unknown-shape`, `bad-runs-tag`).

@@ -1,0 +1,101 @@
+# Baseline evidence for 012-comparator-gherkin-phrases (T002)
+
+Captured 2026-09-10 on branch `012-comparator-gherkin-phrases`, created from `main` at `0f9dcea`
+with the Tempo harness up (`make harness-up`, 8 containers).
+
+This is the **before** half of SC-009 (zero cost when unused) and SC-012 (`Strict` churns no
+golden). The **after** half is recorded by T006/T007 and re-confirmed by T066.
+
+---
+
+## 1. `go test ./...` — all non-e2e packages
+
+    all ok, 0 FAIL
+
+## 2. `go test -tags e2e -timeout 25m ./e2e/` — live Tempo
+
+    ok  github.com/thetonymaster/mentat/e2e  40.101s
+
+`make ci` does NOT compile this lane. A green `make ci` is not evidence for SC-012.
+
+## 3. Per-package coverage (`go test ./... -coverprofile=... && go tool cover -func=...`)
+
+| Package | Baseline coverage |
+|---|---|
+| `github.com/thetonymaster/mentat` (facade) | 99.1% |
+| `cmd/mentat` | **69.4%** |
+| `cmd/mentatctl` | **31.4%** |
+| `e2e` | 100.0% |
+| `internal/cel` | 87.3% |
+| `internal/comparator` | 95.0% |
+| `internal/config` | 100.0% |
+| `internal/core` | 100.0% |
+| `internal/correlate` | 98.8% |
+| `internal/ctl` | 91.0% |
+| `internal/driver` | 94.5% |
+| `internal/engine` | 95.2% |
+| `internal/expectations` | 91.6% |
+| `internal/judge` | 97.8% |
+| `internal/registry` | 90.3% |
+| `internal/report` | 95.1% |
+| `internal/result` | 100.0% |
+| `internal/steps` | 88.9% |
+| `internal/store` | 95.4% |
+| `internal/testio` | 92.9% |
+| `internal/trace` | 94.4% |
+| `tracelab/orderflow` | 93.4% |
+| `tracelab/orderflow/cmd/orderflow` | 48.6% |
+| `tracelab/researchbot` | 92.9% |
+
+### Note on the 80% floor (affects T063)
+
+`cmd/mentat` (69.4%) and `cmd/mentatctl` (31.4%) are **already below** the constitution's 80%
+per-package floor at `0f9dcea`. 012 touches `cmd/mentat`.
+
+T063's obligation is therefore read as: packages at or above 80% must stay at or above 80%;
+packages already below must **not regress**. This is recorded rather than silently assumed,
+because reinterpreting a gate without saying so is how gates quietly stop meaning anything.
+
+The packages 012 actually changes and their floors to hold:
+
+| Package | Baseline | Obligation |
+|---|---|---|
+| `internal/core` | 100.0% | stay ≥ 80% (expect ~100%) |
+| `internal/steps` | 88.9% | stay ≥ 80% |
+| `internal/engine` | 95.2% | stay ≥ 80% |
+| `github.com/thetonymaster/mentat` (facade) | 99.1% | stay ≥ 80% |
+| `cmd/mentat` | 69.4% | no regression below 69.4% |
+
+---
+
+## 4. Environment
+
+- Go 1.25.0
+- `github.com/cucumber/godog v0.15.1` (pinned — R0 and R1 are properties of this version)
+- `github.com/cucumber/messages/go/v21 v21.0.1`
+- Harness: `deploy-tempo-1`, `deploy-collector-1`, 6 orderflow SUTs, all up
+
+---
+
+## 5. After — SC-012 re-measured with `Strict: true` (T006/T007)
+
+Measured 2026-09-11, immediately after T005 added `Strict: true` to `run.go`.
+
+### T006 — `go test ./...` with `Strict: true`
+
+    all ok, FAIL count = 0     (identical to §1)
+
+Includes the hermetic stdout golden `mentat_golden_test.go`, which did not change.
+
+### T007 — `go test -tags e2e -timeout 25m ./e2e/` with `Strict: true`
+
+    ok  github.com/thetonymaster/mentat/e2e  39.554s     (baseline: 40.101s)
+
+Includes the SC-005 stdout golden, which did not change. Wall-clock varies run to run; what
+SC-012 asserts is that **golden content** does not, and no golden test failed.
+
+### Verdict
+
+**Zero churn on both surfaces.** R0's planning-time measurement reproduced at implementation
+time rather than inherited — which matters, because R1 (the other planning-time claim about
+godog) turned out to be partly false when re-checked (see R10).

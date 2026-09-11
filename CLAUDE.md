@@ -180,8 +180,31 @@ are indistinguishable from test output alone.
 **Roadmap, renumbered by 011's D1:** 012 is comparator-contributed Gherkin phrases
 (Option B, a superset of 011 — nothing 011 builds is discarded); CLI/`mentatctl` UX
 moves from 012 to **013**. The 009 roadmap line
-(`specs/009-extension-surface-integrity/spec.md:143`) still shows the old numbering
-and should be corrected when 012 is specified.
+(`specs/009-extension-surface-integrity/spec.md:143`) was corrected on 2026-09-10,
+along with its `:65` sibling that cited the range `010–012`.
+
+**In flight: 012-comparator-gherkin-phrases** — spec, research, data-model, contracts
+and quickstart complete; `tasks.md` not yet generated. Current plan:
+`specs/012-comparator-gherkin-phrases/plan.md`.
+
+Read `research.md` before touching anything godog-related — two of the feature's
+inherited premises were tested at planning time and **one was false**:
+
+- **godog reports an ambiguous match only under `Strict`** (`suite.go:547-553`), and
+  `mentat.Run` does not set it (`run.go:411-419`). Measured: two patterns matching one
+  step resolve **silently to the first-registered one and the scenario PASSES** — the
+  After hook receives a nil `stepErr`. Since built-ins register before anything else,
+  this is a live first-wins shadowing defect at `0f9dcea`, not just a 012 hazard. 011's
+  D1 asserted the opposite. Enabling `Strict` surfaces it through the existing After-hook
+  path as a FAILED scenario naming every matching expression — no new mechanism needed.
+- **Enabling `Strict` churns zero goldens**, measured on both surfaces (`go test ./...`
+  and `go test -tags e2e` with the harness up). `make ci` does not compile the e2e lane,
+  so it is not evidence for this on its own.
+- godog accepts no `[]string` or variadic step handler (`internal/models/stepdef.go:222-233`)
+  and **silently discards surplus captures** (`stepdef.go:58`), so contributed phrases need
+  a `reflect.MakeFunc` bridge with arity derived from the pattern's `NumSubexp()`.
+
+All three are properties of the **pinned** `godog v0.15.1`; a bump re-opens them.
 
 Two standing rules 010 established — read these before touching the facade:
 
