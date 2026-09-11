@@ -197,7 +197,9 @@ What landed: two OPTIONAL seams in `internal/core` — `PhraseContributor` (a co
 declares the Gherkin sentences that invoke it) and `CaptureParser` (its captures become
 the comparator's own Expectation) — plus `ContributedPhrase`, `Engine.ContributedPhrases`,
 a `reflect.MakeFunc` handler bridge in `internal/steps/phrase.go`, `mentat.Validate`, and
-`Strict: true` on `mentat.Run`'s godog options.
+`Strict: true` on `mentat.Run`'s godog options. Convergence added two finding classes:
+`step-argument` (Phase 9) and `ambiguous-step` (Phase 10) — see the godog notes below, since
+both are consequences of measured godog behaviour rather than design choices.
 
 The headline guarantee is **equivalence**: a contributed phrase and 011's generic step
 produce identical pass/fail, identical reason text, identical qualifiers and an identical
@@ -295,8 +297,31 @@ someone had previously asserted without testing:
 - godog accepts no `[]string` or variadic step handler (`internal/models/stepdef.go:222-233`)
   and **silently discards surplus captures** (`stepdef.go:58`), so contributed phrases need
   a `reflect.MakeFunc` bridge with arity derived from the pattern's `NumSubexp()`.
+- **godog's ambiguity check reduces to a per-sentence multi-match, so the static check is the
+  SAME predicate and not an approximation** (R15). `matchStepTextAndType`
+  (`suite.go:511-556`) returns `ErrAmbiguous` under `Strict` when more than one registered
+  expression matches, and its `keywordMatches` filter (`suite.go:558-560`) is **inert for every
+  Mentat step** — `ScenarioContext.Step` registers with `formatters.None`
+  (`test_context.go:255-257`) and `registerSteps` uses `reg.Step` for both halves
+  (`metadata.go:107,110`). Had any step registered via `Given`/`When`/`Then`, a static check
+  ignoring the keyword would false-RED valid files; a repo-wide grep confirms none does.
 
-All four are properties of the **pinned** `godog v0.15.1`; a bump re-opens them.
+  This closed the last Validate/Run asymmetry: `mentat.Validate` used to report **CLEAN** on a
+  step `Run` refuses as ambiguous, i.e. a validator certifying a suite the runner rejects —
+  the drift D7 exists to remove. `StepBindingFindings` (`internal/steps/precheck.go`) now
+  classifies every step by how many patterns match: `0` → `unbound-step`, `1` → clean, `>1` →
+  **`ambiguous-step`** naming every match in registration order. One function answers all three
+  because it is one question; a separate ambiguity check is how the two would drift apart again.
+
+  Reachable because pattern validation rejects only **identical** patterns, so two
+  distinct-but-overlapping contributed phrases coexist legally. It reaches suites through
+  `mentat.Validate`; from the binary it is unreachable **as measured, not structurally** — the
+  disjointness test substitutes nine fixed fillers, so it is evidence, not proof.
+
+  **Neither Mentat nor godog computes regex overlap.** Both classify per sentence, so a
+  collision on a sentence the corpus does not contain is reported by nobody.
+
+All five are properties of the **pinned** `godog v0.15.1`; a bump re-opens them.
 
 **Roadmap after 012:** CLI/`mentatctl` UX is **013**.
 

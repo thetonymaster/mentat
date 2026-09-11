@@ -501,6 +501,46 @@ closed it on round one is not "is this fixed?" but **"what else does this mechan
 Ask of any guard: **what mutation would make this fail?** If the answer is "none that matters",
 the guard is decoration. Two of the six rows above were found by running exactly that experiment.
 
+### R15 — godog's ambiguity check reduces to a per-sentence multi-match
+
+Measured 2026-09-11 against the pinned `godog v0.15.1`, while closing the Validate/Run
+asymmetry (`mentat.Validate` reported CLEAN on a step `Run` refuses under `Strict`).
+
+The question was whether a STATIC ambiguity check could agree with the runner without deciding
+regex overlap — which is the hard problem, and the one the earlier framing assumed was required.
+It is not required, because godog does not decide overlap either:
+
+- `matchStepTextAndType` (`suite.go:511-556`) loops every registered definition, tests
+  `h.Expr.FindStringSubmatch(text)`, collects each matching `h.Expr.String()` into
+  `matchingExpressions`, and under `Strict` returns `ErrAmbiguous` when `len > 1`.
+- The `keywordMatches` filter inside that loop (`suite.go:558-560`) is **inert for every Mentat
+  step**. `ScenarioContext.Step` registers with `formatters.None` (`test_context.go:255-257`),
+  which `keywordMatches` short-circuits to `true`, and `registerSteps` (`metadata.go:107,110`)
+  uses `reg.Step` for both built-ins and contributed phrases. Nothing in the public surface can
+  register a step any other way.
+- `stepWithKeyword` compiles a string expression verbatim (`test_context.go:291`,
+  `regexp.MustCompile`), so `h.Expr.String()` equals the source pattern, and `s.steps` preserves
+  registration order.
+
+So godog's predicate is exactly **"how many registered patterns match this sentence"**, and
+`SuiteCheck.Patterns` is that same set in the same order. The static check is therefore the
+**same predicate on the same inputs**, not an approximation of it — it even lists the matches in
+the same order. This is what makes `StepBindingFindings`' `>1` branch trustworthy enough to fail
+a suite on.
+
+**The limit, stated so nobody infers the stronger guarantee**: neither Mentat nor godog computes
+regex intersection. Both classify per *sentence*, so two patterns that could collide on a
+sentence the corpus does not contain are reported by nobody, and the collision surfaces the day
+someone writes that sentence.
+
+**Why this had to be verified rather than assumed**: had any Mentat step registered via
+`Given`/`When`/`Then`, the keyword filter would be live, and a static check ignoring it would
+report ambiguity the runner does not — a false RED on a valid file, strictly worse than the
+unearned green being closed. A repo-wide grep for `.Given(`/`.When(`/`.Then(` returns nothing.
+
+Like R1 and R10-R14, this is a property of the **pinned** version. A godog bump re-opens it, and
+the keyword-filter claim is the one to re-measure first.
+
 ---
 
 ## Summary of what changed versus the spec's assumptions
@@ -514,5 +554,6 @@ the guard is decoration. Two of the six rows above were found by running exactly
 | `registerSteps` signature | not considered | **must take phrases as a parameter** — the drift test uses a nil-engine world (R5) |
 | Registry work | possible new seam | **none** — existing sorted accessors suffice, and the sort is load-bearing for collision determinism (R3) |
 | Alias protection | R2: the nameability sweep demands them automatically | **false** — the sweep is seeded from existing aliases and cannot notice a missing one. The public-surface golden and the external-package compile-time witnesses are the real guards (R11) |
+| Static ambiguity detection | convergence's first framing: needs regex-overlap analysis, "its own change" | **false** — godog's own check is a per-sentence multi-match with an inert keyword filter, so the static check is the *same predicate*, not an approximation. Overlap in the abstract is decided by neither (R15) |
 
 No `NEEDS CLARIFICATION` items remain.
