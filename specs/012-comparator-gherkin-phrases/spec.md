@@ -12,7 +12,8 @@ D1 claim about ambiguous-match reporting and reshaped D8. Ready for `/speckit-pl
 (`specs/011-comparator-gherkin-invocation/spec.md:82-116`) as "Option B — comparator-contributed
 Gherkin phrases". The 009 roadmap line
 (`specs/009-extension-surface-integrity/spec.md:143`) was renumbered to match on 2026-09-10:
-012 is this feature, CLI/`mentatctl` UX moves to 013.
+012 is this feature, CLI/`mentatctl` UX moves to 013 — *and again to 014 on 2026-09-11, when
+this feature's convergence took 013 for built-in step-pattern disjointness (see Out of Scope).*
 
 ---
 
@@ -629,8 +630,26 @@ zero `unbound-step` findings on the engine-aware path.
 
 ## Out of Scope
 
-- **CLI / `mentatctl` UX — 013.** Renumbered from 012 by 011's D1 and corrected in the 009
-  roadmap line on 2026-09-10.
+- **Built-in step-pattern disjointness — 013.** *Raised by this feature, 2026-09-11.* The
+  `ambiguous-step` class this feature added is unreachable from the `mentat validate` binary,
+  and `contracts/validate-surface.md` §4, `CHANGELOG.md` and the `StepBindingFindings` doc
+  comment all now say so as **measured, not structural**. The measurement is
+  `TestBuiltinStepPatternsArePairwiseDisjoint`, which substitutes **nine fixed fillers** into
+  capture groups; two built-ins colliding only on a string no filler produces would pass it.
+
+  "The 40 built-in patterns are pairwise disjoint" is therefore evidence, not proof — and four
+  claims rest on it: V4's rationale, R10's "latent, not live" finding, the binary's inability
+  to report `ambiguous-step`, and `StepArguments.matchBuiltin` taking the first match as the
+  only one. Review during Phase 10 caught a draft of this spec's own contract calling the gap
+  "structurally unreachable" in a sentence that conceded the opposite one clause later.
+
+  Out of scope **here** because closing it is a proof obligation, not a phrase feature, and
+  because the honest wording ("unreachable as measured") is already shipped. See the roadmap
+  block in `CLAUDE.md` for the three routes 013 should weigh.
+
+- **CLI / `mentatctl` UX — 014.** Renumbered from 012 by 011's D1 and corrected in the 009
+  roadmap line on 2026-09-10; renumbered again from 013 to 014 on 2026-09-11 by the entry
+  above.
 - **Custom aggregate comparators.** No `WithAggregateComparator` facade option exists, so there
   is nothing to contribute a phrase for (D2, inheriting 011's D4). Publishing the aggregate
   registration path is its own feature.

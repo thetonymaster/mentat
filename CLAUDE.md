@@ -186,9 +186,13 @@ are indistinguishable from test output alone.
 
 **Roadmap, renumbered by 011's D1:** 012 is comparator-contributed Gherkin phrases
 (Option B, a superset of 011 — nothing 011 builds is discarded); CLI/`mentatctl` UX
-moves from 012 to **013**. The 009 roadmap line
+moves from 012 to 013. The 009 roadmap line
 (`specs/009-extension-surface-integrity/spec.md:143`) was corrected on 2026-09-10,
 along with its `:65` sibling that cited the range `010–012`.
+
+**Renumbered again 2026-09-11, by 012's convergence:** **013 is built-in step-pattern
+disjointness**, and CLI/`mentatctl` UX moves from 013 to **014**. See the roadmap entry
+after 012 below for why 013 exists.
 
 **012-comparator-gherkin-phrases** (`specs/012-comparator-gherkin-phrases`, implemented
 2026-09-11, all 69 tasks complete) is on branch `012-comparator-gherkin-phrases`.
@@ -323,7 +327,37 @@ someone had previously asserted without testing:
 
 All five are properties of the **pinned** `godog v0.15.1`; a bump re-opens them.
 
-**Roadmap after 012:** CLI/`mentatctl` UX is **013**.
+**Roadmap after 012:**
+
+- **013 — built-in step-pattern disjointness: prove it, or stop relying on it.** 012's
+  `ambiguous-step` class is unreachable from the `mentat validate` binary, and that is now
+  written down in three places — `contracts/validate-surface.md` §4, `CHANGELOG.md`, and the
+  doc comment on `StepBindingFindings` — as **measured, not structural**. The measurement is
+  `TestBuiltinStepPatternsArePairwiseDisjoint` (`internal/steps/metadata_test.go:286`), which
+  generates sentences from each pattern's own syntax tree, expanding every alternation branch
+  — but substitutes just **nine fixed fillers** (`"x"`, `""`, `"a b"`, `"1"`, `"2nd"`,
+  `"true"`, `"0.5"`, `"tool-name"`, `"a/b.c"`) into capture groups and character classes. Two
+  built-ins colliding only on a string no filler produces would pass it.
+
+  So "the 40 built-in patterns are pairwise disjoint" is **evidence, not proof**, and four
+  things rest on it: V4's rationale (rejecting a contributed pattern identical to a built-in's
+  is only meaningful if the built-in set is itself unambiguous); R10's "latent, not live"
+  finding; the binary's inability to report `ambiguous-step`; and `StepArguments.matchBuiltin`
+  (`internal/steps/stepargs.go:305`) returning the FIRST match as though it were the only one.
+
+  The overclaim was caught in review during 012's Phase 10: a draft of `validate-surface.md`
+  said "structurally unreachable" while its own next clause conceded the test "proves only over
+  generated sentences". It was corrected to "unreachable **as measured**", which is honest and
+  leaves the gap open — hence this feature.
+
+  Three routes, to weigh rather than assume: decide regex intersection for the built-in set
+  (RE2 makes emptiness-of-intersection decidable in principle; Go's stdlib exposes nothing for
+  it); widen the generator (more fillers is more evidence, never proof); or **stop relying on
+  the property** — have `matchBuiltin` report every match and route it through the
+  `ambiguous-step` path that already exists. Only the third removes the assumption instead of
+  strengthening it.
+
+- **014 — CLI/`mentatctl` UX.** Renumbered from 013 on 2026-09-11 by the entry above.
 
 Two standing rules 010 established — read these before touching the facade:
 

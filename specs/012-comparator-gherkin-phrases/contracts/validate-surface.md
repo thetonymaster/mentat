@@ -152,7 +152,8 @@ taken: it would have weakened the gate for everyone to accommodate a case the bi
   two of them — but it substitutes nine fixed fillers into captures, so two built-ins
   overlapping only on a string no filler produces would pass it. "Disjoint" here means "no
   generated sentence matches two", which is evidence, not proof, and the distinction is the
-  kind this feature has been wrong about before.
+  kind this feature has been wrong about before. **Closing that gap is feature 013** — see the
+  roadmap block in `CLAUDE.md` and 012's Out of Scope.
 
   That is also why the class is kept in the shared `SuiteCheck` walk rather than gated to the
   library path: it costs nothing there, and it becomes a live witness over real corpora for

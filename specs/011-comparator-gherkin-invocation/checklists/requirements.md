@@ -124,6 +124,10 @@ D1 renumbers CLI/`mentatctl` UX from 012 to **013**, since Option B takes the 01
 source-of-truth roadmap line (`specs/009-extension-surface-integrity/spec.md:143`) and
 `CLAUDE.md` both still say 012 for the CLI work and must be updated when 012 is specified.
 
+*(Both were updated on 2026-09-10 as required. Renumbered once more on 2026-09-11: 012's
+convergence took 013 for built-in step-pattern disjointness, so the CLI work is now **014**.
+The roadmap block in `CLAUDE.md` is authoritative.)*
+
 ### Implementation-phase corrections — 2026-09-10
 
 Four things this specification asserted turned out not to be true when the code was
