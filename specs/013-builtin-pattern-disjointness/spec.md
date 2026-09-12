@@ -652,6 +652,23 @@ anything.
   no rebase is required. (The original branch of that name did carry the unsquashed history; its
   tree was byte-identical to `main` and every one of its commits also lives on
   `origin/012-comparator-gherkin-phrases`, so it was deleted rather than rebased.)
+
+  **Third correction, at merge time: the sentence above expired.** It describes the branch's
+  relationship to `main` as a fact, and that relationship is a moving target. By the time 013 was
+  ready to open a PR, `main` had gained `360b115` (the composition audit) and `6df9895` —
+  **feature 014, merged** — so the branch was 2 behind and 13 ahead. Opening the PR on that base
+  would have **deleted 014's entire spec directory and reverted its engine fix**, which the diff
+  showed and nobody would have wanted.
+
+  `origin/main` was merged in before the PR. Integration was not clean and not only textual:
+  014 dropped the `error` from `Engine.ContributedPhrases()`, and 013's `resolvePhrases` and two
+  of 014's own tests then disagreed about arity with `EngineStepChecks`'s fourth return — caught
+  by `go vet`, **not** by `go build`, which does not compile test files.
+
+  The durable lesson is about the *shape* of the claim, not this instance: "no rebase is
+  required" is a statement with a timestamp, written as if it were a property. It was wrong
+  three times — pending-merge, unsquashed-history, and now base-moved. A spec should record the
+  **merge base** it was cut from and tell the reader to measure the rest.
 - **The module is untagged.** Zero tags exist, so no version contract has been published. This is
   why FR-014's contract choice is a pre-release decision rather than a break of a shipped API — a
   window that closes at the first tag, and one that D5 deliberately does not spend on forbidding

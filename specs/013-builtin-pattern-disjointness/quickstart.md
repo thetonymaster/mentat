@@ -15,6 +15,14 @@ git log --oneline -1                # expect the branch to descend from f6bb402 
 git status --short                  # expect clean apart from this feature's work
 ```
 
+> **Superseded before merge.** The paragraph below was true when written and stopped being true
+> when `main` advanced. `main` gained `360b115` (the composition audit) and `6df9895` (feature
+> **014**, merged), so this branch no longer descended from the tip and `origin/main` was merged
+> in before the PR. Left in place rather than rewritten, because the point of the paragraph is
+> that this claim had already been wrong twice in opposite directions — and it then went stale a
+> third way, by the base moving rather than by anyone misreading it. **Check
+> `git rev-list --left-right --count origin/main...HEAD` rather than trusting any of it.**
+
 This branch is cut directly from `f6bb402`, so **no rebase is required** — an earlier draft of this
 section called for one. It also has **no upstream set**, deliberately: the worktree was created from
 `origin/main`, which left `git push` pointing at `main` until it was unset. Set an upstream

@@ -192,7 +192,18 @@ along with its `:65` sibling that cited the range `010–012`.
 
 **Renumbered again 2026-09-11, by 012's convergence:** **013 is built-in step-pattern
 disjointness**, and CLI/`mentatctl` UX moves from 013 to **014**. See the roadmap entry
-after 012 below for why 013 exists.
+after 012 below for why 013 exists. *(Appended 2026-09-11 by the renumber below: the
+"014" this paragraph assigns to CLI UX is now **015**. The wording is left as written
+because it records what the decision said at the time.)*
+
+**Renumbered a third time 2026-09-11, by a defect found in merged 012:** **014 is
+freezing contributed phrases at engine composition**
+(`specs/014-freeze-contributed-phrases`), and CLI/`mentatctl` UX moves from 014 to
+**015**. 013 is unaffected. `Engine.ContributedPhrases` re-invokes comparator code on
+every call, so `Validate`, `StepReference` and `Run` can each observe a different phrase
+set from a stateful contributor — contradicting the once-per-build contract that
+`mentat.go:66`, `internal/core/core.go:168` and 012's `contracts/phrase-seam.md:24` all
+state. See the roadmap entry after 013 below.
 
 **012-comparator-gherkin-phrases** (`specs/012-comparator-gherkin-phrases`, implemented
 2026-09-11, all 69 tasks complete) is on branch `012-comparator-gherkin-phrases`.
@@ -330,6 +341,76 @@ someone had previously asserted without testing:
 
 All five are properties of the **pinned** `godog v0.15.1`; a bump re-opens them.
 
+**014-freeze-contributed-phrases** (`specs/014-freeze-contributed-phrases`, implemented
+2026-09-11, 40 of 41 tasks complete) is on branch `014-freeze-contributed-phrases`.
+
+What landed: an unexported `phrases []PhraseBinding` field on `Engine`, captured once by
+`capturePhrases` in `engine.Build` between `reg.Seal()` and the return;
+`Engine.ContributedPhrases()` reduced to `return slices.Clone(e.phrases)` with its `error`
+dropped (the defensive registry-inconsistency check moved into `Build`, message intact);
+and the single production caller at `internal/steps/phrase.go` simplified accordingly.
+`resolvePhrases` keeps its own error return — V1–V5 are untouched. **No public API
+changed**, and `mentat.go` was never opened.
+
+The headline guarantee is **one vocabulary per engine**: the seam is consulted exactly
+once per `Build`, and every later surface reads that snapshot rather than re-asking.
+
+**The most important thing to know before trusting this feature's first framing: the
+defect was LATENT, not live.** Each facade entry point builds its **own** engine —
+`mentat.Run` at `run.go:344`, `Validate` and `StepReference` via `buildEngineForInspection`
+at `run.go:682` — and each consulted the seam exactly once. A shared stateful contributor
+measured `calls=1,2,3` across the three entry points **both before and after** the fix, so
+no shipped path ever observed drift, and a facade-level test of this cannot go red in
+either direction. It is fixed because the published contract says once per build and
+because the first shared engine would make it live. See spec D2 / research R11.
+
+Four corrections this feature made to its own artifacts, in the order they were caught:
+
+- **R10 — counting callers is not counting contracts.** R2 measured "one production caller"
+  correctly and concluded the work was small. It never asked which tests *assert* the old
+  behaviour. `TestPhrasesAddedAfterResolutionDoNotAffectTheBuiltEngine`
+  (`internal/steps/phrase_test.go`) asserted `after == 2` — "resolution must reflect the
+  comparators as they are when called" — and would have met an implementer at the last task
+  with no licence to touch it. Inverted deliberately as **D1**, the feature's only authorized
+  assertion change, justified because the test contradicted its own name and doc comment
+  (both already described a snapshot). A green suite proves no test disagrees with the
+  **code**, not that none disagrees with the **plan**.
+- **R8 — the two-copies claim was wrong.** The first draft required a copy at capture and
+  another on return. Measured false: the capture builds `[]PhraseBinding` element-wise from
+  a ranged value, and every field in the graph is a `string`, so the transform already *is*
+  the copy. The capture task was a no-op, and its paired test could not go red where it was
+  filed — it is red *before* the freeze and green after, so it moved to the US1 phase.
+- **R11/D2 — latent, not live** (above), which also relocated the cross-surface test from
+  the facade to `internal/steps`, where one engine genuinely serves three surfaces.
+- **"The e2e lane is the only byte-identity oracle" was false.** `TestGoldenHermeticStdout`
+  (`mentat_golden_test.go`) is in the root package with **no build tag** and already runs
+  under `make ci`. A plan step was resting on a wrong claim about the gate while a cheap
+  oracle sat unclaimed.
+
+Two guards are the feature's real legacy, both proved by mutation rehearsal:
+
+- **`TestPhraseSnapshotStructsHoldOnlyValueTypes`** (`internal/engine/engine_test.go`) walks
+  the field graph of `core.ContributedPhrase` and `engine.PhraseBinding` and fails on any
+  slice, map, pointer, interface, chan or func. It exists because **both copies silently stop
+  being copies** the moment a reference-typed field appears. Measured: a `*string` field
+  compiles fine and every behavioural test still passes — only this guard and
+  `TestPublicSurfaceGolden` fire, and the golden is blind to `PhraseBinding` and reports
+  "the surface changed" rather than naming the real breakage. A `[]string` field instead
+  breaks *compilation* via existing `!=` comparisons, which is an accident of how those
+  tests are written, not a guarantee.
+- **`TestAnEmptyContributorIsIndistinguishableFromANonContributor`** is the only test that
+  catches `make`+`copy` replacing `slices.Clone`. That substitution is a *correct* copy that
+  leaves every other test in the feature green; only the `ContributedPhrases() == nil`
+  assertion sees it, because `slices.Clone(nil)` is nil while `make` allocates per call.
+
+One rehearsal lesson worth keeping, recorded at
+`TestContributedPhrasesConsultsEachContributorOncePerEngine`: the first attempt to revert
+the freeze left `slices` imported-and-unused, so the package failed to **compile** and all
+four guards reported FAIL with zero assertions run. A build failure and a real red are
+indistinguishable at `go test`'s package line. 012's "the mutation didn't fire" lesson
+arriving by a different door — asserting the edit landed on disk is not enough, the mutated
+tree must also build.
+
 **Roadmap after 012:**
 
 - **013 — built-in step-pattern disjointness: SHIPPED.** The property is now **decided**, and
@@ -427,7 +508,31 @@ All five are properties of the **pinned** `godog v0.15.1`; a bump re-opens them.
   Read `specs/013-builtin-pattern-disjointness/research.md` R1–R8 before touching the
   decider, and `contracts/decider.md` for what a negative verdict does and does not mean.
 
-- **014 — CLI/`mentatctl` UX.** Renumbered from 013 on 2026-09-11 by the entry above.
+- **014 — freeze contributed phrases at engine composition.**
+  `specs/014-freeze-contributed-phrases`, opened 2026-09-11 against merged 012 (`f6bb402`).
+  `Engine.ContributedPhrases` (`internal/engine/engine.go:241`) re-invokes every
+  contributing comparator's seam on **each call**, and three production surfaces resolve
+  phrases independently — `Run` via `InitializerWithBudget` (`internal/steps/steps.go:101`),
+  `Validate` via `EngineStepChecks` (`phrase.go:612`), and `StepReference` via
+  `EngineStepDocs` (`phrase.go:519`). A contributor built from mutable state is therefore
+  validated on one vocabulary, documented on a second and executed on a third.
+
+  This contradicts three artifacts that already promise the opposite — `mentat.go:66`,
+  `internal/core/core.go:168` ("consulted ONCE PER ENGINE BUILD… a comparator that mutates
+  it afterwards has no effect") and 012's `contracts/phrase-seam.md:24` — so it is a defect
+  fix, not a contract change.
+
+  **Within one run the set is already consistent** (`steps.go:101` resolves once and threads
+  the result to `:107` and registration); the drift is across surfaces and across runs. The
+  fix is a **per-engine** snapshot taken at construction, returned as copies — explicitly
+  *not* the package-level first-writer-wins `sync.Once` cache 012 deleted for breaking
+  engine isolation, which `TestContributedPhrasesAreScopedToTheirEngine` guards in both
+  construction orders. The correct precedent is `Engine.resolveOnce`: a field on the Engine,
+  which `internal/steps/phrase.go:37` notes "is per-engine and carries the isolation property
+  rather than breaking it."
+
+- **015 — CLI/`mentatctl` UX.** Renumbered from 013 to 014 on 2026-09-11, then from 014 to
+  015 the same day by the entry above.
 
 Two standing rules 010 established — read these before touching the facade:
 
@@ -450,5 +555,5 @@ still has unchecked tasks.
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at specs/013-builtin-pattern-disjointness/plan.md
+at specs/014-freeze-contributed-phrases/plan.md
 <!-- SPECKIT END -->

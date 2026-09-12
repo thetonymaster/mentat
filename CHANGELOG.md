@@ -209,6 +209,32 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Fixed
 
+- **Comparator-contributed Gherkin phrases were resolved per call instead of per engine
+  build.** The engine re-invoked every contributing comparator's `ContributedPhrases()`
+  seam each time a surface asked for the vocabulary. A comparator that does not declare
+  its phrases from immutable state — one that memoizes lazily, flips a flag between
+  calls, or builds its list from configuration it also writes to — could therefore be
+  documented on one vocabulary, validated on a second and executed on a third, with
+  nothing in the system noticing. The engine now captures one snapshot during
+  `engine.Build`, after the seam registry is sealed, and answers every later request
+  from it; each answer is a copy, so neither the contributing comparator nor a caller
+  can reach the engine's own set.
+
+  **No public API changed**, and nothing changes for a comparator that already declares
+  its phrases from immutable state — which is every comparator in this repository, in
+  `examples/`, and in the documented seam. The fix aligns the code to a contract three
+  artifacts already published: `mentat.PhraseContributor` ("resolved once per engine
+  build"), `core.PhraseContributor` ("consulted ONCE PER ENGINE BUILD … a comparator
+  that mutates it afterwards has no effect on the built engine") and feature 012's
+  phrase-seam contract. None of the three needed correcting — the code was the odd one
+  out.
+
+  The defect was **latent rather than live** through the public API: `Run`, `Validate`
+  and `StepReference` each build their own engine and each consulted the seam exactly
+  once, so no shipped path observed the drift. It is fixed because the published
+  contract says once per build, and because the first surface to share an engine — or
+  the first in-process consumer holding one — would have made it live.
+
 - **`the response body json-contains:` panicked on a missing docstring.** It
   dereferenced the docstring directly, so a malformed step crashed the run where its
   eight sibling docstring handlers return a descriptive error naming the step. All nine

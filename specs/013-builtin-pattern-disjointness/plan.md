@@ -155,11 +155,21 @@ Two cross-cutting items to schedule, both from `research.md`:
 1. **Run the e2e lane** (`go test -tags e2e`, harness up). R8: the new finding class touches
    documented surface and the stdout goldens are `//go:build e2e`, invisible to `make ci`. This
    repo has been bitten by that gap before.
-2. **No rebase needed.** An earlier draft of this item required one, on the belief that the branch
-   carried 012's unsquashed history against a squashed `main`. This branch is cut directly from
-   `f6bb402` (the 012 squash), so its history is already clean and the item is struck. Kept as a
-   struck item rather than deleted, because "rebase first" appears in the spec's Assumptions
-   history too and a reader meeting it there deserves to find out here that it was discharged.
+2. **~~No rebase needed.~~ Reinstated at merge time — `main` moved.** An earlier draft required a
+   rebase on the belief that the branch carried 012's unsquashed history; that was wrong, and the
+   item was struck because the branch is cut directly from `f6bb402` (the 012 squash).
+
+   **Struck too early.** Integration is not a property of how a branch was cut, it is a property of
+   where `main` is *now*, and `main` went on to gain `360b115` and `6df9895` (**feature 014,
+   merged**) while 013 was in flight. `origin/main` was merged in before the PR; without it the PR
+   would have deleted 014's spec directory and reverted its engine fix. The integration also
+   carried a real API change — 014 dropped the `error` from `Engine.ContributedPhrases()` — which
+   `go vet` caught and `go build` did not, because `go build` never compiles test files.
+
+   Kept as a struck-then-reinstated item rather than rewritten, because the useful record is that
+   this claim has now been wrong three times in three different directions. See spec.md
+   Assumptions for the full history. **Measure with
+   `git rev-list --left-right --count origin/main...HEAD` instead of asserting it.**
 
 ## Constitution Check — re-evaluated after Phase 1 design
 
