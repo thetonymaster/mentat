@@ -33,12 +33,35 @@ stop rather than update the golden (010 D5: only terminal types may be facade-de
 4. **It terminates.** Reachable product states are finite and deduplicated.
 
    The figure "max 74 states per pair" is a **measurement over the built-in set, not a bound on
-   author input** — and author input is now the reachable path, since contributed patterns are
-   decided too. The search is worst-case exponential in the two programs' state counts, takes no
-   `context.Context` and caps nothing. No blowup could be produced (best adversarial attempt:
-   532µs, from two independent tries), so a cancellation seam with no second implementation was
-   declined rather than added on speculation — but it is an unbounded-cost path on consumer
-   patterns and is recorded here as one.
+   author input** — and author input is the reachable path, since contributed patterns are decided
+   too. The search is worst-case exponential in the two programs' state counts, so it is bounded by
+   **`maxProductStates` (100,000 reachable product states)**. Exceeding the bound is a **refusal**
+   (`errSearchBudget`), never a verdict: per-pair `pattern-undecidable` for contributed patterns, a
+   hard failure for the built-in gate.
+
+   **This paragraph previously declined the bound, and was wrong.** It argued that no blowup could
+   be produced — "best adversarial attempt: 532µs, from two independent tries" — and that a
+   cancellation seam with no second implementation failed `/composition`. The second half still
+   holds and is why this is a constant and a counter rather than a `context.Context` seam. The
+   first half was **evidence mistaken for proof**, which is the precise error 013 exists to correct,
+   applied here to the decider's cost instead of its verdict. One deliberate construction refuted it:
+
+   | pair | result |
+   |---|---|
+   | `^[ab]*a[ab]{4}$` vs `^[ab]*b[ab]{4}x$` | decided, 365µs |
+   | …`{8}`… | decided, 5.37ms |
+   | …`{12}`… | decided, 83.5ms |
+   | …`{16}`… | **refused at the bound**, 255ms |
+   | …`{20}`… | **refused at the bound**, 258ms |
+
+   ~15× per +4, and both patterns are **anchored and legal**, so a consumer can contribute them and
+   reach this through `mentat.Validate`. Unbounded, n=20 runs for tens of seconds and n=24 for
+   minutes, with memory tracking it — every queued node retains its witness prefix. Pinned by
+   `TestSearchBudgetRefusesRatherThanReportingDisjoint`.
+
+   The bound is ~1350× the largest pair the built-in gate actually needs (74), so it cannot refuse
+   legitimate work. It is still a **cost** bound and not a deadline: it does not observe
+   cancellation, and a single refusal costs ~250ms of CPU.
 5. **It never panics** on author input. Contributed patterns reach it.
 
 ## What it does NOT guarantee — read this before relying on a negative
@@ -64,14 +87,15 @@ built-in pairs correctly and reported `^(?i)abc$` and `^abc$` as **disjoint** wh
 | Caller | Pairs decided | On overlap |
 |---|---|---|
 | Built-in gate (test, `make ci`) | all pairs over `stepDefs` — 780 at 40 patterns | **FAIL the build**, naming both patterns and the witness (FR-013) |
-| An **unexported** helper inside `EngineStepChecks` (`internal/steps/phrase.go:611`), reaching `mentat.Validate` as a return value | only pairs touching ≥1 **contributed** pattern (R6) | emit one `pattern-overlap` finding per pair, or one `pattern-undecidable` per refused pattern; **`mentat.Validate` still returns a nil error** (FR-014, FR-018, D5) |
+| `patternOverlapFindings`, unexported, called inside `EngineStepChecks` (`internal/steps/phrase.go`) and reaching `mentat.Validate` as a return value | only pairs touching ≥1 **contributed** pattern (R6) | emit one `pattern-overlap` finding per intersecting pair, one `pattern-undecidable` per refused pattern, and one per pair refused at the state budget; **`mentat.Validate` still returns a nil error** (FR-014, FR-018, D5) |
 
 **Not a caller: the scenario-init fail-fast path** (FR-017). This is structural, not disciplinary —
 the pattern half of the check set has no scenario-init counterpart, because godog owns runtime
 matching and `registerSteps` hands it patterns directly. See R6.
 
 **And "structural" has to be earned, not asserted.** An earlier version of this paragraph said an
-*exported* `PatternOverlapFindings` would be callable from `steps.go:101`, so unexporting it was
+*exported* `PatternOverlapFindings` would be callable from scenario init (`InitializerWithBudget`,
+`internal/steps/steps.go`), so unexporting it was
 what made FR-017 structural. **That is wrong**: scenario init is in the same package, so an
 unexported helper is equally callable from there. Unexporting only stops other packages reaching
 past `EngineStepChecks`.

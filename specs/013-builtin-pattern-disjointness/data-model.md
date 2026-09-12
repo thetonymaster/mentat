@@ -45,7 +45,7 @@ built-in × built-in pairs apart from the rest so it can skip them (R6).
 ```go
 type Intersection struct {
     Intersects bool
-    Witness    string // non-empty iff Intersects; a string both patterns match
+    Witness    string // a string both patterns match; meaningful only when Intersects
 }
 ```
 
@@ -63,9 +63,17 @@ itself; that asymmetry is the whole reason the decider is trustworthy in one dir
 false` means "this code found no shared string", which is why US3 exists (D4, R3).
 
 **Validation rules**:
-- `Witness == "" && Intersects == true` is an invariant violation — the empty string is a legal
-  witness only when both patterns match the empty string, so the check is on the verification, not
-  on emptiness. Verify by `MatchString` on both, never by inspecting the witness.
+- The invariant is **`Intersects == true` ⇒ the witness matches both patterns**, checked by
+  `MatchString` on both. It is deliberately NOT "the witness is non-empty": the empty string is a
+  perfectly good witness when both patterns match it (`^$` and `^a*$` do), so an emptiness check
+  would reject a correct verdict.
+
+  An earlier draft of this section stated the rule both ways in the same sentence — calling
+  `Witness == "" && Intersects == true` an invariant violation and then explaining why the empty
+  string is legal. The code was right; the contract was self-contradictory, and the same confusion
+  had already produced a real defect one file over, where the differential sampler used `!= ""` as
+  its found/not-found signal and so could never report a false-disjoint on the empty string. Pinned
+  now by `TestSharedStringUpToDistinguishesEmptyWitnessFromNoWitness`.
 - An `Intersection` is meaningless without its error being nil. See §3.
 
 ---
@@ -139,7 +147,7 @@ count and wall clock; do not assert a ceiling that a slow CI runner would trip.
 
 ---
 
-## 5. `Finding` — one new class, no shape change
+## 5. `Finding` — two new classes, no shape change
 
 The existing type is unchanged:
 
@@ -152,8 +160,27 @@ type Finding struct {
 }
 ```
 
-**New class key: `pattern-overlap`** (R8), joining `bad-cel`, `unknown-target`, `unbound-step`,
-`ambiguous-step`, `step-argument`, `unknown-shape`, `bad-runs-tag`.
+**New class keys: `pattern-overlap` and `pattern-undecidable`** (R8), joining `bad-cel`,
+`unknown-target`, `unbound-step`, `ambiguous-step`, `step-argument`, `unknown-shape`,
+`bad-runs-tag`.
+
+`pattern-undecidable` is not in this document's first draft because it did not exist then: FR-018
+was added during implementation, when review found `mentat.Validate` returning `nil, err` for a
+legal phrase containing `\b` — a validator refusing a suite the runner executes. This section said
+"one new class" for the rest of the feature, which is how a late requirement quietly fails to reach
+the documents that describe it.
+
+It is emitted in two granularities, and both are deliberate:
+
+- **Once per PATTERN**, when `compileNFA` refuses a construct the decider does not model (`\b`,
+  `\B`, a `(?m)` anchor, or an unanchored pattern). Pairing such a pattern against 40 built-ins
+  would emit 40 complaints about one defect.
+- **Once per PAIR**, when the product search exceeds `maxProductStates`. Undecidability is a
+  property of the pair there — both patterns may be individually fine — so naming only one would
+  send the author hunting in the wrong place.
+
+Either way `mentat.Validate` still returns a **nil error**, and neither is ever reported as a
+disjointness result (FR-012).
 
 - `File: ""`, `Line: 0` — a pattern-pair defect has no feature-file location. `Source` already
   tolerates zero (`precheck.go:30-38`, scenario-init leaves it zero by design).

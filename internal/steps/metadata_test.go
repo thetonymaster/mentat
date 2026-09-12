@@ -311,9 +311,16 @@ func sortedKeys(m map[string]struct{}) []string {
 // Sentences are generated from each pattern's own syntax tree, expanding every
 // alternation branch, so the check does not depend on anyone hand-listing examples.
 //
-// The name is kept rather than changed: six references point at it from CLAUDE.md and
-// two merged 012 contracts, and dangling citations in shipped artifacts are a worse
-// defect than two neighbouring names that the comment above now distinguishes.
+// The name is kept rather than changed, recorded as spec.md D6. Measured 2026-09-11:
+// **18** references outside 013's own tasks.md — 5 in internal/steps, 2 in CLAUDE.md, 3
+// in merged 012 artifacts, 8 across 013's. Two of them settle it: FR-005 names this test
+// BY NAME, so renaming it makes a requirement stale, and the merged-012 citations sit in
+// contracts T048 deliberately annotated rather than rewrote.
+//
+// This comment said "six references" until the count was actually taken, as did the
+// tasks.md item directing the rename — so the rename was costed at a third of its reach
+// by both. Dangling citations in shipped artifacts are a worse defect than two
+// neighbouring names that the comment above now distinguishes.
 func TestBuiltinStepPatternsArePairwiseDisjoint(t *testing.T) {
 	t.Parallel()
 

@@ -75,9 +75,12 @@ type SuiteCheck struct {
 	// Something else does answer it now. Feature 013 added Intersects (disjoint.go),
 	// which decides emptiness-of-intersection for a pattern pair without any corpus;
 	// the built-in set is gated by it in CI, and pairs involving a contributed pattern
-	// are reported as `pattern-overlap` by mentat.Validate. An earlier version of this
-	// comment said mentat "does not compute it", which was true when written and is the
-	// claim 013 was raised to retire.
+	// are reported by mentat.Validate as `pattern-overlap` when they intersect, or as
+	// `pattern-undecidable` when the decider refuses the pattern or exhausts its state
+	// budget on the pair. An earlier version of this comment said mentat "does not
+	// compute it", which was true when written and is the claim 013 was raised to
+	// retire; it then named only `pattern-overlap`, which reads as though every pair
+	// gets a decision. Some do not, and saying so is the point of the second class.
 	Arguments StepArguments
 }
 

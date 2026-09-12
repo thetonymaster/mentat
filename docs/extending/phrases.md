@@ -195,6 +195,31 @@ overlap becomes a real failure only for a sentence inside it, which fails loudly
 Anchoring, rule 4 and rule 5 keep most collisions from happening at all; `pattern-overlap`
 tells you about the ones that slipped through, before a user finds them.
 
+### When a phrase cannot be checked at all
+
+Not every legal phrase can be decided, and Mentat says so rather than quietly treating
+"undecided" as "fine". You get a **`pattern-undecidable`** finding instead:
+
+```
+[pattern-undecidable] the phrase "^\bthe widget is \"([^\"]*)\"\b$" contributed by comparator "widgets" cannot be checked for overlap against other step patterns: …; the step itself still runs, but a collision between it and another pattern would not be reported here
+```
+
+Two things cause it:
+
+- **A construct the decider does not model** — `\b`, `\B`, or a `(?m)` anchor. These are
+  perfectly legal in a phrase and godog runs them correctly; they are simply outside what
+  the overlap check can reason about. Reported once per pattern.
+- **A pair too expensive to decide.** The check is exponential in the worst case and is
+  bounded, so a pathologically complex pattern pair is refused rather than allowed to run
+  away with your validation. Reported once per pair, because neither pattern need be at
+  fault on its own.
+
+**Your step still runs either way** — this is not a rejection, and your engine still
+builds. What you lose is overlap *coverage* for that phrase, which is a real gap worth
+knowing about: if you want it checked, express the phrase without the unsupported
+assertion. A finding that said nothing would leave you believing the pattern had been
+cleared when it never was.
+
 (Mentat's own built-in steps are held to a stricter rule — a CI gate decides every pair of
 them and fails the build on any overlap. That asymmetry is deliberate: that table is ours
 to fix, and your comparators are not.)

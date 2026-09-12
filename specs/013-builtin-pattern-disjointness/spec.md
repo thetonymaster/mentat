@@ -631,11 +631,18 @@ anything.
 - **Rejecting contributed overlap at composition.** Declined per D5: overlap between two
   independently-authored comparators is a potential failure, and forbidding the potential would
   make two otherwise-usable comparators mutually exclusive. Reported, not fatal (FR-014).
-- **Changing how overlap is *reported*.** `ambiguous-step` already names every matching pattern per
-  sentence, for any mix of sources, and 012 shipped it. This feature changes only which code paths
-  *rely* on there being exactly one match; it adds no finding class and alters no message. (This
-  entry replaces an earlier one declaring contributed-phrase overlap out of scope altogether — see
-  Clarifications for why that scoping did not hold.)
+- **Changing how *per-sentence* ambiguity is reported.** `ambiguous-step` already names every
+  matching pattern per sentence, for any mix of sources, and 012 shipped it. This feature does not
+  alter that class, its message, or when it fires. (This entry replaces an earlier one declaring
+  contributed-phrase overlap out of scope altogether — see Clarifications for why that scoping did
+  not hold.)
+
+  **It previously said "it adds no finding class", which this same spec contradicts twice.** The
+  feature adds `pattern-overlap` (FR-014) and `pattern-undecidable` (FR-018). The sentence was
+  true of the draft that only removed the *reliance* on disjointness, and was never revisited when
+  the clarifications made deciding the property part of the scope — so an Out of Scope entry went
+  on denying a requirement listed 200 lines above it. The distinction it was reaching for is real
+  and is kept: 013 adds **pattern-level** findings and leaves the **sentence-level** class alone.
 - **Changing which definition wins a collision.** Registration order and godog's `Strict` behaviour
   are unchanged. This feature makes multiplicity *visible*; it does not re-rank it.
 - **CLI / `mentatctl` UX — 014.**

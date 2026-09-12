@@ -102,35 +102,11 @@ by the decider rather than deferred, so the decider became US2, its verification
 records story moved to US4 — where it belongs, since it can only describe the others' outcome.
 Story order now matches priority order.
 
-**Two content-quality caveats, both deliberate, both inherited from 012's reading of this
-checklist.**
 
-*"Written for non-technical stakeholders"* passes in the sense this repo uses it. Mentat's users
-are Go developers writing behaviour tests, and this particular feature's "user" is a contributor
-adding a built-in step. A business-audience rendering of "the argument check resolves among
-multiple matching patterns by position" would lose the only detail that makes it checkable.
-
-*"No implementation details"* passes with the same exception 012 took. The spec names
-`expandPattern`, `matchBuiltin`, `StepBindingFindings` and file:line locations because the feature
-*is* about a property of that code. Recording it as prose would reproduce the failure this feature
-exists to correct — a claim stated at a level of abstraction where nobody can check it.
-
-**The measurement this spec rests on was taken, not recalled.** On 2026-09-11, against the current
-branch: 40 patterns × 9 fillers → **1530** unique sentences, max **54** expansions per
-pattern×filler, **0** expansions hitting the `OpConcat` truncation. The 1530 figure independently
-reproduces the number R10 recorded during 012.
-
-**One finding this spec adds beyond the roadmap entry that prompted it.** The roadmap said the
-generator "substitutes nine fixed fillers". Reading `expandPattern` shows *three* potential blind
-spots — the filler set, a depth cap at 12, and a 4000-combination truncation in `OpConcat`. The
-measurement above shows only the **first** is live: nothing is deep enough or wide enough to reach
-the other two today. The spec states it that way on purpose. Claiming three live blind spots would
-be an overclaim in the opposite direction from the one this feature was raised to fix, and this
-feature's whole subject is the gap between a claim and its evidence.
-
-**What planning should not treat as settled.** D1 asserts that removing reliance beats proving the
-property. That is an argument, not a measurement. The counter-case is that US1's deferral makes a
-built-in collision *reportable* but still leaves the built-in grammar ambiguous for authors, who
-would see `ambiguous-step` on a sentence they did not write incorrectly. If planning finds that
-unacceptable, the exact-decision route moves from Out of Scope into US3's place — and the
-dependency ordering changes with it.
+> **Superseded block removed (2026-09-12).** Lines 105-136 of this file repeated the
+> content-quality caveats, the measurement table and the planning note in their PRE-clarification
+> form — including the very "push back on D1" entry that the section above records as
+> **discharged**. The file therefore asserted both that the exact-decision route was Out of Scope
+> and that D1 had been corrected and the route adopted as US2. The later, corrected versions are
+> kept; the earlier ones are deleted rather than annotated, because a checklist that contradicts
+> itself gives a reader no way to tell which half is current. Found in review of PR #43.

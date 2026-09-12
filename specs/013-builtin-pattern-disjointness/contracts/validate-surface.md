@@ -71,10 +71,10 @@ return steps.DedupeSortFindings(append(overlap, check.Paths(ro.featurePaths)...)
 
 An earlier draft of this section said the findings are "folded in with the existing pre-walk
 findings … the idiom `cmd/mentat/validate.go` already uses". **Measured false in two ways.**
-`mentat.Validate` (`run.go:573-612`) has no pre-walk findings and never calls
-`DedupeSortFindings` — it returns `SuiteCheck{…}.Paths(…)` directly, and `Paths` dedupes
-*internally* (`internal/steps/suite.go:92,97`). The `pre` + `DedupeSortFindings` idiom exists only
-at `cmd/mentat/validate.go:161` — the binary, which §1 says will **never** emit this class. So the
+`mentat.Validate` (`run.go`) had no pre-walk findings and never called `DedupeSortFindings` — it
+returned `SuiteCheck{…}.Paths(…)` directly, and `SuiteCheck.Paths` (`internal/steps/suite.go`)
+dedupes *internally*. The `pre` + `DedupeSortFindings` idiom exists only in `cmd/mentat/validate.go`
+— the binary, which §1 says will **never** emit this class. So the
 draft credited an idiom to the one call site that cannot use it.
 
 Appending after `Paths` without re-sorting would leave `File:""`/`Line:0` findings dangling
