@@ -320,42 +320,78 @@ someone had previously asserted without testing:
   Reachable because pattern validation rejects only **identical** patterns, so two
   distinct-but-overlapping contributed phrases coexist legally. It reaches suites through
   `mentat.Validate`; from the binary it is unreachable **as measured, not structurally** — the
-  disjointness test substitutes nine fixed fillers, so it is evidence, not proof.
+  disjointness test substituted nine fixed fillers, so it was evidence, not proof. **013 retired this hedge**: built-in disjointness is now DECIDED, and `pattern-overlap` reports contributed overlap with no corpus at all.
 
-  **Neither Mentat nor godog computes regex overlap.** Both classify per sentence, so a
-  collision on a sentence the corpus does not contain is reported by nobody.
+  **Neither `ambiguous-step` nor godog computes regex overlap.** Both classify per sentence,
+  so a collision on a sentence the corpus does not contain is invisible to both. As
+  originally written this said "neither Mentat nor godog", and reported by "nobody" — true
+  at `0f9dcea` and retired by 013, which added `Intersects` and reports the pattern-pair
+  question with no corpus at all.
 
 All five are properties of the **pinned** `godog v0.15.1`; a bump re-opens them.
 
 **Roadmap after 012:**
 
-- **013 — built-in step-pattern disjointness: prove it, or stop relying on it.** 012's
-  `ambiguous-step` class is unreachable from the `mentat validate` binary, and that is now
-  written down in three places — `contracts/validate-surface.md` §4, `CHANGELOG.md`, and the
-  doc comment on `StepBindingFindings` — as **measured, not structural**. The measurement is
-  `TestBuiltinStepPatternsArePairwiseDisjoint` (`internal/steps/metadata_test.go:286`), which
-  generates sentences from each pattern's own syntax tree, expanding every alternation branch
-  — but substitutes just **nine fixed fillers** (`"x"`, `""`, `"a b"`, `"1"`, `"2nd"`,
-  `"true"`, `"0.5"`, `"tool-name"`, `"a/b.c"`) into capture groups and character classes. Two
-  built-ins colliding only on a string no filler produces would pass it.
+- **013 — built-in step-pattern disjointness: SHIPPED.** The property is now **decided**, and
+  no code path relies on it being true.
 
-  So "the 40 built-in patterns are pairwise disjoint" is **evidence, not proof**, and four
-  things rest on it: V4's rationale (rejecting a contributed pattern identical to a built-in's
-  is only meaningful if the built-in set is itself unambiguous); R10's "latent, not live"
-  finding; the binary's inability to report `ambiguous-step`; and `StepArguments.matchBuiltin`
-  (`internal/steps/stepargs.go:305`) returning the FIRST match as though it were the only one.
+  What landed: `Intersects` (`internal/steps/disjoint.go`), a lazy product automaton over
+  `regexp/syntax` deciding emptiness-of-intersection for a pattern pair with zero
+  dependencies; a CI gate over every built-in pair; a `pattern-overlap` finding class
+  reported by `mentat.Validate` for overlap involving a contributed pattern; and
+  `matchingDefinitions`, which replaced `matchBuiltin`/`matchPhrase` so the step-argument
+  check decides by match COUNT rather than by registration position.
 
-  The overclaim was caught in review during 012's Phase 10: a draft of `validate-surface.md`
-  said "structurally unreachable" while its own next clause conceded the test "proves only over
-  generated sentences". It was corrected to "unreachable **as measured**", which is honest and
-  leaves the gap open — hence this feature.
+  **Measured: 780 pairs over 40 patterns in ~17ms, zero intersecting.** The prototype
+  baseline (0.36s) included compilation. Cost is reported by the gate, never asserted as a
+  ceiling — a slow runner must not false-RED a claim about pattern disjointness.
 
-  Three routes, to weigh rather than assume: decide regex intersection for the built-in set
-  (RE2 makes emptiness-of-intersection decidable in principle; Go's stdlib exposes nothing for
-  it); widen the generator (more fillers is more evidence, never proof); or **stop relying on
-  the property** — have `matchBuiltin` report every match and route it through the
-  `ambiguous-step` path that already exists. Only the third removes the assumption instead of
-  strengthening it.
+  Five corrections this feature made to its own artifacts, each measured rather than argued:
+
+  - **D1's central argument was wrong.** It said "a proof is a snapshot of 40 patterns; the
+    41st reopens it", which is true of a hand proof and false of a decision procedure wired
+    as a **gate** — the gate decides whatever set exists, every build. That conflation was
+    the only reason the exact-decision route sat in *Out of Scope*.
+  - **D2's cost estimate was wrong.** It said the route needed "a DFA library or hand-rolled
+    automata". A ~250-line stdlib prototype disproved it in one sitting.
+  - **`FoldCase` is the one alphabet `syntax` does not materialize.** `(?i)[a-c]` compiles to
+    explicit ranges; `(?i)abc` compiles to single-rune instructions carrying `FoldCase` in
+    `Inst.Arg`. A reader of `Inst.Rune` alone sees `'A'` and concludes the program cannot
+    match `'a'`. The prototype shipped that defect and reported `^(?i)abc$` and `^abc$`
+    disjoint. Found by the known-verdict corpus, not by reading the code — which is the
+    argument for why the falsifiability story is not optional.
+  - **FR-014 named a function on the run path.** An earlier draft placed the contributed
+    check at `resolvePhrases`, which has three callers including `steps.go:101` — scenario
+    init. The check lives in `EngineStepChecks`, whose sibling `stepPatternsFor` has exactly
+    one caller. And a second draft claimed unexporting the helper was what kept it off the
+    run path: **it is not**, since scenario init is in the same package. The guarantee is
+    the call graph, not the name.
+  - **SC-005 was false as written.** "Every existing suite produces byte-identical findings"
+    does not survive FR-014: 012's ambiguity test drives two genuinely overlapping phrases
+    and now reports the pattern-pair overlap as well as the per-sentence ambiguity. Narrowed
+    to suites whose patterns do not overlap.
+
+  Two things about the guards themselves, both worth knowing before extending this:
+
+  - **The agreement check would have been vacuous.** Over the real built-in set the sentence
+    corpus yields 1530 sentences and **zero** multi-matches, so "every sentence matching two
+    patterns must be reported intersecting" iterates an empty set. It carries a positive
+    control (1531 sentences, 1 multi-match) so the assertion is provably executed. The
+    differential sampler carries one for the same reason.
+  - **One mutation stayed green, correctly.** Dropping the rune-class UPPER boundaries in the
+    alphabet partition reddens nothing — and that is right: the partition keeps every range's
+    lower bound, so it can only over-approximate, never under, and a false "intersect" is
+    caught loudly by witness re-verification. The upper cuts buy precision, not correctness.
+    Collapsing the alphabet to a single class *does* under-approximate and reddens four rows.
+    The obvious reading of that green ("the alphabet is unguarded") is wrong.
+
+  `TestBuiltinStepPatternsArePairwiseDisjoint` is kept and reframed as an independent
+  sentence-corpus cross-check (D3) — a promotion, since two mechanisms of different kinds
+  mean a disagreement proves one is broken. Its name is unchanged because six references
+  point at it from here and from two merged 012 contracts.
+
+  Read `specs/013-builtin-pattern-disjointness/research.md` R1–R8 before touching the
+  decider, and `contracts/decider.md` for what a negative verdict does and does not mean.
 
 - **014 — CLI/`mentatctl` UX.** Renumbered from 013 on 2026-09-11 by the entry above.
 

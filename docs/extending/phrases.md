@@ -136,9 +136,9 @@ anchored patterns matching the *same* sentence:
 ^the alpha reading is fine$
 ```
 
-Both match `the alpha reading is fine`. Mentat does not attempt to decide regex overlap
-in general — instead the runner reports it at match time as a failed scenario naming
-**every** matching expression, so you see exactly which patterns to reconcile:
+Both match `the alpha reading is fine`. The runner reports it at match time as a failed
+scenario naming **every** matching expression, so you see exactly which patterns to
+reconcile:
 
 ```
 ambiguous step definition, step text: the alpha reading is fine
@@ -166,11 +166,38 @@ whatever your terminal does with it, and the patterns are listed in registration
 same order the runner lists them in.
 
 The two agree because they ask the same question: how many registered patterns match this
-sentence. What neither does is decide whether two patterns *could* overlap — that is a
-question about the patterns, and Mentat does not answer it. Both answer per sentence, so a
-collision that no step in your suite actually writes is reported by neither, and will
-surface the day someone writes that sentence. Anchoring, rule 4 and rule 5 are what keep
-that day from arriving; this is the net beneath them.
+sentence. Both answer per sentence, so a collision that no step in your suite actually
+writes is invisible to both.
+
+### Overlap you have not written yet
+
+That last gap is closed separately, and by a different kind of check. `mentat.Validate`
+also reports a **`pattern-overlap`** finding for two patterns that *can* both match some
+string, whether or not your suite contains such a step:
+
+```
+[pattern-overlap] the phrase "^the (\w+) reading is fine$" contributed by comparator "reading" and the phrase "^the alpha reading is fine$" contributed by comparator "reading-exact" can both match the same step, for example "the alpha reading is fine"; under Strict neither definition binds, so any feature file containing such a step fails as ambiguous
+```
+
+Three things to note about it:
+
+- **It decides, rather than sampling.** The question "can any string match both of these
+  patterns?" is answered over the whole language of each pattern, so it does not depend on
+  your suite containing a colliding sentence — or on anyone thinking to write one.
+- **It carries a witness** (`for example …`), a string both patterns match. That is the
+  part you can check yourself, and the fastest way to see *why* two patterns collide.
+- **It has no file or line**, because the defect is in the pair of definitions rather than
+  in any one place in your features.
+
+It is a **finding, not a build failure**. Two comparators from different authors may
+legitimately contribute overlapping phrases, and your engine still builds and runs: the
+overlap becomes a real failure only for a sentence inside it, which fails loudly then.
+Anchoring, rule 4 and rule 5 keep most collisions from happening at all; `pattern-overlap`
+tells you about the ones that slipped through, before a user finds them.
+
+(Mentat's own built-in steps are held to a stricter rule — a CI gate decides every pair of
+them and fails the build on any overlap. That asymmetry is deliberate: that table is ours
+to fix, and your comparators are not.)
 
 `mentat validate` (the binary) cannot report this for your phrases, for the same reason it
 reports them as unbound — it cannot reach your registrations. Use the library entry point.
