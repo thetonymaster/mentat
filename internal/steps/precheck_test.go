@@ -290,7 +290,7 @@ func TestStepBindingFindingsAgreesWithTheRunnerOnAmbiguity(t *testing.T) {
 	// top of it. Derived through EngineStepChecks rather than hand-listed, so it is
 	// the set that engine actually binds.
 	eng := customComparatorEngine(t)
-	pats, _, err := EngineStepChecks(eng)
+	pats, _, _, err := EngineStepChecks(eng)
 	if err != nil {
 		t.Fatalf("EngineStepChecks: %v", err)
 	}
@@ -479,6 +479,95 @@ func TestRunsTagFindings(t *testing.T) {
 			}
 			if len(got) != 0 {
 				t.Fatalf("want no finding, got %+v", got)
+			}
+		})
+	}
+}
+
+// TestCollidingPatternsYieldOneAmbiguousStepFinding is US1's T009 and pins SC-001.
+//
+// It is the other half of the deferral: stepProblem declines to diagnose a step several
+// definitions match, and this is the check that reports it instead. If this did not
+// hold, the deferral would be silence rather than a hand-off.
+//
+// Both collision SHAPES are covered — two built-in-shaped patterns and two
+// contributed-shaped ones — because StepBindingFindings classifies by COUNT over the
+// whole pattern set and has no notion of source. That is exactly why one finding is
+// correct for both.
+//
+// # How this differs from TestValidateReportsAmbiguousStep, above
+//
+// That test is stronger on one axis and silent on another. It pairs the static finding
+// with the RUNTIME half (the runner refusing the same sentence under Strict), which this
+// test does not attempt — but it drives a single broad-plus-specific pair, so it says
+// nothing about whether the classification is independent of where the patterns came
+// from. SC-001 asks for both combinations by name, and that is the gap this fills.
+// Neither subsumes the other; do not delete one on the grounds that the other is green.
+func TestCollidingPatternsYieldOneAmbiguousStepFinding(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		patterns []string
+		text     string
+		// wantAmbiguous is false for the negative control. A gate only ever exercised
+		// on collisions is untested in the direction that matters most in practice:
+		// every ordinary step must stay clean.
+		wantAmbiguous bool
+	}{
+		{
+			name:          "two built-in-shaped patterns",
+			patterns:      []string{overlappingPair[0], overlappingPair[1]},
+			text:          overlappingWitness,
+			wantAmbiguous: true,
+		},
+		{
+			name:          "two contributed-shaped phrases",
+			patterns:      []string{`^the widget is "([^"]*)"$`, `^the widget is "gold"$`},
+			text:          `the widget is "gold"`,
+			wantAmbiguous: true,
+		},
+		{
+			name:     "negative control: two patterns that do not collide",
+			patterns: []string{disjointPair[0], disjointPair[1]},
+			text:     `the tool "x" is never called`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			pats, err := CompileStepPatterns(tt.patterns)
+			if err != nil {
+				t.Fatalf("compiling fixtures: %v", err)
+			}
+			got := StepBindingFindings(pats, []*messages.PickleStep{{Text: tt.text}}, Source{})
+
+			if !tt.wantAmbiguous {
+				if len(got) != 0 {
+					t.Fatalf("a step matching exactly one pattern must yield no finding, got %+v", got)
+				}
+				return
+			}
+
+			if len(got) != 1 {
+				t.Fatalf("want exactly 1 finding for a step two patterns match, got %d: %+v", len(got), got)
+			}
+			if got[0].Class != "ambiguous-step" {
+				t.Errorf("class = %q, want %q", got[0].Class, "ambiguous-step")
+			}
+			// Every match must be named. A finding that listed only one would send the
+			// author to a definition that does not bind — the same defect the deferral
+			// in stepProblem exists to avoid.
+			for _, p := range tt.patterns {
+				// strconv.Quote, not the raw pattern: the message renders each match with
+				// %q, so a pattern containing quotes appears escaped. Asserting the raw
+				// form fails against a CORRECT message — the trap stepargs_test.go
+				// already documents for step text.
+				if !strings.Contains(got[0].Message, strconv.Quote(p)) {
+					t.Errorf("message does not name matching pattern %q:\n  %s", p, got[0].Message)
+				}
 			}
 		})
 	}

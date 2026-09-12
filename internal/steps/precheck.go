@@ -149,10 +149,18 @@ func BuiltinStepPatterns() StepPatterns {
 // inputs, same order — which is why the patterns are listed in pattern-set order here
 // too, lining up with godog's own matchingExpressions output.
 //
-// This decides nothing about regex OVERLAP in general, which mentat does not compute.
-// It is per-sentence multi-match, scoped to the sentences the corpus actually contains:
-// two patterns that could collide but that no step in the corpus reaches are not
-// reported, and neither runner nor validator has an opinion about them.
+// This decides nothing about regex OVERLAP. It is per-sentence multi-match, scoped to
+// the sentences the corpus actually contains: two patterns that could collide but that
+// no step in the corpus reaches are not reported HERE.
+//
+// They are no longer reported by nobody, which is what an earlier version of this
+// comment said ("neither runner nor validator has an opinion about them"). Feature 013
+// added a decision procedure — Intersects, disjoint.go — and two consumers of it: a CI
+// gate over the built-in set, and `pattern-overlap` findings for pairs involving a
+// contributed pattern, produced in EngineStepChecks and returned by mentat.Validate.
+// Those answer the pattern-pair question with no corpus at all. This function still
+// answers only the per-sentence one, and the division of labour is deliberate: this
+// names a LINE an author wrote, `pattern-overlap` names a PAIR of definitions.
 //
 // pats is a parameter, not package state, so the answer is always about the engine
 // the caller means. See StepPatterns.

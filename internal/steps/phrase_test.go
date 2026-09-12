@@ -1212,7 +1212,9 @@ func TestOneEngineYieldsOneVocabularyToEverySurface(t *testing.T) {
 	// Validation (mentat.Validate): the contributed expressions it binds against.
 	validated := func(t *testing.T) []string {
 		t.Helper()
-		pats, _, err := EngineStepChecks(eng)
+		// The third return is 013's pattern-overlap findings, which this test does
+		// not exercise: it compares the VOCABULARY three surfaces observe.
+		pats, _, _, err := EngineStepChecks(eng)
 		if err != nil {
 			t.Fatalf("EngineStepChecks: %v", err)
 		}
@@ -1414,7 +1416,9 @@ func TestEngineStepChecksWithoutContributorsMatchesTheBuiltInValidation(t *testi
 	t.Parallel()
 
 	eng := customComparatorEngine(t)
-	pats, args, err := EngineStepChecks(eng)
+	// The third return is 013's pattern-overlap findings; this engine contributes no
+	// phrases, so there are no pairs to decide and nothing for it to report.
+	pats, args, _, err := EngineStepChecks(eng)
 	if err != nil {
 		t.Fatalf("EngineStepChecks: %v", err)
 	}

@@ -260,32 +260,46 @@ func (s StepArguments) Findings(steps []*messages.PickleStep, src Source) []Find
 // stepProblem returns "" when st is fine, or a message naming the step definition and
 // the offending argument.
 //
-// # A step matching BOTH sources is left alone
+// # The decision is the match COUNT, never which source matched
 //
-// It is an ambiguity, and under Strict godog binds neither definition and reports every
-// matching expression at match time. Diagnosing it here would send the author to the
-// wrong place, and the message would be false besides: it says the argument "would be
-// silently discarded and the step would report a verdict that never read it", when in
-// fact the step never runs at all.
+// Exactly one definition matching is the only case with an argument to check, because
+// it is the only case where a definition binds:
 //
-// The case is reachable. V4 (phrase.go) rejects only IDENTICAL pattern strings, so a
-// contributed `^the result contains "(.+)"$` coexists with the built-in
-// `^the result contains "([^"]*)"$` and both match the same sentence.
+//	0  -> nothing to say; StepBindingFindings reports this as `unbound-step`
+//	1  -> that definition's declared argument decides
+//	>1 -> DEFER, whatever the sources are
 //
-// Left alone HERE does not mean unreported. StepBindingFindings classifies that same
-// step as `ambiguous-step` over the full pattern set, naming every pattern that
-// matched — the finding the author should act on, and the one the runner's own failure
-// corresponds to. This skip is a deferral to the better-placed check, not silence.
+// Deferring is right for every shape of >1 — two built-ins, two contributed phrases, or
+// one of each — and for one reason that covers them all: under Strict godog binds
+// NEITHER definition and reports every matching expression at match time. So a message
+// naming one of them is not merely misdirecting, it is false. It says the argument
+// "would be silently discarded and the step would report a verdict that never read it",
+// when in fact the step never runs.
 //
-// Otherwise the one source that matches decides. Built-ins are checked first because
-// they register first (metadata.go), so where only a built-in matches, its handler is
-// what will bind.
+// All three shapes are reachable. Pattern validation rejects only IDENTICAL strings, so
+// a contributed `^the result contains "(.+)"$` coexists with the built-in
+// `^the result contains "([^"]*)"$`, and two distinct-but-overlapping contributed
+// phrases coexist with each other.
+//
+// # Why count, and not a case per source
+//
+// A per-source switch is how this defect survived: it handled "one of each" and left
+// "two of the same kind" resolving by registration position in matchBuiltin and
+// matchPhrase, each returning its first match as though it were its only one. Counting
+// across both sources has no per-source branch to forget, so a third pattern source
+// added later cannot reintroduce the positional path by omission. That omission is the
+// mistake 012 recorded making twice, each fix aimed at where the defect had been found
+// rather than at what caused it.
+//
+// Deferring HERE does not mean unreported. StepBindingFindings classifies that same step
+// as `ambiguous-step` over the full pattern set, naming every pattern that matched — the
+// finding the author should act on, and the one the runner's own failure corresponds to.
 func (s StepArguments) stepProblem(st *messages.PickleStep) string {
-	b := s.matchBuiltin(st.Text)
-	cp := s.matchPhrase(st.Text)
-	switch {
-	case b != nil && cp != nil:
+	n, b, cp := s.matchingDefinitions(st.Text)
+	if n != 1 {
 		return ""
+	}
+	switch {
 	case b != nil:
 		return argumentProblem(st, b.want, fmt.Sprintf("the built-in step %q", b.pattern), "")
 	case cp != nil:
@@ -307,22 +321,34 @@ func (s StepArguments) stepProblem(st *messages.PickleStep) string {
 	return ""
 }
 
-func (s StepArguments) matchBuiltin(text string) *builtinArg {
+// matchingDefinitions counts every definition matching text, across BOTH sources, and
+// returns the sole match when there is exactly one.
+//
+// It replaced matchBuiltin and matchPhrase, which each scanned their own slice and
+// returned the FIRST match as though it were the only one. That is positional
+// resolution: with two matches it silently picked whichever registered first and let the
+// caller diagnose against it.
+//
+// b and cp are nil unless n == 1, deliberately. A caller cannot accidentally treat "the
+// first of several" as "the one", because when there are several this returns neither —
+// the count is the only thing that decides, and there is no shortcut around it.
+func (s StepArguments) matchingDefinitions(text string) (n int, b *builtinArg, cp *contributedPhrase) {
 	for i := range s.builtins {
 		if s.builtins[i].re.MatchString(text) {
-			return &s.builtins[i]
+			n++
+			b = &s.builtins[i]
 		}
 	}
-	return nil
-}
-
-func (s StepArguments) matchPhrase(text string) *contributedPhrase {
 	for i := range s.phrases {
 		if s.phrases[i].re.MatchString(text) {
-			return &s.phrases[i]
+			n++
+			cp = &s.phrases[i]
 		}
 	}
-	return nil
+	if n != 1 {
+		return n, nil, nil
+	}
+	return n, b, cp
 }
 
 // argumentProblem compares what a step carries against what its definition declares.

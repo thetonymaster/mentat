@@ -622,14 +622,28 @@ func stepPatternsFor(phrases []contributedPhrase) (StepPatterns, error) {
 // with scenario init, which was false for the pattern half. That is the same defect T073
 // deleted one function over (EnginePhraseArguments claimed a sharing that did not exist),
 // re-introduced in the text written to explain the deletion. Review measured it.
-func EngineStepChecks(eng *engine.Engine) (StepPatterns, StepArguments, error) {
+// # The third derivation: pattern-level overlap (013)
+//
+// Overlap findings are computed HERE, and returned, rather than by a function a caller
+// can invoke on its own. That placement is what keeps them off the run path: scenario
+// init calls resolvePhrases directly and never calls this function, so a finding
+// produced only inside it cannot reach a running scenario (013 FR-017, R6).
+//
+// It is a call-graph guarantee, not a naming one. patternOverlapFindings is unexported
+// as defence against other packages reaching past this function, but unexported alone
+// would prove nothing — scenario init is in this same package.
+func EngineStepChecks(eng *engine.Engine) (StepPatterns, StepArguments, []Finding, error) {
 	phrases, err := resolvePhrases(eng)
 	if err != nil {
-		return nil, StepArguments{}, err
+		return nil, StepArguments{}, nil, err
 	}
 	pats, err := stepPatternsFor(phrases)
 	if err != nil {
-		return nil, StepArguments{}, err
+		return nil, StepArguments{}, nil, err
 	}
-	return pats, newStepArguments(phrases), nil
+	overlaps, err := patternOverlapFindings(labelledPatternsFor(phrases), Source{})
+	if err != nil {
+		return nil, StepArguments{}, nil, err
+	}
+	return pats, newStepArguments(phrases), overlaps, nil
 }

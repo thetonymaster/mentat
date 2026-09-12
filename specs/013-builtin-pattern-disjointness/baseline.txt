@@ -1,0 +1,142 @@
+# Baseline for 013-builtin-pattern-disjointness
+# Captured: 2026-09-11T23:33:29Z
+# Commit:   bee935ac3a2e214dd7978e6744a6a5c49a0c5685
+# Branch:   013-builtin-pattern-disjointness
+
+## go.mod require block (SC-006 diffs against this)
+require (
+	github.com/anthropics/anthropic-sdk-go v1.53.0
+	github.com/cucumber/gherkin/go/v26 v26.2.0
+	github.com/cucumber/godog v0.15.1
+	github.com/cucumber/messages/go/v21 v21.0.1
+	github.com/google/cel-go v0.28.1
+	github.com/google/uuid v1.6.0
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
+	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0
+	go.opentelemetry.io/otel v1.44.0
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.44.0
+	go.opentelemetry.io/otel/sdk v1.44.0
+	go.opentelemetry.io/otel/trace v1.44.0
+	go.uber.org/mock v0.6.0
+	golang.org/x/sync v0.20.0
+	gopkg.in/yaml.v3 v3.0.1
+)
+require (
+	cel.dev/expr v0.25.1 // indirect
+	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
+	github.com/bahlo/generic-list-go v0.2.0 // indirect
+	github.com/buger/jsonparser v1.1.2 // indirect
+	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/felixge/httpsnoop v1.0.4 // indirect
+	github.com/go-logr/logr v1.4.3 // indirect
+	github.com/go-logr/stdr v1.2.2 // indirect
+	github.com/gofrs/uuid v4.3.1+incompatible // indirect
+	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
+	github.com/hashicorp/go-immutable-radix v1.3.1 // indirect
+	github.com/hashicorp/go-memdb v1.3.4 // indirect
+	github.com/hashicorp/golang-lru v0.5.4 // indirect
+	github.com/invopop/jsonschema v0.14.0 // indirect
+	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
+	github.com/spf13/pflag v1.0.7 // indirect
+	github.com/standard-webhooks/standard-webhooks/libraries v0.0.1 // indirect
+	github.com/tidwall/gjson v1.18.0 // indirect
+	github.com/tidwall/match v1.1.1 // indirect
+	github.com/tidwall/pretty v1.2.1 // indirect
+	github.com/tidwall/sjson v1.2.5 // indirect
+	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.44.0 // indirect
+	go.opentelemetry.io/otel/metric v1.44.0 // indirect
+	go.opentelemetry.io/proto/otlp v1.10.0 // indirect
+	go.yaml.in/yaml/v3 v3.0.4 // indirect
+	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
+	golang.org/x/exp v0.0.0-20240823005443-9b4947da3948 // indirect
+	golang.org/x/net v0.55.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
+	google.golang.org/grpc v1.81.1 // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
+)
+
+## go test ./... (SC-005 compares findings and verdicts, normalized per T056)
+ok  	github.com/thetonymaster/mentat	1.275s	coverage: 96.6% of statements
+ok  	github.com/thetonymaster/mentat/cmd/mentat	7.177s	coverage: 62.0% of statements
+ok  	github.com/thetonymaster/mentat/cmd/mentatctl	0.330s	coverage: 31.4% of statements
+ok  	github.com/thetonymaster/mentat/e2e	1.884s	coverage: 100.0% of statements
+ok  	github.com/thetonymaster/mentat/internal/cel	1.586s	coverage: 87.3% of statements
+ok  	github.com/thetonymaster/mentat/internal/comparator	0.692s	coverage: 95.0% of statements
+ok  	github.com/thetonymaster/mentat/internal/config	0.454s	coverage: 100.0% of statements
+ok  	github.com/thetonymaster/mentat/internal/core	2.317s	coverage: 100.0% of statements
+	github.com/thetonymaster/mentat/internal/core/mocks		coverage: 0.0% of statements
+ok  	github.com/thetonymaster/mentat/internal/correlate	2.202s	coverage: 98.8% of statements
+ok  	github.com/thetonymaster/mentat/internal/ctl	2.932s	coverage: 90.7% of statements
+ok  	github.com/thetonymaster/mentat/internal/driver	2.472s	coverage: 94.5% of statements
+ok  	github.com/thetonymaster/mentat/internal/engine	3.707s	coverage: 93.6% of statements
+ok  	github.com/thetonymaster/mentat/internal/expectations	2.724s	coverage: 91.6% of statements
+?   	github.com/thetonymaster/mentat/internal/genai	[no test files]
+ok  	github.com/thetonymaster/mentat/internal/judge	2.857s	coverage: 97.8% of statements
+ok  	github.com/thetonymaster/mentat/internal/registry	2.822s	coverage: 90.3% of statements
+ok  	github.com/thetonymaster/mentat/internal/report	2.911s	coverage: 95.1% of statements
+ok  	github.com/thetonymaster/mentat/internal/result	2.798s	coverage: 100.0% of statements
+ok  	github.com/thetonymaster/mentat/internal/steps	2.969s	coverage: 89.5% of statements
+ok  	github.com/thetonymaster/mentat/internal/store	2.386s	coverage: 95.4% of statements
+ok  	github.com/thetonymaster/mentat/internal/testio	2.229s	coverage: 92.9% of statements
+ok  	github.com/thetonymaster/mentat/internal/trace	2.056s	coverage: 94.4% of statements
+ok  	github.com/thetonymaster/mentat/tracelab/orderflow	4.044s	coverage: 93.4% of statements
+	github.com/thetonymaster/mentat/tracelab/orderflow/cmd/capture		coverage: 0.0% of statements
+ok  	github.com/thetonymaster/mentat/tracelab/orderflow/cmd/orderflow	2.383s	coverage: 48.6% of statements
+ok  	github.com/thetonymaster/mentat/tracelab/researchbot	2.327s	coverage: 92.9% of statements
+	github.com/thetonymaster/mentat/tracelab/researchbot/cmd/capture		coverage: 0.0% of statements
+	github.com/thetonymaster/mentat/tracelab/researchbot/cmd/researchbot		coverage: 0.0% of statements
+
+## per-package coverage totals
+  ok  	github.com/thetonymaster/mentat	1.275s	coverage: 96.6% of statements
+  ok  	github.com/thetonymaster/mentat/cmd/mentat	7.177s	coverage: 62.0% of statements
+  ok  	github.com/thetonymaster/mentat/cmd/mentatctl	0.330s	coverage: 31.4% of statements
+  ok  	github.com/thetonymaster/mentat/e2e	1.884s	coverage: 100.0% of statements
+  ok  	github.com/thetonymaster/mentat/internal/cel	1.586s	coverage: 87.3% of statements
+  ok  	github.com/thetonymaster/mentat/internal/comparator	0.692s	coverage: 95.0% of statements
+  ok  	github.com/thetonymaster/mentat/internal/config	0.454s	coverage: 100.0% of statements
+  ok  	github.com/thetonymaster/mentat/internal/core	2.317s	coverage: 100.0% of statements
+  	github.com/thetonymaster/mentat/internal/core/mocks		coverage: 0.0% of statements
+  ok  	github.com/thetonymaster/mentat/internal/correlate	2.202s	coverage: 98.8% of statements
+  ok  	github.com/thetonymaster/mentat/internal/ctl	2.932s	coverage: 90.7% of statements
+  ok  	github.com/thetonymaster/mentat/internal/driver	2.472s	coverage: 94.5% of statements
+  ok  	github.com/thetonymaster/mentat/internal/engine	3.707s	coverage: 93.6% of statements
+  ok  	github.com/thetonymaster/mentat/internal/expectations	2.724s	coverage: 91.6% of statements
+  ok  	github.com/thetonymaster/mentat/internal/judge	2.857s	coverage: 97.8% of statements
+  ok  	github.com/thetonymaster/mentat/internal/registry	2.822s	coverage: 90.3% of statements
+  ok  	github.com/thetonymaster/mentat/internal/report	2.911s	coverage: 95.1% of statements
+  ok  	github.com/thetonymaster/mentat/internal/result	2.798s	coverage: 100.0% of statements
+  ok  	github.com/thetonymaster/mentat/internal/steps	2.969s	coverage: 89.5% of statements
+  ok  	github.com/thetonymaster/mentat/internal/store	2.386s	coverage: 95.4% of statements
+  ok  	github.com/thetonymaster/mentat/internal/testio	2.229s	coverage: 92.9% of statements
+  ok  	github.com/thetonymaster/mentat/internal/trace	2.056s	coverage: 94.4% of statements
+  ok  	github.com/thetonymaster/mentat/tracelab/orderflow	4.044s	coverage: 93.4% of statements
+  	github.com/thetonymaster/mentat/tracelab/orderflow/cmd/capture		coverage: 0.0% of statements
+  ok  	github.com/thetonymaster/mentat/tracelab/orderflow/cmd/orderflow	2.383s	coverage: 48.6% of statements
+  ok  	github.com/thetonymaster/mentat/tracelab/researchbot	2.327s	coverage: 92.9% of statements
+  	github.com/thetonymaster/mentat/tracelab/researchbot/cmd/capture		coverage: 0.0% of statements
+  	github.com/thetonymaster/mentat/tracelab/researchbot/cmd/researchbot		coverage: 0.0% of statements
+
+## go tool cover -func totals (FR-009 floor is 80% per package)
+total:											(statements)			85.8%
+
+## T002 — starting-point cleanliness
+  gofmt -l .: clean
+  go vet ./...: clean
+  golangci-lint: exit 0
+  golangci-lint run ./...: 0 issues
+
+## T003 — e2e lane BEFORE any change (research.md R8)
+  make harness-up: ok (docker compose up; tempo + collector recreated)
+  go test -tags e2e ./...: ALL GREEN, incl. e2e package 54.361s and both stdout goldens
+  => a post-change e2e failure is attributable to this feature.
+
+## Key figures the success criteria reference
+  root package mentat:  96.6%
+  internal/steps:       89.5%   <- the package this feature touches
+  cmd/mentat:           62.0%   (make ci exempts cmd/* from the coverage gate)
+  total:                85.8%

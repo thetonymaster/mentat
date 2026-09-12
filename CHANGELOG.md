@@ -6,7 +6,58 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Built-in step-pattern disjointness is now DECIDED, not sampled.** A lazy product
+  automaton over `regexp/syntax` decides emptiness-of-intersection for a pattern pair
+  using only the standard library, and a CI gate applies it to every pair of the 40
+  built-in patterns. **Measured: 780 pairs decided in ~17ms, zero intersecting.**
+
+  This replaces a sentence-corpus check as the basis for the claim. That check generates
+  sentences from each pattern's own syntax tree but substitutes nine fixed fillers into
+  capture groups, so two built-ins colliding only on a string no filler produces would
+  have passed it — the claim was *evidence, not proof*. The generated-sentence test
+  remains as an independent cross-check of a different kind, which is a promotion: two
+  mechanisms now check one property, so a disagreement between them proves one is broken.
+
+  A positive verdict carries a **witness string**, re-verified against both patterns
+  before it is reported, so a caller need not trust the decider. A negative verdict
+  cannot prove itself the same way and is never described as proof of disjointness.
+
+  The decider **refuses** what it cannot model — word boundaries, multi-line anchors, and
+  any empty-width assertion outside the set `regexp/syntax` defines today — with an error
+  naming the pattern and the construct. Answering "disjoint" for a construct it misreads
+  would be a silent fallback inside the gate built to remove one.
+
+- **New finding class `pattern-overlap`**, reported by `mentat.Validate` for two step
+  patterns that can both match the same step, where at least one is comparator-contributed.
+  It carries the witness and names the contributing comparator, has no file or line (the
+  defect is in the pattern pair, not in any file), and — unlike `ambiguous-step` — fires
+  for an overlap **no feature file has yet used**.
+
+  It is reported, never fatal. Overlap between two independently-authored comparators is a
+  potential failure, real only for a sentence inside the overlap, which still fails loudly
+  at run time. Refusing to build would make two otherwise-usable comparators mutually
+  exclusive for a consumer whose feature files never enter the overlap. Built-in overlap
+  is treated differently — it fails the build — because we own that table and can simply
+  not ship an overlapping pair.
+
+- **New finding class `pattern-undecidable`.** The decider models whole-text-anchored patterns
+  without word boundaries or multi-line anchors. A contributed phrase may legally contain those —
+  anchoring validation admits them and godog runs such a step correctly — so a phrase the decider
+  cannot reason about is reported and skipped rather than failing validation. `mentat.Validate`
+  keeps returning the suite's other findings; the message says the step still runs but is excluded
+  from overlap checking, because that is a real gap in coverage.
+
 ### Changed
+
+- **The step-argument check now defers on ANY multiply-matched step, by match count.**
+  It previously deferred only when a built-in *and* a contributed phrase both matched;
+  two built-ins, or two contributed phrases, were resolved by registration **position**
+  and diagnosed against whichever came first. That message was not merely misdirecting
+  but false: under `Strict` godog binds neither definition, so the step never runs and no
+  argument of it is ever read. The decision is now the match count across both sources,
+  with no per-source case for a future third source to miss.
 
 - **BREAKING (authoring): a step carrying an argument its definition cannot receive is
   now rejected.** godog discards any argument a step handler did not declare — the
@@ -87,12 +138,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   contributed `^the (\w+) reading is fine$` coexists with a contributed or built-in
   `^the alpha reading is fine$`, and both match the same sentence.
 
-  This is **not** regex-overlap analysis, which Mentat does not compute and neither does
-  the runner. Both classify per sentence, so two patterns that could collide on a sentence
-  no scenario contains are reported by neither. It reaches suites through `mentat.Validate`,
-  which sees the engine's contributed phrases; the `mentat validate` binary sees built-in
-  patterns only, and no two of those are known to match the same sentence, so the class is
-  not expected to fire there.
+  `ambiguous-step` itself is **not** regex-overlap analysis. It classifies per sentence,
+  so a collision on a sentence no scenario contains is invisible to it. It reaches suites
+  through `mentat.Validate`, which sees the engine's contributed phrases; the `mentat
+  validate` binary sees built-in patterns only.
+
+  Mentat **does** now compute regex overlap, and the sentence above used to say it does
+  not. See the `pattern-overlap` entry below: that claim was true when written and is
+  what the next feature was raised to retire.
 
 - **Custom comparators are drivable from a `.feature` file.** A comparator registered
   with `WithComparator` could be composed but not *invoked* by an authored step: every

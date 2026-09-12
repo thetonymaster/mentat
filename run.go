@@ -593,7 +593,7 @@ func Validate(ctx context.Context, cfg Config, opts ...Option) ([]Finding, error
 	// One resolution feeding both derivations. Resolving twice recompiled every
 	// contributed pattern for no benefit, and left two places that could disagree
 	// about which phrases this engine has.
-	pats, stepArgs, err := steps.EngineStepChecks(eng)
+	pats, stepArgs, overlaps, err := steps.EngineStepChecks(eng)
 	if err != nil {
 		return nil, fmt.Errorf("mentat: %w", err)
 	}
@@ -603,14 +603,26 @@ func Validate(ctx context.Context, cfg Config, opts ...Option) ([]Finding, error
 		known[name] = true
 	}
 
-	return steps.SuiteCheck{
+	chk := steps.SuiteCheck{
 		Engine:       eng,
 		Patterns:     pats,
 		Targets:      known,
 		CheckTargets: true,
 		CheckShapes:  true,
 		Arguments:    stepArgs,
-	}.Paths(ro.featurePaths), nil
+	}
+	// Pattern-level overlap findings (013) are folded in here and the whole list
+	// re-sorted.
+	//
+	// Paths dedupes and sorts internally, but it knows only about findings the file
+	// walk produced. These come from the pattern set itself and carry no File or Line,
+	// so appending after Paths without re-sorting would leave them dangling outside
+	// the single ordered list this function promises its callers.
+	//
+	// They are reported, never fatal: this returns a nil error alongside them. Overlap
+	// between two contributed phrases is a potential failure, real only for a sentence
+	// inside the overlap — which still fails loudly at run time.
+	return steps.DedupeSortFindings(append(overlaps, chk.Paths(ro.featurePaths)...)), nil
 }
 
 // buildEngineForInspection assembles the same engine mentat.Run would, for the

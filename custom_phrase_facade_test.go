@@ -18,6 +18,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -835,24 +838,38 @@ func TestValidateReportsAnAmbiguousStepNamingBothPatterns(t *testing.T) {
 		t.Errorf("message %q does not state how many definitions matched", got.Message)
 	}
 
-	// Nothing else is wrong with this file, so anything else reported is a second,
-	// unexplained diagnosis of one defect — which is what sends an author to the wrong
-	// place.
+	// TWO findings are expected here, and both are true statements about this engine.
 	//
-	// The step-argument check does stay silent here, but NOT by deferral, and the
-	// difference matters because the obvious reading is wrong. stepProblem
-	// (internal/steps/stepargs.go) defers only when a built-in AND a contributed phrase
-	// both match. Both matches here are CONTRIBUTED, so b == nil, control reaches the
-	// `cp != nil` arm, and the step is diagnosed against the first matching phrase like
-	// any other. It returns "" only because neither phrase declares a docstring and the
-	// sentence carries no argument — argument-kind agreement, not deferral.
+	// Feature 013 changed this from one, deliberately (FR-014). The two phrases driving
+	// this test genuinely overlap — `^the revenue floor is (\d+) (\w+)$` against
+	// `^the revenue floor is 4 (\w+)$` — so besides the per-SENTENCE ambiguity the file
+	// contains, the engine now also reports the per-PATTERN-PAIR overlap that makes any
+	// such sentence ambiguous. They answer different questions and an author needs both:
+	// the ambiguous-step names a line to fix, the pattern-overlap names the pair of
+	// definitions to reconcile, and the second fires even for a file nobody has written.
 	//
-	// Measured (go-reviewer, 2026-09-11): two contributed phrases both ending `:$`, both
-	// matching one sentence written without a docstring, produce TWO findings — an
-	// ambiguous-step AND a step-argument. So this asserts a property of THIS file, not a
-	// general guarantee that an ambiguous step is ever reported only once.
-	if len(findings) != 1 {
-		t.Errorf("want the ambiguity to be the only finding, got %d: %+v", len(findings), findings)
+	// The step-argument check stays silent, and 013 changed WHY. The previous version of
+	// this comment explained that it was silent "NOT by deferral": both matches are
+	// CONTRIBUTED, so the old stepProblem reached its `cp != nil` arm and diagnosed
+	// against the first matching phrase, returning "" only because neither phrase
+	// declares a docstring and the sentence carries no argument — argument-kind
+	// agreement. That reading was accurate and is now obsolete: stepProblem branches on
+	// the match COUNT across both sources, so two contributed matches defer outright.
+	//
+	// Which also retires the measurement recorded here (go-reviewer, 2026-09-11) that
+	// two contributed phrases ending `:$` produce an ambiguous-step AND a step-argument
+	// finding. Under 013 the step-argument half is a deferral, so that pair now reports
+	// the ambiguity and the overlap instead.
+	if len(findings) != 2 {
+		t.Fatalf("want the ambiguity and the pattern-overlap, got %d: %+v", len(findings), findings)
+	}
+	var classes []string
+	for _, f := range findings {
+		classes = append(classes, f.Class)
+	}
+	sort.Strings(classes)
+	if want := []string{"ambiguous-step", "pattern-overlap"}; !slices.Equal(classes, want) {
+		t.Errorf("finding classes = %v, want %v", classes, want)
 	}
 }
 
@@ -885,7 +902,175 @@ func TestInspectionDoesNotMutateTheCallersConfig(t *testing.T) {
 	}
 }
 
-// --- 014: what the FACADE can and cannot say about the phrase freeze ---
+// TestValidateReportsPatternOverlapWithoutAnyFeatureStep is US2's T022 for the facade,
+// and pins SC-009.
+//
+// It does NOT pin FR-017, though an earlier version of this comment claimed it did.
+// FR-017 is a statement about the RUN path — that the pattern-level finding never joins
+// the scenario-init fail-fast pool — and this test calls mentat.Validate, which never
+// enters scenario init at all. A Validate-only test cannot observe the run path, so the
+// claim was unfalsifiable here however the run path behaved. Found by 013's own
+// convergence pass; FR-017/SC-011 are measured by
+// TestOverlappingPhrasesDoNotPerturbASuiteOutsideTheOverlap
+// (custom_phrase_isolation_test.go), which runs the suite twice and compares.
+//
+// It is a ROOT-package test on purpose. SC-009 names mentat.Validate, and the wiring
+// that folds these findings into Validate's sorted result lives in run.go — so a test
+// in internal/steps could not see it.
+//
+// # Mutation rehearsal (2026-09-11, FR-007) — confirmed landed before it was trusted
+//
+// An earlier version of this comment PREDICTED that "deleting that fold-in would leave
+// the suite green". The prediction was never run, which in this feature is not a
+// detail: FR-007 exists because a guard's reach is a property to measure, not to infer.
+// So it was measured. The fold-in at run.go was replaced with
+//
+//	_ = overlaps // keep the tree BUILDING with the fold-in gone
+//	return chk.Paths(ro.featurePaths), nil
+//
+// `_ = overlaps` is load-bearing for the rehearsal itself: without it the package fails
+// to COMPILE, and `go test` renders a build failure and a real red identically at the
+// package line — the trap 014 recorded hitting.
+//
+// Confirmed with `git diff -- run.go`, confirmed to build with `go build ./...`, then
+// measured across `go test ./...`:
+//
+//   - RED here: "want exactly 1 pattern-overlap finding, got 0 (all findings: [])"
+//   - RED in TestValidateReportsAnAmbiguousStepNamingBothPatterns above, which asserts
+//     the two-finding list this feature widened it to
+//   - internal/steps entirely GREEN, and every other package green
+//
+// So the structural half of the prediction holds — internal/steps really cannot see
+// this wiring — and the coverage half was WRONG: two root-package tests catch it, not
+// zero. Reverted; re-observed green.
+//
+// # The feature file contains no overlapping step
+//
+// That is the whole point, and what distinguishes this from
+// TestValidateReportsAnAmbiguousStepNamingBothPatterns above. `ambiguous-step` can only
+// report a collision on a sentence the corpus contains. The two comparators here overlap
+// whether or not anybody writes such a sentence, so a decision procedure reports it and
+// a corpus check cannot. This file's only step is one no phrase matches at all.
+func TestValidateReportsPatternOverlapWithoutAnyFeatureStep(t *testing.T) {
+	t.Parallel()
+
+	broad := (&phraseRevenue{}).ContributedPhrases()[0].Pattern
+	exact := (&exactFloorPhrase{}).ContributedPhrases()[0].Pattern
+
+	// A scenario whose steps are all built-ins, so nothing here can produce an
+	// ambiguous-step finding. Any pattern-overlap reported is therefore about the
+	// PATTERNS, not about anything written below.
+	body := `Feature: overlapping phrases nobody has used yet
+  Scenario: not one step matches either contributed phrase
+    Given the agent target "bot"
+    When I run scenario "any"
+    Then no span has status "ERROR"
+`
+	path := filepath.Join(t.TempDir(), "no-overlap-step.feature")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write feature: %v", err)
+	}
+
+	cfg := mentat.Config{
+		Store:   phraseRegistryName,
+		Targets: map[string]mentat.Target{"bot": {Adapter: phraseRegistryName, Command: []string{"noop"}, MaxConcurrency: 1}},
+		Poll:    mentat.PollSpec{Interval: "1ms", StableFor: 1},
+	}
+	b := newBus()
+	findings, err := mentat.Validate(context.Background(), cfg,
+		mentat.WithFeatures(path),
+		mentat.WithDriver(phraseRegistryName, func(mentat.Config) (mentat.Driver, error) {
+			return busDriver{bus: b, answer: "ok"}, nil
+		}),
+		mentat.WithStore(phraseRegistryName, func(mentat.Config) (mentat.TraceStore, error) {
+			return busStore{bus: b}, nil
+		}),
+		mentat.WithComparator("revenue-shape-exact", func(mentat.Config) (mentat.Comparator, error) {
+			return &exactFloorPhrase{}, nil
+		}),
+		mentat.WithComparator("revenue-shape", func(mentat.Config) (mentat.Comparator, error) {
+			return &phraseRevenue{}, nil
+		}),
+	)
+	// D5 / FR-014: reported, never fatal. Two overlapping phrases must not make the
+	// engine unusable for a consumer whose feature files never enter the overlap.
+	if err != nil {
+		t.Fatalf("Validate returned an error: %v — contributed overlap is a finding, not a refusal", err)
+	}
+
+	var overlaps []mentat.Finding
+	for _, f := range findings {
+		if f.Class == "pattern-overlap" {
+			overlaps = append(overlaps, f)
+		}
+	}
+	if len(overlaps) != 1 {
+		t.Fatalf("want exactly 1 pattern-overlap finding, got %d (all findings: %+v)", len(overlaps), findings)
+	}
+	got := overlaps[0]
+
+	// Both patterns and both comparator names, because a finding an author cannot act
+	// on is not worth reporting: the comparator name is the thing they can change.
+	// Patterns are searched for in their strconv.Quote'd form. Every message in this
+	// codebase renders a pattern with %q, so a pattern containing backslashes comes
+	// back double-escaped and the raw substring does not appear. Comparator names have
+	// no escapes, so either form finds them — which is exactly how this trap hides:
+	// the rows that pass give no hint the rows that fail are asserting wrongly.
+	for _, want := range []string{strconv.Quote(broad), strconv.Quote(exact), "revenue-shape", "revenue-shape-exact"} {
+		if !strings.Contains(got.Message, want) {
+			t.Errorf("pattern-overlap message does not name %s:\n  %s", want, got.Message)
+		}
+	}
+
+	// A pattern-pair defect has no feature-file location, and claiming one would send
+	// the author to an arbitrary line.
+	if got.File != "" || got.Line != 0 {
+		t.Errorf("pattern-overlap carries a location (File=%q Line=%d); the defect is in the pattern pair, not in any file", got.File, got.Line)
+	}
+
+	// FR-011 end to end: the witness must really be a string both patterns match. The
+	// message embeds it as `for example %q`, so recover and re-verify it rather than
+	// trusting that the decider verified it internally.
+	witness := quotedAfter(t, got.Message, "for example ")
+	reBroad, reExact := regexp.MustCompile(broad), regexp.MustCompile(exact)
+	if !reBroad.MatchString(witness) || !reExact.MatchString(witness) {
+		t.Errorf("witness %q does not match both patterns (%q: %v, %q: %v)",
+			witness, broad, reBroad.MatchString(witness), exact, reExact.MatchString(witness))
+	}
+}
+
+// quotedAfter extracts the %q-rendered value following marker.
+//
+// It scans for the closing quote respecting BACKSLASH ESCAPES. The first version stopped
+// at the first inner `"`, which works only for a value containing none — and every
+// built-in step pattern is full of quotes, so a witness carrying one would have made
+// this helper fail against a perfectly correct message. Review caught it before a
+// witness ever contained one.
+func quotedAfter(t *testing.T, s, marker string) string {
+	t.Helper()
+	i := strings.Index(s, marker)
+	if i < 0 {
+		t.Fatalf("marker %q not found in %q", marker, s)
+	}
+	rest := s[i+len(marker):]
+	if len(rest) == 0 || rest[0] != '"' {
+		t.Fatalf("no quoted value after %q in %q", marker, s)
+	}
+	for j := 1; j < len(rest); j++ {
+		switch rest[j] {
+		case '\\':
+			j++ // skip the escaped byte, whatever it is
+		case '"':
+			v, err := strconv.Unquote(rest[:j+1])
+			if err != nil {
+				t.Fatalf("unquoting %q: %v", rest[:j+1], err)
+			}
+			return v
+		}
+	}
+	t.Fatalf("unterminated quoted value after %q in %q", marker, s)
+	return ""
+}
 
 // TestFacadeEntryPointsEachConsultThePhraseSeamOncePerEngine is a CHARACTERIZATION
 // test. It is green before and after 014, deliberately, and the reason is the most

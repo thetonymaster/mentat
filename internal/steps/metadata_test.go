@@ -1,12 +1,15 @@
 package steps
 
 import (
+	"fmt"
 	"os"
 	"regexp"
 	"regexp/syntax"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // stepSpy is a stepRegistrar stand-in that records every (pattern, handler) pair
@@ -272,17 +275,52 @@ func sortedKeys(m map[string]struct{}) []string {
 	return out
 }
 
-// TestBuiltinStepPatternsArePairwiseDisjoint pins the assumption V4 rests on.
+// TestBuiltinStepPatternsArePairwiseDisjoint is the SENTENCE-CORPUS CROSS-CHECK of
+// built-in disjointness. It is no longer the evidence for the property.
+//
+// # Read this together with TestBuiltinStepPatternsAreDecidedDisjoint
+//
+// The two names are one word apart and the difference matters:
+//
+//	…AreDecidedDisjoint    decides the property over each PATTERN PAIR. Load-bearing.
+//	…ArePairwiseDisjoint   samples SENTENCES generated from the patterns. Cross-check.
+//
+// This one was the load-bearing gate until feature 013, and that is precisely what 013
+// was raised to fix: it substitutes nine fixed fillers into capture groups and character
+// classes, so two built-ins colliding only on a string no filler produces would pass it.
+// "The 40 built-in patterns are pairwise disjoint" was therefore evidence, not proof.
+//
+// Keeping it is deliberate (013 D3), and it is a promotion rather than a demotion. Two
+// mechanisms of different kinds now check one property, so a DISAGREEMENT between them
+// proves one is broken — which is worth more than either alone. It is also cheap, runs
+// on every build, and would catch an obvious collision immediately.
+//
+// Its `generated < 500` floor stays for the same reason: a generator that silently
+// produced nothing would report success forever.
+//
+// # What it originally pinned
 //
 // V4 rejects a contributed pattern identical to a built-in's, on the grounds that
 // built-ins register first and would permanently shadow it. That rule is only
 // meaningful if the built-in set is itself unambiguous — and until this test, nothing
 // asserted that. It was measured while investigating the ambiguity defect (012 R10)
 // and turned out to be TRUE, which corrected a spec claim that the ambiguous branch was
-// already reachable between two built-ins.
+// already reachable between two built-ins. After 013 that assumption is DECIDED rather
+// than sampled, so V4's rationale no longer rests on this test.
 //
 // Sentences are generated from each pattern's own syntax tree, expanding every
 // alternation branch, so the check does not depend on anyone hand-listing examples.
+//
+// The name is kept rather than changed, recorded as spec.md D6. Measured 2026-09-11:
+// **18** references outside 013's own tasks.md — 5 in internal/steps, 2 in CLAUDE.md, 3
+// in merged 012 artifacts, 8 across 013's. Two of them settle it: FR-005 names this test
+// BY NAME, so renaming it makes a requirement stale, and the merged-012 citations sit in
+// contracts T048 deliberately annotated rather than rewrote.
+//
+// This comment said "six references" until the count was actually taken, as did the
+// tasks.md item directing the rename — so the rename was costed at a third of its reach
+// by both. Dangling citations in shipped artifacts are a worse defect than two
+// neighbouring names that the comment above now distinguishes.
 func TestBuiltinStepPatternsArePairwiseDisjoint(t *testing.T) {
 	t.Parallel()
 
@@ -377,5 +415,103 @@ func expandPattern(re *syntax.Regexp, filler string, depth int) []string {
 	default:
 		// Anchors, empty matches and word boundaries contribute no characters.
 		return []string{""}
+	}
+}
+
+// decidedCollisions decides EVERY pair in patterns and returns one description per
+// intersecting pair, naming both patterns and the verified witness.
+//
+// The pattern list is a PARAMETER, not read from stepDefs inside. Two reasons, and the
+// second is the load-bearing one:
+//
+//  1. A gate that can only ever be pointed at the real table cannot be shown to fire.
+//  2. `make test` runs `go test ./... -race` and the tests here call t.Parallel(), so
+//     injecting a colliding row by mutating package-level stepDefs would be a data
+//     race — a guard whose rehearsal corrupts the thing it guards.
+func decidedCollisions(t *testing.T, patterns []string) []string {
+	t.Helper()
+
+	var out []string
+	pairs := 0
+	start := time.Now()
+	for i := 0; i < len(patterns); i++ {
+		for j := i + 1; j < len(patterns); j++ {
+			pairs++
+			got, err := Intersects(patterns[i], patterns[j])
+			if err != nil {
+				// A refusal is not a disjointness result and must never be counted as
+				// one. It means the decider cannot model one of these patterns, which
+				// is a finding in its own right.
+				t.Fatalf("decider refused the pair %q / %q: %v", patterns[i], patterns[j], err)
+			}
+			if !got.Intersects {
+				continue
+			}
+			reA, reB := regexp.MustCompile(patterns[i]), regexp.MustCompile(patterns[j])
+			out = append(out, fmt.Sprintf("%q and %q both match %q (verified: %v/%v)",
+				patterns[i], patterns[j], got.Witness,
+				reA.MatchString(got.Witness), reB.MatchString(got.Witness)))
+		}
+	}
+	// FR-016: the cost is REPORTED, not asserted. A ceiling here would turn a slow CI
+	// runner into a false red about pattern disjointness, which is a different claim.
+	t.Logf("decided %d pairs over %d patterns in %s", pairs, len(patterns), time.Since(start))
+	return out
+}
+
+// TestBuiltinStepPatternsAreDecidedDisjoint is US2's gate: FR-013 and SC-007.
+//
+// This DECIDES the property. It consults no sentence corpus, so unlike its cross-check
+// sibling it cannot miss a collision that only appears for a string no filler produces
+// — which is the gap feature 013 exists to close.
+//
+// It is the load-bearing assertion; TestBuiltinStepPatternsArePairwiseDisjoint remains
+// as an independent cross-check of a different kind (D3). Two mechanisms agreeing is
+// worth more than either alone, because a disagreement proves one is broken.
+func TestBuiltinStepPatternsAreDecidedDisjoint(t *testing.T) {
+	t.Parallel()
+
+	docs := StepDocs()
+	patterns := make([]string, 0, len(docs))
+	for _, d := range docs {
+		patterns = append(patterns, d.Pattern)
+	}
+
+	if got := decidedCollisions(t, patterns); len(got) > 0 {
+		t.Errorf("the built-in pattern set is NOT pairwise disjoint — %d colliding pair(s):\n  %s",
+			len(got), strings.Join(got, "\n  "))
+	}
+}
+
+// TestDecidedDisjointnessGateFiresOnACollision is US2's T021 and pins SC-003.
+//
+// The gate above passes today, so nothing in it demonstrates that it CAN fail. This
+// rehearses it against a deliberately overlapping row, passed as a local slice.
+//
+// The point SC-003 makes: this fires with NO feature file present. A sentence-corpus
+// check can only report a collision on a sentence the corpus contains; a decider is
+// asked about the patterns themselves, so "nobody has written that step yet" is not a
+// way to hide.
+func TestDecidedDisjointnessGateFiresOnACollision(t *testing.T) {
+	t.Parallel()
+
+	// The real built-in, plus a plausible future row pinning one literal value.
+	patterns := []string{overlappingPair[0], overlappingPair[1]}
+
+	got := decidedCollisions(t, patterns)
+	if len(got) != 1 {
+		t.Fatalf("want exactly 1 collision for %v, got %d: %v", patterns, len(got), got)
+	}
+	// strconv.Quote: the report renders patterns and the witness with %q, so each
+	// comes back escaped. This is the fourth place in this feature where asserting the
+	// raw form would have failed against a correct message; the repo's own
+	// stepargs_test.go documents the same trap for step text.
+	for _, want := range []string{overlappingPair[0], overlappingPair[1], overlappingWitness} {
+		if !strings.Contains(got[0], strconv.Quote(want)) {
+			t.Errorf("collision report does not name %q:\n  %s", want, got[0])
+		}
+	}
+	if !strings.Contains(got[0], "true/true") {
+		t.Errorf("the witness was not verified against both patterns:\n  %s", got[0])
 	}
 }

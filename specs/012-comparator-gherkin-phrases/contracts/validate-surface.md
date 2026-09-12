@@ -155,6 +155,14 @@ taken: it would have weakened the gate for everyone to accommodate a case the bi
   kind this feature has been wrong about before. **Closing that gap is feature 013** — see the
   roadmap block in `CLAUDE.md` and 012's Out of Scope.
 
+> **Superseded by feature 013.** This section's hedge — "as measured, not structurally" —
+> is the sentence 013 was raised to retire, and it has been. Built-in disjointness is now
+> DECIDED by a product automaton over `regexp/syntax` (780 pairs, zero intersecting), not
+> sampled over nine fixed fillers, and a new `pattern-overlap` finding reports overlap
+> involving a contributed pattern without needing a feature file at all. See
+> `specs/013-builtin-pattern-disjointness/contracts/validate-surface.md`.
+> Left in place rather than rewritten: this contract records what 012 shipped.
+
   That is also why the class is kept in the shared `SuiteCheck` walk rather than gated to the
   library path: it costs nothing there, and it becomes a live witness over real corpora for
   exactly the overlap the generated-sentence test could miss.
