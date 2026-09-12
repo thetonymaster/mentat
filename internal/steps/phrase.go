@@ -20,9 +20,14 @@ import (
 // *godog.DocString is dereferenced here and converted to (body, hasBody) before going
 // anywhere else — one nil check, in one place, instead of one per consumer.
 //
-// # Package-level mutable state: none survives (FR-010)
+// # Package-level mutable state: none survives (012 FR-010, restated as 014 FR-011)
 //
-// FR-010 is "no package-level mutable step state survives", not "the one we knew about
+// The FR number is qualified because two features state this rule and their numbering
+// crosses: it is 012's FR-010 and 014's FR-011. 014's own FR-010 is a different rule —
+// no behaviour change for comparators that already declare phrases from immutable
+// state — and the two are easy to cross-wire.
+//
+// The rule is "no package-level mutable step state survives", not "the one we knew about
 // is gone", so the whole package was audited on 2026-09-11 rather than only
 // precheck.go's deleted sync.Once. What remains at package scope in internal/steps:
 //
@@ -38,10 +43,22 @@ import (
 // FIELD on Engine, so it is per-engine and carries the isolation property rather than
 // breaking it.
 //
-// Nothing above is per-engine data. Anything that varies by engine — the contributed
-// phrase set, the compiled step-pattern set — is a value threaded through as a
-// parameter, which is the whole point: a second engine in one process must never be
-// answered with the first engine's data.
+// Nothing above is per-engine data, and that is the whole point: a second engine in one
+// process must never be answered with the first engine's data. Per-engine data lives in
+// one of two places, never at package scope:
+//
+//   - threaded through as a parameter — the compiled step-pattern set, which
+//     stepPatternsFor builds from the phrases its caller hands it;
+//   - held as a FIELD on the engine that owns it — since 014 the contributed phrase set
+//     is captured once inside engine.Build, after the registry is sealed, and stored on
+//     the Engine, exactly as resolveOnce is.
+//
+// The second shape is what this note used to deny, and it satisfies the rule for the
+// same reason resolveOnce does: a field is per-engine by construction, so there is no
+// shared cell for one engine to win. That distinction is load-bearing rather than
+// pedantic — what 012 deleted was a package-level, first-writer-wins phrase cache that
+// answered engine B with engine A's phrases, and it is guarded by the two-construction-
+// order isolation test in the root package.
 
 var (
 	stringType = reflect.TypeOf("")
@@ -288,10 +305,7 @@ func (cp contributedPhrase) step(w *world) phraseStep {
 // An engine with no contributing comparators resolves to nil, so the overwhelmingly
 // common path allocates nothing and registers nothing.
 func resolvePhrases(eng *engine.Engine) ([]contributedPhrase, error) {
-	bindings, err := eng.ContributedPhrases()
-	if err != nil {
-		return nil, err
-	}
+	bindings := eng.ContributedPhrases()
 	if len(bindings) == 0 {
 		return nil, nil
 	}

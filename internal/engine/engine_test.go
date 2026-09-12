@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -1819,6 +1820,82 @@ func (p phraseStubComparator) Compare(context.Context, core.Evidence, core.Expec
 }
 func (p phraseStubComparator) ContributedPhrases() []core.ContributedPhrase { return p.phrases }
 
+// --- 014: doubles for the composition-time phrase freeze ---
+//
+// Both are POINTER types, unlike phraseStubComparator above. They hold mutable state —
+// a call count, a flipped flag — and a value receiver would mutate a copy the test can
+// never observe, so every assertion about "how often" or "what changed" would read
+// zero and pass vacuously. The receivers are pointers for the same reason.
+
+// countingPhraseContributor records how many times the phrase seam is consulted. It is
+// the instrument for FR-001: the contract says a comparator's phrase declaration runs
+// ONCE per engine build, and a count is the only direct evidence of that — a test that
+// merely compares two returned slices cannot tell "asked once" from "asked twice and
+// got the same answer".
+//
+// Hand-rolled rather than gomock, which CLAUDE.md otherwise reserves for call-count
+// verification: the object under test must satisfy core.Comparator AND be discovered as
+// a core.PhraseContributor by type assertion, and MockComparator and
+// MockPhraseContributor are separate generated types whose embedded ctrl/recorder
+// members collide when combined. Satisfying both from one value needs explicit
+// forwarding anyway, at which point the double IS the forwarding. gomock is still used
+// for the generated core seams elsewhere in this file.
+type countingPhraseContributor struct {
+	name    string
+	phrases []core.ContributedPhrase
+	calls   int
+}
+
+func (c *countingPhraseContributor) Name() string { return c.name }
+func (c *countingPhraseContributor) Compare(context.Context, core.Evidence, core.Expectation) (core.Verdict, error) {
+	return core.Verdict{Pass: true}, nil
+}
+
+func (c *countingPhraseContributor) ContributedPhrases() []core.ContributedPhrase {
+	c.calls++
+	return c.phrases
+}
+
+// driftingPhraseContributor answers with one phrase on its first call and a DIFFERENT
+// one on every call after it — the comparator that is not a pure function of itself
+// (a counter, a clock, a flag flipped between calls). It is the instrument for FR-003:
+// a set captured once is stable no matter how often it is read, while a set resolved
+// per call changes underneath its readers.
+//
+// The drift is visible in the PATTERN, not only in the count, so a test can assert
+// which vocabulary a surface actually observed rather than just how many times it
+// asked.
+type driftingPhraseContributor struct {
+	name  string
+	first core.ContributedPhrase
+	later core.ContributedPhrase
+	calls int
+}
+
+func (c *driftingPhraseContributor) Name() string { return c.name }
+func (c *driftingPhraseContributor) Compare(context.Context, core.Evidence, core.Expectation) (core.Verdict, error) {
+	return core.Verdict{Pass: true}, nil
+}
+
+func (c *driftingPhraseContributor) ContributedPhrases() []core.ContributedPhrase {
+	c.calls++
+	if c.calls == 1 {
+		return []core.ContributedPhrase{c.first}
+	}
+	return []core.ContributedPhrase{c.later}
+}
+
+// Compile-time witnesses: both doubles must satisfy the seam by TYPE ASSERTION at the
+// composition root. A signature drift would otherwise make them silently stop
+// contributing, and every test below would fail claiming the freeze is broken when the
+// real defect is in this file.
+var (
+	_ core.Comparator        = (*countingPhraseContributor)(nil)
+	_ core.PhraseContributor = (*countingPhraseContributor)(nil)
+	_ core.Comparator        = (*driftingPhraseContributor)(nil)
+	_ core.PhraseContributor = (*driftingPhraseContributor)(nil)
+)
+
 // TestEngineContributedPhrasesResolvesInSortedComparatorOrder pins the accessor 012
 // needs, and the ORDER it must return.
 //
@@ -1874,10 +1951,7 @@ func TestEngineContributedPhrasesResolvesInSortedComparatorOrder(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 
-	got, err := eng.ContributedPhrases()
-	if err != nil {
-		t.Fatalf("ContributedPhrases: %v", err)
-	}
+	got := eng.ContributedPhrases()
 
 	want := []PhraseBinding{
 		{Comparator: "alpha-cmp", Phrase: alphaOne},
@@ -1925,11 +1999,341 @@ func TestEngineContributedPhrasesIsEmptyWithoutContributors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	got, err := eng.ContributedPhrases()
-	if err != nil {
-		t.Fatalf("ContributedPhrases: %v", err)
-	}
+	got := eng.ContributedPhrases()
 	if len(got) != 0 {
 		t.Fatalf("ContributedPhrases() = %+v on an engine with no contributors, want empty", got)
+	}
+}
+
+// --- 014: the phrase set is captured at composition, not re-asked per call ---
+
+// phrasesOf reads one engine's contributed phrases.
+//
+// It exists so the tests below are BYTE-IDENTICAL either side of this feature's
+// signature change (research R3 drops the error from ContributedPhrases, which cannot
+// fail once the answer is a field read). Without it, every test here would have to be
+// edited between its red and its green, and an edited test is no longer evidence that
+// the implementation is what changed.
+func phrasesOf(t *testing.T, eng *Engine) []PhraseBinding {
+	t.Helper()
+	return eng.ContributedPhrases()
+}
+
+// buildPhraseEngine builds one engine whose only extra comparator is cmp.
+func buildPhraseEngine(t *testing.T, name string, cmp core.Comparator) *Engine {
+	t.Helper()
+	cfg := config.Config{
+		OTLPEndpoint: "http://localhost:4318",
+		Poll:         config.PollSpec{Interval: "1ms", StableFor: 1, Timeout: "1s"},
+		Targets:      map[string]config.Target{},
+	}
+	ctrl := gomock.NewController(t)
+	st := mocks.NewMockTraceStore(ctrl)
+	cor := correlate.New(func() string { return "run-1" }, correlate.PollConfig{Interval: time.Millisecond, StableFor: 1, Timeout: time.Second})
+
+	eng, err := Build(cfg, st, cor, WithExtraComparator(name, stubComparatorFactory(cmp)))
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	return eng
+}
+
+// phraseNamed is a well-formed contributed phrase carrying the given pattern. Only the
+// pattern varies across these tests; the documentation fields exist because V5 rejects
+// a phrase without them, not because anything here reads them.
+func phraseNamed(pattern string) core.ContributedPhrase {
+	return core.ContributedPhrase{
+		Pattern: pattern,
+		Group:   "Freeze",
+		Summary: "A phrase contributed by a 014 test double.",
+		Example: "Then " + pattern,
+	}
+}
+
+// TestContributedPhrasesConsultsEachContributorOncePerEngine is SC-002/FR-001.
+//
+// The contract published in three places — mentat.go:66, core.go:168 and 012's
+// phrase-seam contract — says the seam is consulted ONCE PER ENGINE BUILD. A count is
+// the only direct evidence for that: comparing two returned slices cannot distinguish
+// "asked once" from "asked twice and told the same thing", which is exactly the
+// distinction a stateful contributor turns into a defect.
+//
+// The zero-read row is the half that pins "during construction" rather than merely
+// "once": an engine nobody has questioned must already hold its answer, because that is
+// what makes every later surface read the same one.
+//
+// Mutation rehearsal (2026-09-11), covering the whole freeze rather than this test alone.
+// ContributedPhrases was reverted to re-walk the registry on every call
+// (`out, _ := capturePhrases(e.reg); return slices.Clone(out)` — the clone retained so the
+// mutation isolates the FREEZE and not the copy). Four guards went RED together:
+// this test, TestContributedPhrasesAreStableAcrossCalls,
+// TestAComparatorCannotMutateTheEnginesAnswer, and
+// TestOneEngineYieldsOneVocabularyToEverySurface (internal/steps). Restored; re-observed
+// green under -race.
+//
+// The first attempt at that mutation is the part worth recording: dropping
+// slices.Clone outright left "slices" imported and unused, so the package failed to
+// COMPILE and every one of the four reported FAIL without a single assertion running.
+// A build failure and a real red are indistinguishable in `go test` output at the
+// package line. This is 012's "the mutation didn't fire" lesson arriving by a different
+// door — asserting the edit landed on disk is not sufficient, the mutated tree must also
+// build, or the rehearsal proves nothing.
+func TestContributedPhrasesConsultsEachContributorOncePerEngine(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		reads int
+	}{
+		{name: "never read: the snapshot is taken at construction", reads: 0},
+		{name: "read once", reads: 1},
+		{name: "read repeatedly, as three surfaces would", reads: 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			c := &countingPhraseContributor{
+				name:    "counting-cmp",
+				phrases: []core.ContributedPhrase{phraseNamed(`^the counted reading is (\w+)$`)},
+			}
+			eng := buildPhraseEngine(t, "counting-cmp", c)
+
+			for i := 0; i < tt.reads; i++ {
+				phrasesOf(t, eng)
+			}
+
+			if c.calls != 1 {
+				t.Errorf("the phrase seam was consulted %d times for ONE engine read %d times, want exactly 1: a comparator that is not a pure function of itself answers a different vocabulary to each surface that asks",
+					c.calls, tt.reads)
+			}
+		})
+	}
+}
+
+// TestContributedPhrasesAreStableAcrossCalls is FR-003: every request is answered from
+// the snapshot, so a contributor that changes its mind between calls cannot change the
+// engine's answer.
+//
+// This is the count test's complement, and neither subsumes the other. A count of one
+// with a broken read path would still hand out the wrong set; a stable set resolved
+// twice would still run comparator code at every surface.
+func TestContributedPhrasesAreStableAcrossCalls(t *testing.T) {
+	t.Parallel()
+
+	first := phraseNamed(`^the first reading is (\w+)$`)
+	later := phraseNamed(`^the later reading is (\w+)$`)
+	c := &driftingPhraseContributor{name: "drifting-cmp", first: first, later: later}
+	eng := buildPhraseEngine(t, "drifting-cmp", c)
+
+	want := []PhraseBinding{{Comparator: "drifting-cmp", Phrase: first}}
+
+	// Three reads stand in for the three surfaces — validation, the step reference and
+	// suite registration — each of which resolves phrases independently today.
+	for call := 1; call <= 3; call++ {
+		got := phrasesOf(t, eng)
+		if len(got) != len(want) {
+			t.Fatalf("call %d returned %d bindings, want %d: %+v", call, len(got), len(want), got)
+		}
+		if got[0] != want[0] {
+			t.Fatalf("call %d observed the pattern %q, want %q: the vocabulary a surface sees must not depend on how many surfaces asked before it",
+				call, got[0].Phrase.Pattern, want[0].Phrase.Pattern)
+		}
+	}
+}
+
+// retainingPhraseContributor keeps the very slice it handed to the engine and mutates
+// it in place afterwards — the comparator that builds its phrase list from state it
+// also writes to. It is the FR-002 instrument.
+//
+// mutateInPlace overwrites an element rather than appending, deliberately: an append
+// may reallocate, so a snapshot that merely kept the slice HEADER could survive one by
+// accident and the test would pass for the wrong reason.
+type retainingPhraseContributor struct {
+	name string
+	own  []core.ContributedPhrase
+}
+
+func (c *retainingPhraseContributor) Name() string { return c.name }
+func (c *retainingPhraseContributor) Compare(context.Context, core.Evidence, core.Expectation) (core.Verdict, error) {
+	return core.Verdict{Pass: true}, nil
+}
+func (c *retainingPhraseContributor) ContributedPhrases() []core.ContributedPhrase { return c.own }
+func (c *retainingPhraseContributor) mutateInPlace(p core.ContributedPhrase)       { c.own[0] = p }
+
+var (
+	_ core.Comparator        = (*retainingPhraseContributor)(nil)
+	_ core.PhraseContributor = (*retainingPhraseContributor)(nil)
+)
+
+// TestAComparatorCannotMutateTheEnginesAnswer is FR-002, and it is the promise
+// core.go:168 already makes: "The returned slice is treated as immutable; a comparator
+// that mutates it afterwards has no effect on the built engine."
+//
+// It is red TODAY for a reason worth stating, because it decides where the fix belongs
+// (research R8): the engine never retains the comparator's slice — it builds
+// []PhraseBinding element-wise, which IS a copy — so the mutation is observed only
+// because the engine RE-ASKS the comparator. The freeze is the whole fix; a second copy
+// at capture time would be a no-op.
+func TestAComparatorCannotMutateTheEnginesAnswer(t *testing.T) {
+	t.Parallel()
+
+	declared := phraseNamed(`^the declared reading is (\w+)$`)
+	swapped := phraseNamed(`^the swapped reading is (\w+)$`)
+
+	c := &retainingPhraseContributor{name: "retaining-cmp", own: []core.ContributedPhrase{declared}}
+	eng := buildPhraseEngine(t, "retaining-cmp", c)
+
+	// Read once so the engine has certainly been asked, then mutate behind its back.
+	if got := phrasesOf(t, eng); len(got) != 1 || got[0].Phrase != declared {
+		t.Fatalf("before mutation the engine answered %+v, want the declared phrase %q", got, declared.Pattern)
+	}
+	c.mutateInPlace(swapped)
+
+	got := phrasesOf(t, eng)
+	if len(got) != 1 {
+		t.Fatalf("after mutation the engine answered %d bindings, want 1: %+v", len(got), got)
+	}
+	if got[0].Phrase != declared {
+		t.Errorf("a comparator changed the engine's answer to %q after construction; the seam documentation promises the returned slice is treated as immutable and that a later mutation has no effect on the built engine",
+			got[0].Phrase.Pattern)
+	}
+}
+
+// TestACallerCannotMutateTheEnginesSnapshot is FR-004, and it is the OTHER direction
+// from TestAComparatorCannotMutateTheEnginesAnswer above.
+//
+// The freeze stops the engine re-asking the comparator, but the snapshot is still the
+// engine's own state: handing out the slice itself leaves a caller holding a live
+// reference to it. One `got[0] = …` by any of the three surfaces, or by a consumer
+// reading the engine's vocabulary, would then rewrite what every later caller sees —
+// the same drift this feature exists to remove, arriving through the other door.
+//
+// The mutation overwrites an element rather than appending: append may reallocate and
+// would then leave the snapshot intact by accident, which is a pass for the wrong
+// reason.
+//
+// Mutation rehearsal (2026-09-11), under an assertion that the source edit applied —
+// "the mutation didn't fire" and "the guard is real" are indistinguishable from test
+// output alone: `return slices.Clone(e.phrases)` -> `return e.phrases` in
+// Engine.ContributedPhrases. RED, with the engine answering the caller's own write
+// ("^the hijacked reading is (\w+)$" from comparator "hijacked-cmp" — a value that
+// exists nowhere but the assignment above). Restored; re-observed green under -race.
+func TestACallerCannotMutateTheEnginesSnapshot(t *testing.T) {
+	t.Parallel()
+
+	declared := phraseNamed(`^the declared reading is (\w+)$`)
+	hijacked := phraseNamed(`^the hijacked reading is (\w+)$`)
+
+	eng := buildPhraseEngine(t, "caller-cmp",
+		phraseStubComparator{name: "caller-cmp", phrases: []core.ContributedPhrase{declared}})
+
+	first := phrasesOf(t, eng)
+	if len(first) != 1 || first[0].Phrase != declared {
+		t.Fatalf("the engine answered %+v, want the declared phrase %q", first, declared.Pattern)
+	}
+
+	// A caller keeps what it was given and writes to it.
+	first[0] = PhraseBinding{Comparator: "hijacked-cmp", Phrase: hijacked}
+
+	second := phrasesOf(t, eng)
+	if len(second) != 1 {
+		t.Fatalf("the engine answered %d bindings after a caller's mutation, want 1: %+v", len(second), second)
+	}
+	if second[0].Phrase != declared || second[0].Comparator != "caller-cmp" {
+		t.Errorf("a caller's write reached the engine's snapshot: the next call answered %q from comparator %q, want %q from %q. Each answer must be a copy, or every caller shares one backing array with the engine and with each other",
+			second[0].Phrase.Pattern, second[0].Comparator, declared.Pattern, "caller-cmp")
+	}
+}
+
+// TestPhraseSnapshotStructsHoldOnlyValueTypes enforces the premise both phrase copies
+// rest on, instead of documenting it and hoping.
+//
+// The engine's phrase snapshot is copied twice and both are SHALLOW: element-wise when
+// Build captures it (build.go, capturePhrases) and by slices.Clone on every read
+// (ContributedPhrases). A shallow copy is a complete copy only while every field in the
+// graph is a value. Add one slice, map, pointer or interface field to either struct and
+// both copies quietly become aliases — a comparator or a caller could then reach the
+// engine's answer again, and not one existing test would go red, because every test
+// asserts about STRING fields that were copied correctly.
+//
+// That is the specific failure this guard exists for: a regression whose only symptom
+// is the absence of a symptom. It walks the whole graph rather than the top level, so
+// PhraseBinding.Phrase is inspected too.
+//
+// # Mutation rehearsal (2026-09-11), and what it corrected
+//
+// Each edit was asserted present on disk before the run, because "the mutation didn't
+// fire" and "the guard is real" look identical from a passing test. The first attempt
+// falsified its own prediction, which is why the result is recorded in this much detail.
+//
+//	added `Aliases []string` to core.ContributedPhrase
+//	  -> NOT the predicted red. The package failed to COMPILE: several tests here
+//	     compare these structs with `!=`, and a slice field makes them incomparable.
+//	     "invalid operation: got[0].Phrase != declared (struct containing []string
+//	     cannot be compared)". The guard never ran.
+//
+//	added `Origin *string` to core.ContributedPhrase
+//	  -> RED, and this is the case that matters. A pointer keeps the structs
+//	     comparable, so everything still builds and every behavioural test still
+//	     PASSES. Both rows fired — "core.ContributedPhrase.Origin is a ptr" and
+//	     "engine.PhraseBinding.Phrase.Origin is a ptr", the second proving the walk
+//	     recurses through the embedded phrase.
+//
+//	added `Origin *string` to engine.PhraseBinding
+//	  -> RED on the PhraseBinding row only.
+//
+// Swept across internal/engine, internal/steps, the root package, internal/core and
+// internal/comparator with the pointer field in place, exactly two tests failed: this
+// one, and TestPublicSurfaceGolden. The golden fires only because ContributedPhrase is
+// a PUBLISHED type and it tracks published fields — it reports "the surface changed",
+// not "the copies stopped being copies", and it is structurally blind to
+// engine.PhraseBinding, which is unpublished. So for the binding this guard is the only
+// detector, and for the phrase it is the only one that says what actually broke.
+//
+// The practical division, measured rather than assumed: slice, map and func fields are
+// caught by the compiler through the `!=` sites above — an accident of how these tests
+// are written, not a guarantee — while pointer and interface fields are caught by
+// nothing else at all. All mutations reverted; re-observed green.
+func TestPhraseSnapshotStructsHoldOnlyValueTypes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		typ  reflect.Type
+	}{
+		{name: "core.ContributedPhrase", typ: reflect.TypeOf(core.ContributedPhrase{})},
+		{name: "engine.PhraseBinding", typ: reflect.TypeOf(PhraseBinding{})},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assertValueOnly(t, tt.name, tt.typ)
+		})
+	}
+}
+
+// assertValueOnly fails for any field whose type can hold a reference to memory the
+// struct does not own, recursing through nested structs and arrays.
+//
+// Strings are values here and deliberately so: a string header points at immutable
+// bytes, so copying it cannot give two owners a way to change one another's data —
+// which is the only property the phrase snapshot needs.
+func assertValueOnly(t *testing.T, path string, typ reflect.Type) {
+	t.Helper()
+	switch typ.Kind() {
+	case reflect.Slice, reflect.Map, reflect.Pointer, reflect.Interface,
+		reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		t.Errorf("%s is a %s: the phrase snapshot is copied shallowly at capture and on every read, so a reference-typed field makes both copies aliases and re-opens the mutation routes this feature closed — no other test would notice",
+			path, typ.Kind())
+	case reflect.Struct:
+		for i := range typ.NumField() {
+			f := typ.Field(i)
+			assertValueOnly(t, path+"."+f.Name, f.Type)
+		}
+	case reflect.Array:
+		assertValueOnly(t, path+"[i]", typ.Elem())
 	}
 }

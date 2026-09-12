@@ -837,15 +837,24 @@ func TestPhrasesAddedAfterResolutionDoNotAffectTheBuiltEngine(t *testing.T) {
 	if len(before) != 1 {
 		t.Errorf("the already-resolved set grew to %d; it must be a snapshot", len(before))
 	}
-	// Re-resolving DOES see it — resolution is a function of the engine's comparators
-	// at call time. What must never happen is the previously-built binding changing
-	// underneath a running suite, which the snapshot above proves.
+	// Re-resolving does NOT see it either: the engine answers from the snapshot its own
+	// Build captured, so a comparator that adds to its phrase list after construction
+	// changes nothing any surface observes — the step reference, validation and suite
+	// registration all read that one set.
+	//
+	// This assertion was inverted from "want 2" by feature 014, and the inversion is
+	// that spec's decision D1: a deliberate contract change, recorded, not an
+	// implementer relaxing an inconvenient assertion. Five statements of intent exist
+	// about this behaviour — the test's name, its doc comment above, core.go's seam
+	// documentation, mentat.go's facade documentation and 012's phrase-seam contract —
+	// and all five describe a snapshot. The old assertion was the only one describing
+	// per-call resolution: it encoded what 012 built rather than what 012 promised.
 	after, err := resolvePhrases(eng)
 	if err != nil {
 		t.Fatalf("re-resolve: %v", err)
 	}
-	if len(after) != 2 {
-		t.Errorf("re-resolution saw %d phrases, want 2; resolution must reflect the comparators as they are when called", len(after))
+	if len(after) != 1 {
+		t.Errorf("re-resolution saw %d phrases, want 1; every request is answered from the phrase set captured at engine build (spec 014 D1)", len(after))
 	}
 }
 
@@ -1119,3 +1128,329 @@ func TestStepArgumentsAcceptsWhatEachStepActuallyDeclares(t *testing.T) {
 // asserted the argument half through EnginePhraseArguments until convergence (T073)
 // removed that accessor; that test already covered both halves, so the assertion was
 // absorbed rather than lost.
+
+// --- 014 US1: one engine, one vocabulary, every surface ---
+
+// driftingPhraseComparator declares one sentence the first time it is asked and a
+// DIFFERENT one on every later call: a comparator whose phrase list is not a pure
+// function of itself (a lazily memoized list, a flag flipped between calls, a list
+// built from configuration it also writes to).
+//
+// The drift is in the PATTERN rather than only in a count, so a failure names the
+// vocabulary a surface actually observed instead of reporting that it asked twice.
+type driftingPhraseComparator struct {
+	first core.ContributedPhrase
+	later core.ContributedPhrase
+	calls int
+}
+
+func (c *driftingPhraseComparator) Name() string { return "drifting" }
+func (c *driftingPhraseComparator) Compare(_ context.Context, _ core.Evidence, _ core.Expectation) (core.Verdict, error) {
+	return core.Verdict{Pass: true}, nil
+}
+func (c *driftingPhraseComparator) ParseCaptures(caps []string) (core.Expectation, error) {
+	return strings.Join(caps, ","), nil
+}
+func (c *driftingPhraseComparator) ContributedPhrases() []core.ContributedPhrase {
+	c.calls++
+	if c.calls == 1 {
+		return []core.ContributedPhrase{c.first}
+	}
+	return []core.ContributedPhrase{c.later}
+}
+
+// TestOneEngineYieldsOneVocabularyToEverySurface is SC-001/FR-005, and it is the test
+// the facade structurally cannot host.
+//
+// # Why it lives here and not in custom_phrase_facade_test.go
+//
+// Measured against this tree: mentat.Run builds its engine at run.go:344, while
+// mentat.Validate and mentat.StepReference each build their own through
+// buildEngineForInspection (run.go:682). Three entry points, three engines, and each
+// consults the phrase seam exactly once — both before and after this feature. A facade
+// test therefore CANNOT observe this defect: with a shared stateful comparator the
+// entry points legitimately see different vocabularies either way (each engine asks
+// once, as FR-001 requires), and with a fresh comparator per build they legitimately
+// agree either way. Written there, this claim would be permanently red or permanently
+// green — never red-then-green.
+//
+// One *engine.Engine reaching all three surfaces is where the drift is real, and it is
+// how an in-process consumer or a future second surface would use it. The defect is
+// latent through today's public API; the contract at core.go:168 ("consulted ONCE PER
+// ENGINE BUILD") is what the code fails, and this is where that failure is observable.
+//
+// # It subsumes the step-reference/validation agreement claim
+//
+// Reading each surface twice in mixed order covers "EngineStepDocs and EngineStepChecks
+// resolve identical phrase sets for one engine across repeated calls in mixed order"
+// (tasks.md T018) — that claim is a strict subset of this one, so it is asserted here
+// rather than duplicated in a second test that could drift from this one.
+func TestOneEngineYieldsOneVocabularyToEverySurface(t *testing.T) {
+	t.Parallel()
+
+	first := wellFormed(`^the first reading is (\w+)$`)
+	later := wellFormed(`^the later reading is (\w+)$`)
+	c := &driftingPhraseComparator{first: first, later: later}
+	eng := customComparatorEngine(t, withComparator("drifting", c))
+
+	// The step reference (mentat.StepReference): the contributed rows it documents.
+	documented := func(t *testing.T) []string {
+		t.Helper()
+		docs, err := EngineStepDocs(eng)
+		if err != nil {
+			t.Fatalf("EngineStepDocs: %v", err)
+		}
+		var out []string
+		for _, d := range docs {
+			if strings.HasPrefix(d.Group, contributedGroupPrefix) {
+				out = append(out, d.Pattern)
+			}
+		}
+		return out
+	}
+
+	// Validation (mentat.Validate): the contributed expressions it binds against.
+	validated := func(t *testing.T) []string {
+		t.Helper()
+		pats, _, err := EngineStepChecks(eng)
+		if err != nil {
+			t.Fatalf("EngineStepChecks: %v", err)
+		}
+		builtin := map[string]bool{}
+		for _, d := range StepDocs() {
+			builtin[d.Pattern] = true
+		}
+		var out []string
+		for _, p := range pats {
+			if !builtin[p.String()] {
+				out = append(out, p.String())
+			}
+		}
+		return out
+	}
+
+	// Suite registration (mentat.Run): the phrases InitializerWithBudget threads into
+	// registerSteps (steps.go:101, :107). resolvePhrases is that exact value — the
+	// registered handlers are per-scenario closures with no pattern list to read back,
+	// and the behavioural half is asserted by the inline run below.
+	registered := func(t *testing.T) []string {
+		t.Helper()
+		resolved, err := resolvePhrases(eng)
+		if err != nil {
+			t.Fatalf("resolvePhrases: %v", err)
+		}
+		var out []string
+		for _, r := range resolved {
+			out = append(out, r.phrase.Pattern)
+		}
+		return out
+	}
+
+	surfaces := []struct {
+		name string
+		read func(*testing.T) []string
+	}{
+		{name: "step reference (mentat.StepReference -> EngineStepDocs)", read: documented},
+		{name: "validation (mentat.Validate -> EngineStepChecks)", read: validated},
+		{name: "suite registration (mentat.Run -> InitializerWithBudget)", read: registered},
+	}
+
+	// Mixed order, each surface read twice, because the claim is that ANY surface in ANY
+	// order sees one set — repeated reads interleaved across surfaces are what exercise it.
+	//
+	// It does NOT discriminate composition-time freezing from a lazy first-READ freeze:
+	// under first-reader-wins every read after the first returns the cached value, so a
+	// mixed walk and a straight 1-2-3 walk both pass. That distinction is pinned instead
+	// by the `reads: 0` row of TestContributedPhrasesConsultsEachContributorOncePerEngine
+	// (internal/engine/engine_test.go), which asserts the seam was consulted exactly once
+	// for an engine nobody ever read — impossible if the freeze were lazy.
+	//
+	// The comment here previously claimed the mixed order caught first-read freezing. It
+	// does not, and crediting a guard with a property it lacks is the defect this whole
+	// feature kept finding in its own artifacts.
+	order := []int{0, 1, 2, 1, 0, 2}
+
+	want := []string{first.Pattern}
+	firstSurface := surfaces[order[0]].name
+	for i, idx := range order {
+		s := surfaces[idx]
+		got := s.read(t)
+		if len(got) != len(want) || got[0] != want[0] {
+			t.Errorf("read %d — %s observed the vocabulary %q, but %s (the first surface to ask) observed %q; one engine must answer every surface with one phrase set, or validation describes a run that will not happen",
+				i+1, s.name, got, firstSurface, want)
+		}
+	}
+
+	// The behavioural half: the sentence the step reference documented must be the
+	// sentence the runner binds. A vocabulary comparison alone would still pass if
+	// every surface agreed on a set the runner never registered.
+	feature := `Feature: one vocabulary
+  Scenario: the documented sentence is the sentence that runs
+    Given the agent target "bot"
+    When I run scenario "x"
+    Then the first reading is fine
+`
+	status, out := runInlineFeature(eng, "one-vocabulary", feature)
+	if status != 0 {
+		t.Errorf("the sentence the step reference documents does not bind at run time (godog status %d); an author who reads the reference, or validates against it, is told about a vocabulary the run does not accept\n%s",
+			status, out)
+	}
+}
+
+// --- 014 US2: the engine that contributes nothing is unchanged ---
+//
+// These three are CHARACTERIZATION tests: they pass on the Phase 3 mechanism and are
+// expected to. Their job is SC-005/FR-009 — an engine with no contributing comparators
+// must behave exactly as it did before 014 — which is a property that can only be
+// broken later, by the copy-on-return Phase 5 adds. They are written now, before that
+// copy exists, so the copy has something to answer to.
+
+// emptyPhraseComparator implements the phrase seam and contributes nothing: nil for the
+// contributor that computed an empty list, and an empty non-nil slice for the one that
+// allocated before finding nothing to say. Both must be indistinguishable from a
+// comparator that never implemented the seam.
+type emptyPhraseComparator struct {
+	name    string
+	phrases []core.ContributedPhrase
+}
+
+func (c *emptyPhraseComparator) Name() string { return c.name }
+func (c *emptyPhraseComparator) Compare(_ context.Context, _ core.Evidence, _ core.Expectation) (core.Verdict, error) {
+	return core.Verdict{Pass: true}, nil
+}
+func (c *emptyPhraseComparator) ContributedPhrases() []core.ContributedPhrase { return c.phrases }
+
+// TestEngineStepDocsWithoutContributorsIsTheBuiltInReference is SC-005's step-reference
+// clause, and it is the WHOLE oracle for it: no lane renders an engine step reference to
+// stdout, because the only stdout renderer (cmd/mentat/steps_cmd.go:66) reads the
+// built-in steps.StepDocs() and never an engine. A passing suite is not evidence here;
+// the equality is.
+func TestEngineStepDocsWithoutContributorsIsTheBuiltInReference(t *testing.T) {
+	t.Parallel()
+
+	eng := customComparatorEngine(t)
+	got, err := EngineStepDocs(eng)
+	if err != nil {
+		t.Fatalf("EngineStepDocs: %v", err)
+	}
+	if want := StepDocs(); !reflect.DeepEqual(got, want) {
+		t.Errorf("the step reference for a contributor-free engine is not the built-in reference:\n got %d rows\nwant %d rows", len(got), len(want))
+	}
+}
+
+// TestAnEmptyContributorIsIndistinguishableFromANonContributor pins the edge case, and
+// the nil assertion is the load-bearing half.
+//
+// Observable identity alone cannot see an ALLOCATION: an engine answering with an
+// empty-but-non-nil slice documents nothing and registers nothing, so every behavioural
+// assertion would still pass while the common path — the overwhelming majority of
+// engines — allocated on every call. That is exactly what a make+copy defensive copy
+// would do, and `slices.Clone(nil)` returning nil is what avoids it. Asserting
+// behaviour only would be a guard believed real and never tested.
+//
+// Mutation rehearsal (2026-09-11), under an assertion that the source edit applied:
+// Engine.ContributedPhrases' `return slices.Clone(e.phrases)` was replaced with
+// `out := make([]PhraseBinding, len(e.phrases)); copy(out, e.phrases); return out` —
+// a correct copy that keeps every other test in this feature green, including the
+// caller-mutation one. All three rows here went RED with
+// "ContributedPhrases() = []engine.PhraseBinding{}, want nil". That is the whole
+// reason this assertion exists: no behavioural test in the tree can see the
+// difference between nil and an empty allocation. Restored; re-observed green.
+func TestAnEmptyContributorIsIndistinguishableFromANonContributor(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		opts []engine.Option
+	}{
+		{name: "no comparator implements the seam"},
+		{
+			name: "a contributor returns nil",
+			opts: []engine.Option{withComparator("nil-phrases", &emptyPhraseComparator{name: "nil-phrases"})},
+		},
+		{
+			name: "a contributor returns an empty slice",
+			opts: []engine.Option{withComparator("empty-phrases", &emptyPhraseComparator{name: "empty-phrases", phrases: []core.ContributedPhrase{}})},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			eng := customComparatorEngine(t, tt.opts...)
+
+			if got := eng.ContributedPhrases(); got != nil {
+				t.Errorf("ContributedPhrases() = %#v, want nil: the common path must allocate nothing, and a non-nil empty answer means every call is allocating for an engine that contributes no phrases", got)
+			}
+
+			resolved, err := resolvePhrases(eng)
+			if err != nil {
+				t.Fatalf("resolvePhrases: %v", err)
+			}
+			if resolved != nil {
+				t.Errorf("resolvePhrases = %#v, want nil: nothing is registered for an engine that contributes nothing", resolved)
+			}
+
+			docs, err := EngineStepDocs(eng)
+			if err != nil {
+				t.Fatalf("EngineStepDocs: %v", err)
+			}
+			if want := StepDocs(); !reflect.DeepEqual(docs, want) {
+				t.Errorf("the step reference gained or lost rows: got %d, want the built-in %d", len(docs), len(want))
+			}
+		})
+	}
+}
+
+// TestEngineStepChecksWithoutContributorsMatchesTheBuiltInValidation is SC-005's third
+// clause — validation findings — which no other test reaches: T020 covers the step
+// reference and TestGoldenHermeticStdout covers run output.
+//
+// Only Patterns and Arguments differ between the two SuiteChecks. The Engine, corpus,
+// targets and flags are the same values, so a difference in findings can only come from
+// the phrase-derived data this feature changed.
+func TestEngineStepChecksWithoutContributorsMatchesTheBuiltInValidation(t *testing.T) {
+	t.Parallel()
+
+	eng := customComparatorEngine(t)
+	pats, args, err := EngineStepChecks(eng)
+	if err != nil {
+		t.Fatalf("EngineStepChecks: %v", err)
+	}
+
+	dir := t.TempDir()
+	writeFeature(t, dir, "corpus.feature", `Feature: a corpus with defects
+  Scenario: a clean scenario
+    Given the agent target "bot"
+    When I run scenario "any"
+    Then the run satisfies:
+      """
+      {}
+      """
+
+  Scenario: an unknown target and a sentence nothing defines
+    Given the agent target "ghost"
+    When I run scenario "any"
+    Then the nonexistent reading is fine
+`)
+
+	check := func(p StepPatterns, a StepArguments) []Finding {
+		return SuiteCheck{
+			Engine:       eng,
+			Patterns:     p,
+			Targets:      map[string]bool{"bot": true},
+			CheckTargets: true,
+			Arguments:    a,
+		}.Paths([]string{dir})
+	}
+
+	want := check(BuiltinStepPatterns(), BuiltinStepArguments())
+	// Two empty lists are equal for reasons that have nothing to do with this feature.
+	if len(want) == 0 {
+		t.Fatal("the corpus produced no findings; deep-equality would then be vacuous")
+	}
+	if got := check(pats, args); !reflect.DeepEqual(got, want) {
+		t.Errorf("validation of a contributor-free engine differs from built-in-only validation:\n got %+v\nwant %+v", got, want)
+	}
+}

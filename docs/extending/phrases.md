@@ -182,6 +182,29 @@ the process. Two test suites in one binary, each registering different comparato
 never see each other's sentences. A sentence belonging to another engine is reported as
 an undefined step, exactly like a typo.
 
+## When `ContributedPhrases()` is called
+
+**Exactly once per engine**, while the engine is being built — not once per scenario, and
+not again for anything you do afterwards. Whatever you return at that moment is the
+vocabulary that engine documents, validates and binds, for its whole life.
+
+Two consequences worth designing around:
+
+- **Declare your phrases from immutable state.** Returning a different list on a later
+  call cannot change the engine's answer, so a comparator that builds its list lazily,
+  memoizes on first use, or reads configuration it also writes to will not fail loudly —
+  it will simply have had its *first* answer taken. Build the list from fields fixed at
+  construction and this never arises.
+- **The slice you return is treated as immutable.** Mutating or appending to it after the
+  engine is built has no effect: the engine copies each phrase into its own storage at
+  capture, and hands out a copy on every read. You cannot corrupt an engine's vocabulary
+  through the slice you gave it, and no caller can corrupt it through the slice they got
+  back.
+
+This is a guarantee, not a request — it is enforced by the engine rather than left to
+convention. If you need different sentences for different suites, build a second engine
+with a differently-configured comparator; that is what per-engine scope is for.
+
 ## Errors your parser returns
 
 - Return a wrapped error and it reaches the author naming your comparator and the

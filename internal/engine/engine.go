@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 
 	"github.com/thetonymaster/mentat/internal/comparator"
@@ -35,6 +36,25 @@ type Engine struct {
 	patterns expectations.Patterns
 	logger   *slog.Logger       // silent (discard) by default; emits drive.start lifecycle narration to stderr
 	reg      *registry.Registry // this engine's own sealed seam registry (comparators/drivers/matchers)
+
+	// phrases is this engine's contributed-Gherkin-phrase snapshot: every phrase its
+	// comparators declare, captured ONCE by Build (capturePhrases, build.go) after the
+	// registry is sealed, and never written again.
+	//
+	// It is a FIELD, per-engine like reg and resolveOnce, so two engines in one process
+	// never observe each other's phrases. That is the isolation property a package-level
+	// first-writer-wins cache broke in 012, and a snapshot must not re-break it (FR-007).
+	//
+	// No synchronisation is needed: the write happens inside Build, before the *Engine
+	// pointer escapes, so every reader observes it through that publication.
+	//
+	// An Engine constructed directly rather than through Build reads nil here and
+	// answers "no phrases". Build is the only supported constructor (see the type
+	// comment above); the single direct construction in this tree passes an empty
+	// registry, for which nil is also the computed answer, so the two agree. A future
+	// direct construction with a POPULATED registry would silently observe no phrases
+	// — construct through Build.
+	phrases []PhraseBinding
 
 	// resolveSem gates cor.Resolve calls at maxConcurrentResolves. Lazily built on
 	// first use (sync.Once, race-free) rather than wired in Build: it is a fixed
@@ -216,6 +236,18 @@ func (e *Engine) Comparators() []string {
 // it, so there is nothing for an author to get wrong. A name field on the phrase
 // would be a second, forgeable statement of the same fact. Collision errors need
 // the contributor's name, which is why it is carried alongside rather than dropped.
+//
+// Every field here is a VALUE type, and that is load-bearing rather than incidental.
+// The engine's phrase snapshot is copied shallowly in two places — element-wise when
+// Build captures it, and by slices.Clone on every read — and both are COMPLETE copies
+// only because nothing in this graph holds a reference.
+//
+// Adding a POINTER or INTERFACE field makes both copies aliases again while everything
+// still compiles and every behavioural test still passes: measured, not assumed. (A
+// slice or map field trips the compiler first, because tests compare these structs with
+// `!=` — an accident of how those tests happen to be written, not a guarantee.)
+// TestPhraseSnapshotStructsHoldOnlyValueTypes (internal/engine/engine_test.go) is what
+// names such a change for what it is, rather than letting it land quietly.
 type PhraseBinding struct {
 	Comparator string
 	Phrase     core.ContributedPhrase
@@ -225,43 +257,40 @@ type PhraseBinding struct {
 // contribute, paired with its contributor, in sorted comparator-name order —
 // preserving each comparator's own declaration order within its block.
 //
-// It mirrors Comparators() exactly and adds NO registry: phrases are data already
-// reachable through the comparator registry, and a seventh registry for them would
-// be an abstraction with no second implementation.
+// The answer is the snapshot Build captured (capturePhrases, build.go), not a fresh
+// interrogation of the comparators: the seam is consulted ONCE PER ENGINE BUILD, which
+// is what mentat.go, core.PhraseContributor and 012's phrase-seam contract all promise.
+// Re-asking would let a comparator whose phrase list is not a pure function of itself
+// hand a different vocabulary to each surface — documented on one, validated on a
+// second, registered on a third — with nothing in the system noticing.
+//
+// It cannot fail, so it returns no error: reading a field that was filled while the
+// registry was sealed has no failure mode. The one defensive case — a comparator the
+// registry lists but cannot resolve — is reported by Build, where the walk now happens.
+//
+// Each answer is a COPY. The snapshot is the engine's own state, so handing out the
+// slice itself would leave every caller holding a live reference to it: one write by
+// any surface would rewrite what every later caller sees, which is the drift this
+// freeze removes arriving through the other door. slices.Clone is the copy, and not
+// make+copy: slices.Clone(nil) is nil, so the overwhelmingly common contributor-free
+// engine still allocates nothing per call, while make would allocate on every one.
+// A shallow copy is complete here — every field of PhraseBinding and
+// core.ContributedPhrase is a string, which is why no deep-copy machinery appears.
+//
+// It adds NO registry: phrases are data already reachable through the comparator
+// registry, and a seventh registry for them would be an abstraction with no second
+// implementation.
 //
 // The sort is a CORRECTNESS requirement, not tidiness. The runner returns the first
 // matching step definition, so registration order decides which pattern wins a
 // collision; map iteration order would make an unchanged suite resolve differently
-// between runs. Registry.Comparators() already sorts — 011 added that for a
-// deterministic error message, and 012 makes it load-bearing.
+// between runs.
 //
 // Scoped to this engine. Two engines in one process never observe each other's
 // phrases, which is the property the per-engine sealed registry established in 007
 // and which this accessor must not quietly undo.
-func (e *Engine) ContributedPhrases() ([]PhraseBinding, error) {
-	var out []PhraseBinding
-	for _, name := range e.reg.Comparators() {
-		c, ok := e.reg.Comparator(name)
-		if !ok {
-			// Unreachable today: name came from this same sealed registry's own
-			// listing. Reported rather than skipped anyway, because the failure mode
-			// of skipping is nasty and silent — the comparator's phrases vanish and
-			// every sentence using them reports as an unbound step, sending the author
-			// to look at their feature file for a defect that is in the registry.
-			return nil, fmt.Errorf("engine: comparator %q is listed by the registry but cannot be resolved from it", name)
-		}
-		pc, ok := c.(core.PhraseContributor)
-		if !ok {
-			// The seam is optional and discovered by type assertion. A comparator
-			// that does not implement it contributes nothing — this is what keeps
-			// every existing comparator working untouched.
-			continue
-		}
-		for _, p := range pc.ContributedPhrases() {
-			out = append(out, PhraseBinding{Comparator: name, Phrase: p})
-		}
-	}
-	return out, nil
+func (e *Engine) ContributedPhrases() []PhraseBinding {
+	return slices.Clone(e.phrases)
 }
 
 // AggregateComparator resolves a named aggregate comparator from this engine's registry.
