@@ -75,9 +75,22 @@ func runIsolated(t *testing.T, cmp mentat.Comparator, sentence string) (mentat.R
 // body (docstrings, multiple steps).
 func runIsolatedFeature(t *testing.T, cmp mentat.Comparator, body string) (mentat.Results, string, error) {
 	t.Helper()
+	return runIsolatedFeatureAt(t, cmp, filepath.Join(t.TempDir(), "iso.feature"), body)
+}
+
+// runIsolatedFeatureAt is runIsolatedFeature with the feature PATH supplied by the
+// caller, for the one test that runs the same suite twice and compares the output.
+//
+// t.TempDir() returns a NEW unique directory on every call, and godog's pretty
+// formatter prints the feature file's absolute path beside the scenario name — so two
+// runs through runIsolatedFeature can never produce identical output, for a reason that
+// has nothing to do with what is being compared. Sharing one path removes that
+// difference at the source instead of normalizing it away afterwards, which keeps the
+// set of things a normalizer could hide as small as possible.
+func runIsolatedFeatureAt(t *testing.T, cmp mentat.Comparator, path, body string) (mentat.Results, string, error) {
+	t.Helper()
 	b := newBus()
 	var buf bytes.Buffer
-	path := filepath.Join(t.TempDir(), "iso.feature")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write feature: %v", err)
 	}
@@ -326,6 +339,171 @@ func TestGenuinelyOverlappingPhrasesFailLoudly(t *testing.T) {
 	}
 	if len(cmp.ran) != 0 {
 		t.Errorf("a handler ran despite the ambiguity (%q); neither side of an ambiguous match may execute", cmp.ran)
+	}
+}
+
+// partialOverlapComparator contributes overlapComparator's BROAD pattern always, and
+// the specific pattern that overlaps it only when withOverlap is true. Name, Compare
+// and ParseCaptures are identical in both modes, so two runs differ in exactly one
+// thing: whether an overlapping pattern pair exists in the engine.
+//
+// That single-variable construction is what makes the byte-identity comparison below
+// mean anything. Comparing an engine contributing two phrases against one contributing
+// NONE would also change which steps are bound, so any difference in output could then
+// be explained by either cause — and the interesting one would be unfalsifiable.
+type partialOverlapComparator struct {
+	withOverlap bool
+	ran         []string
+}
+
+func (c *partialOverlapComparator) Name() string { return "overlap" }
+
+func (c *partialOverlapComparator) ContributedPhrases() []mentat.ContributedPhrase {
+	all := (&overlapComparator{}).ContributedPhrases()
+	if c.withOverlap {
+		return all
+	}
+	// all[0] is `^the (\w+) reading is fine$`. Dropping all[1] removes the OVERLAP
+	// without removing the phrase the feature below actually binds.
+	return all[:1]
+}
+
+func (c *partialOverlapComparator) ParseCaptures(caps []string) (mentat.Expectation, error) {
+	c.ran = append(c.ran, strings.Join(caps, ","))
+	return "x", nil
+}
+
+func (c *partialOverlapComparator) Compare(_ context.Context, _ mentat.Evidence, _ mentat.Expectation) (mentat.Verdict, error) {
+	return mentat.Verdict{Pass: true}, nil
+}
+
+// TestOverlappingPhrasesDoNotPerturbASuiteOutsideTheOverlap is 013's T059, and pins
+// SC-011 and US2-AC6: the pattern-level overlap finding is Validate-only, so a suite
+// whose steps fall outside the overlap runs exactly as it would without the overlap.
+//
+// # Why the structural argument was not enough
+//
+// FR-017 holds by CALL GRAPH: patternOverlapFindings is reached only from
+// EngineStepChecks, whose one non-test caller is mentat.Validate, while scenario init
+// calls resolvePhrases directly. That argument is recorded in contracts/decider.md and
+// it is correct.
+//
+// It is also not a measurement, and 013's convergence pass found SC-011 unmeasured —
+// the only root-package overlap test calls mentat.Validate and never mentat.Run, so
+// nothing observed the run path at all while a doc comment claimed FR-017 was pinned.
+// A call-graph argument is a reason to believe the property; it is not an observation
+// of it, and it goes stale silently the moment someone adds a findings check to
+// scenario init. Which is precisely what this feature exists to stop being acceptable.
+//
+// # The overlap is exactly one string
+//
+// The two patterns are `^the (\w+) reading is fine$` and `^the alpha reading is fine$`,
+// so the intersection of their languages is the single sentence "the alpha reading is
+// fine". TestGenuinelyOverlappingPhrasesFailLoudly above drives that sentence and
+// requires it to FAIL. This test drives "the beta reading is fine" — inside the broad
+// pattern's language, outside the intersection — and requires it to be unaffected.
+// Both halves of D5's asymmetry are therefore pinned by measurement rather than one by
+// measurement and one by argument.
+//
+// # Mutation rehearsal (2026-09-11, FR-007) — confirmed landed before it was trusted
+//
+// This guard passes the moment it is written, so on its own it is indistinguishable
+// from a guard that asserts nothing. The mutation applied was the wiring FR-017
+// prohibits — in InitializerWithBudget (internal/steps/steps.go), immediately after
+// resolvePhrases:
+//
+//	if overlaps, oerr := patternOverlapFindings(labelledPatternsFor(resolved), Source{}); oerr == nil && len(overlaps) > 0 {
+//		return nil, fmt.Errorf("MUTATION: pattern overlap reached scenario init: %s", overlaps[0].Message)
+//	}
+//
+// The edit was confirmed present with `git diff -- internal/steps/steps.go` BEFORE the
+// run, then: RED here — "Run returned a harness error: with=mentat: MUTATION: pattern
+// overlap reached scenario init: …" — while the `without` run stayed fully GREEN and
+// rendered its three passing steps. That contrast is the point: the baseline suite is
+// unaffected and only the engine carrying the overlapping pair aborts, so the red is
+// this guard's own and not collateral. Reverted; re-observed green.
+//
+// One thing the rehearsal revealed that argument had not:
+// TestGenuinelyOverlappingPhrasesFailLoudly above ALSO reddens under this mutation, but
+// on its `Run returned a harness error` branch — so it cannot tell "overlap aborts
+// scenario init" from "overlap fails at run time as ambiguous". It was never the guard
+// for FR-017 that a comment here once implied it was.
+func TestOverlappingPhrasesDoNotPerturbASuiteOutsideTheOverlap(t *testing.T) {
+	const outside = "the beta reading is fine"
+	body := fmt.Sprintf(`Feature: isolation
+  Scenario: a phrase bound only by its own engine
+    Given the agent target "bot"
+    When I run scenario "any"
+    Then %s
+`, outside)
+	// ONE feature path for both runs, so the formatter prints the same location in
+	// each — see runIsolatedFeatureAt for why this is not left to t.TempDir().
+	path := filepath.Join(t.TempDir(), "iso.feature")
+
+	with := &partialOverlapComparator{withOverlap: true}
+	resWith, outWith, errWith := runIsolatedFeatureAt(t, with, path, body)
+
+	without := &partialOverlapComparator{withOverlap: false}
+	resWithout, outWithout, errWithout := runIsolatedFeatureAt(t, without, path, body)
+
+	if errWith != nil || errWithout != nil {
+		t.Fatalf("Run returned a harness error: with=%v without=%v\n--- with ---\n%s\n--- without ---\n%s",
+			errWith, errWithout, outWith, outWithout)
+	}
+
+	// Both must PASS. Without this, "byte-identical" could be satisfied by two
+	// identical FAILURES — a comparison unable to tell success from symmetric
+	// breakage, which is the shape of guard this feature was raised to remove.
+	if resWith.Passed != 1 || resWith.Failed != 0 {
+		t.Fatalf("with the overlapping pair registered: passed=%d failed=%d, want 1/0 — the pattern-level finding reached the run path, which FR-017 prohibits\n%s",
+			resWith.Passed, resWith.Failed, outWith)
+	}
+	if resWithout.Passed != 1 || resWithout.Failed != 0 {
+		t.Fatalf("WITHOUT the overlapping pair: passed=%d failed=%d, want 1/0 — the baseline itself is broken, so nothing below measures the overlap\n%s",
+			resWithout.Passed, resWithout.Failed, outWithout)
+	}
+
+	// SC-011 says "byte-identical run output", and that is not literally achievable
+	// against raw narration: godog's pretty formatter ends every run with a total
+	// DURATION, so two runs of an unchanged suite already differ. Measured here before
+	// normalizing — "1.967666ms" vs "1.658417ms".
+	//
+	// normalizeGoldenStdout (mentat_golden_test.go) is the repo's existing answer to
+	// exactly that, and it is reused rather than reinvented: it collapses the duration
+	// line and the step-definition LINE number while keeping the filename, the colours,
+	// the step text, the bindings and both tallies byte-exact. This is the same
+	// narrowing T056 had to make for SC-005 — an assertion of literal byte-identity
+	// over output containing a wall clock can never pass, so stating it that way would
+	// have produced a criterion that looks strict and is simply unmeetable.
+	if outWith == "" || !strings.Contains(outWith, outside) {
+		t.Fatalf("the narration is empty or does not contain the step under test, so comparing it proves nothing:\n%s", outWith)
+	}
+	if got, want := normalizeGoldenStdout([]byte(outWith)), normalizeGoldenStdout([]byte(outWithout)); got != want {
+		t.Errorf("run output differs when an overlapping pattern pair is registered; SC-011 requires it to be identical up to the run duration\n--- with ---\n%s\n--- without ---\n%s",
+			got, want)
+	}
+
+	// Verdicts and reasons too, not only the narration: a reporter rendering nothing
+	// would make the byte comparison above vacuously true.
+	if resWith.Total != resWithout.Total {
+		t.Errorf("total scenarios differ: with=%d without=%d", resWith.Total, resWithout.Total)
+	}
+	if len(resWith.Scenarios) != 1 || len(resWithout.Scenarios) != 1 {
+		t.Fatalf("want 1 scenario record each, got with=%d without=%d", len(resWith.Scenarios), len(resWithout.Scenarios))
+	}
+	if got, want := strings.Join(resWith.Scenarios[0].Reasons, "\n"), strings.Join(resWithout.Scenarios[0].Reasons, "\n"); got != want {
+		t.Errorf("scenario reasons differ:\n with:    %q\n without: %q", got, want)
+	}
+
+	// The non-overlapping phrase must really have BOUND and run. Without this the test
+	// would pass just as well if contributed phrases had stopped working altogether.
+	for _, c := range []struct {
+		label string
+		cmp   *partialOverlapComparator
+	}{{"with the overlap", with}, {"without the overlap", without}} {
+		if len(c.cmp.ran) != 1 || c.cmp.ran[0] != "beta" {
+			t.Errorf("%s: the non-overlapping phrase did not bind: ran=%q, want [beta]", c.label, c.cmp.ran)
+		}
 	}
 }
 

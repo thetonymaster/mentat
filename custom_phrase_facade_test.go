@@ -805,12 +805,47 @@ func TestInspectionDoesNotMutateTheCallersConfig(t *testing.T) {
 	}
 }
 
-// TestValidateReportsPatternOverlapWithoutAnyFeatureStep is US2's T022/T023 for the
-// facade, and pins SC-009 and FR-017.
+// TestValidateReportsPatternOverlapWithoutAnyFeatureStep is US2's T022 for the facade,
+// and pins SC-009.
+//
+// It does NOT pin FR-017, though an earlier version of this comment claimed it did.
+// FR-017 is a statement about the RUN path — that the pattern-level finding never joins
+// the scenario-init fail-fast pool — and this test calls mentat.Validate, which never
+// enters scenario init at all. A Validate-only test cannot observe the run path, so the
+// claim was unfalsifiable here however the run path behaved. Found by 013's own
+// convergence pass; FR-017/SC-011 are measured by
+// TestOverlappingPhrasesDoNotPerturbASuiteOutsideTheOverlap
+// (custom_phrase_isolation_test.go), which runs the suite twice and compares.
 //
 // It is a ROOT-package test on purpose. SC-009 names mentat.Validate, and the wiring
-// that folds these findings into Validate's sorted result lives in run.go — so a test in
-// internal/steps could not see it, and deleting that fold-in would leave the suite green.
+// that folds these findings into Validate's sorted result lives in run.go — so a test
+// in internal/steps could not see it.
+//
+// # Mutation rehearsal (2026-09-11, FR-007) — confirmed landed before it was trusted
+//
+// An earlier version of this comment PREDICTED that "deleting that fold-in would leave
+// the suite green". The prediction was never run, which in this feature is not a
+// detail: FR-007 exists because a guard's reach is a property to measure, not to infer.
+// So it was measured. The fold-in at run.go was replaced with
+//
+//	_ = overlaps // keep the tree BUILDING with the fold-in gone
+//	return chk.Paths(ro.featurePaths), nil
+//
+// `_ = overlaps` is load-bearing for the rehearsal itself: without it the package fails
+// to COMPILE, and `go test` renders a build failure and a real red identically at the
+// package line — the trap 014 recorded hitting.
+//
+// Confirmed with `git diff -- run.go`, confirmed to build with `go build ./...`, then
+// measured across `go test ./...`:
+//
+//   - RED here: "want exactly 1 pattern-overlap finding, got 0 (all findings: [])"
+//   - RED in TestValidateReportsAnAmbiguousStepNamingBothPatterns above, which asserts
+//     the two-finding list this feature widened it to
+//   - internal/steps entirely GREEN, and every other package green
+//
+// So the structural half of the prediction holds — internal/steps really cannot see
+// this wiring — and the coverage half was WRONG: two root-package tests catch it, not
+// zero. Reverted; re-observed green.
 //
 // # The feature file contains no overlapping step
 //
