@@ -16,8 +16,18 @@ This records only what 013 changes. 012's contract remains authoritative for eve
 | Granularity | one finding per **pattern pair**, not per sentence and not per feature file |
 | Message MUST name | both patterns, the contributing comparator(s) where any, and the witness string |
 
+## 1b. New finding class: `pattern-undecidable`
+
+| | |
+|---|---|
+| Class key | `pattern-undecidable` |
+| `File` / `Line` | `""` / `0` |
+| Emitted by | `mentat.Validate`, once per pattern the decider refuses |
+| Why it exists | A contributed phrase may legally contain `\b`, `\B` or a `(?m)` anchor — V2 admits it and godog runs it — so a refusal must not make `Validate` return `nil, err`. That would be a validator rejecting a suite the runner executes: the mirror image of the drift D7 removed (FR-018). |
+| Message MUST say | which pattern, why it cannot be decided, and that the step still runs but is excluded from overlap checking — the gap is real and should not read as a shrug |
+
 The full class list becomes: `bad-cel`, `unknown-target`, `unbound-step`, `ambiguous-step`,
-`step-argument`, `unknown-shape`, `bad-runs-tag`, **`pattern-overlap`**.
+`step-argument`, `unknown-shape`, `bad-runs-tag`, **`pattern-overlap`**, **`pattern-undecidable`**.
 
 ### Why not reuse `ambiguous-step`
 

@@ -297,7 +297,9 @@ witness. Needs no other story.
 4. **Given** two contributed phrases whose languages intersect, **When** the suite is **validated**
    (`mentat.Validate` → `EngineStepChecks`), **Then** that call **succeeds** and a finding reports
    the overlap with its witness (D5) — the asymmetry is deliberate and ownership-based, not an
-   oversight.
+   oversight. This holds for an **undecidable** contributed pattern too: the call still succeeds
+   and reports `pattern-undecidable` (FR-018). An earlier draft promised success without saying
+   which refusals it covered, and the refusal case shipped fatal by default.
 5. **Given** a pattern using a construct the decider does not model — a word boundary, a
    multi-line anchor — **When** it is decided, **Then** the decider returns a descriptive error
    naming the pattern and the construct, and **never** reports "disjoint" (D2a).
@@ -465,6 +467,27 @@ anything.
   generated-sentence corpus wherever that corpus contains a two-pattern sentence. A disagreement
   MUST be reported as a decider defect (D4).
 - **FR-016**: The gate's cost over the built-in set MUST be measured and recorded, not assumed.
+- **FR-018**: A decider refusal on a **contributed** pattern MUST be reported as a finding
+  (`pattern-undecidable`), never propagated as an error out of `mentat.Validate`. A legal phrase
+  containing `\b`, `\B` or a `(?m)` anchor passes V2 and runs correctly under godog, so a
+  validator that refuses the suite would be the **mirror image of the drift D7 removed**: a
+  validator rejecting a suite the runner executes. D5's ownership rule decides the direction — the
+  pattern is the consumer's, so report it and keep working. The finding MUST still say that the
+  phrase is excluded from overlap checking, because that is a real gap in their coverage.
+
+  One finding per undecidable **pattern**, not per pair: pairing it against 40 built-ins would
+  emit 40 complaints about one defect.
+
+- **FR-019**: The decider MUST refuse any pattern that is not **whole-text anchored**, confirmed
+  structurally rather than textually. It reasons over the language of the compiled program, while
+  `regexp.MatchString` asks whether an unanchored pattern matches *anywhere*; the two disagree, so
+  no verdict is sound. Measured before this requirement existed: `Intersects("a", "ba")` answered
+  **disjoint** while `"ba"` matches both — a silent false-disjoint, which is the exact failure
+  FR-012 forbids, in a case nobody had tested.
+
+  Textual anchoring is NOT sufficient: `^a|b$` has both anchors and means "starts with a, OR ends
+  with b". The check is on the simplified syntax tree, and anything it cannot confirm is refused.
+
 - **FR-017**: The pattern-level overlap finding MUST NOT join the scenario-init fail-fast pool. It
   is reported by `mentat.Validate` only; the run path's behaviour on overlap is unchanged, staying
   godog's `Strict` ambiguity plus 012's per-sentence `ambiguous-step`. A scenario-init abort for
@@ -553,8 +576,13 @@ anything.
   measurement rather than quietly dropped. Its one surviving clause still holds: this is a **gate**
   over a pattern set, never a runtime path on a per-sentence basis.
 - **A general-purpose regex-intersection API.** The decider is an internal gate over step patterns.
-  It is not published on the facade, does not become a comparator seam, and need not handle
-  constructs the step grammar cannot contain — it refuses them instead (FR-012).
+  It is not published on the facade and does not become a comparator seam.
+
+  An earlier draft added "and need not handle constructs the step grammar cannot contain". **That
+  premise was false**, and review measured it: the step grammar *can* contain `\b`, `\B` and a
+  `(?m)` anchor — V2 (`isAnchored`) admits all three, and godog runs such a step correctly. So the
+  refusal path is reachable through a **legal** contributed phrase, which makes what happens next a
+  decision and not a detail. See FR-018.
 - **Rejecting contributed overlap at composition.** Declined per D5: overlap between two
   independently-authored comparators is a potential failure, and forbidding the potential would
   make two otherwise-usable comparators mutually exclusive. Reported, not fatal (FR-014).

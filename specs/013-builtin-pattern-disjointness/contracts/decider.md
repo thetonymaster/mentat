@@ -15,6 +15,13 @@ stop rather than update the golden (010 D5: only terminal types may be facade-de
 
 ## What it guarantees
 
+0. **Precondition: both patterns are whole-text anchored**, and it CHECKS this rather than
+   assuming it. The decider reasons over the language of the compiled program; `regexp.MatchString`
+   asks whether an unanchored pattern matches *anywhere*. Those differ, so an unanchored pattern is
+   a construct it does not model and is refused (FR-019). An earlier version of this contract said
+   "over the whole language of each pattern" while the code silently answered "disjoint" for
+   `"a"` vs `"ba"` — measured by review.
+
 1. **It decides.** For a pattern pair it accepts, the answer is over the whole language of each
    pattern, not over any corpus of example sentences. No filler set, no sampling, no sentence
    generation.
@@ -50,17 +57,21 @@ built-in pairs correctly and reported `^(?i)abc$` and `^abc$` as **disjoint** wh
 | Caller | Pairs decided | On overlap |
 |---|---|---|
 | Built-in gate (test, `make ci`) | all pairs over `stepDefs` — 780 at 40 patterns | **FAIL the build**, naming both patterns and the witness (FR-013) |
-| An **unexported** helper inside `EngineStepChecks` (`internal/steps/phrase.go:611`), reaching `mentat.Validate` as a return value | only pairs touching ≥1 **contributed** pattern (R6) | emit one `pattern-overlap` finding per pair; **`mentat.Validate` still returns a nil error** (FR-014, D5) |
+| An **unexported** helper inside `EngineStepChecks` (`internal/steps/phrase.go:611`), reaching `mentat.Validate` as a return value | only pairs touching ≥1 **contributed** pattern (R6) | emit one `pattern-overlap` finding per pair, or one `pattern-undecidable` per refused pattern; **`mentat.Validate` still returns a nil error** (FR-014, FR-018, D5) |
 
 **Not a caller: the scenario-init fail-fast path** (FR-017). This is structural, not disciplinary —
 the pattern half of the check set has no scenario-init counterpart, because godog owns runtime
 matching and `registerSteps` hands it patterns directly. See R6.
 
-**And "structural" has to be earned, not asserted.** An *exported* `PatternOverlapFindings` in
-`internal/steps` would be callable from `steps.go:101`, so FR-017 would really mean "`run.go`
-happens to be its only caller today" — discipline wearing the word structural, in a feature whose
-subject is claims resting on unexamined evidence. Hence: unexported helper, invoked from the one
-function scenario init does not call, findings surfaced as a return value.
+**And "structural" has to be earned, not asserted.** An earlier version of this paragraph said an
+*exported* `PatternOverlapFindings` would be callable from `steps.go:101`, so unexporting it was
+what made FR-017 structural. **That is wrong**: scenario init is in the same package, so an
+unexported helper is equally callable from there. Unexporting only stops other packages reaching
+past `EngineStepChecks`.
+
+The guarantee is the call graph: `EngineStepChecks` has one non-test caller (`run.go`), the helper
+has one caller (`EngineStepChecks`), and scenario init calls `resolvePhrases` directly. Keep the
+helper unexported as defence in depth; do not call that the structural property.
 
 **Not a caller: the `mentat validate` binary.** It builds no engine, so it cannot see contributed
 phrases (012's D7), and built-in × built-in is the CI gate's job. Unchanged by this feature.
@@ -78,3 +89,18 @@ enter the overlap.
 The same reasoning is why the run path is untouched (FR-017): a rule about how strict to be
 applies to every gate, and naming only the gate in front of you is how an asymmetry ships by
 accident.
+
+
+## Refusals reaching a consumer
+
+A refusal is an error from `Intersects`, but it must NOT become an error from
+`mentat.Validate`. A contributed phrase containing `\b`, `\B` or a `(?m)` anchor is legal — V2
+admits it and godog runs it — so `patternOverlapFindings` converts a refusal into a
+`pattern-undecidable` finding and carries on with the rest of the set (FR-018).
+
+Propagating it instead made the validator refuse a suite the runner executes: the mirror image of
+the drift D7 was created to remove, and a regression against 012 behaviour. Reported once per
+pattern, not once per pair.
+
+For the **built-in** set the opposite applies: `decidedCollisions` treats a refusal as `t.Fatalf`,
+because an undecidable built-in is a defect in a table we own and ship.

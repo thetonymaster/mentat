@@ -42,6 +42,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   is treated differently — it fails the build — because we own that table and can simply
   not ship an overlapping pair.
 
+- **New finding class `pattern-undecidable`.** The decider models whole-text-anchored patterns
+  without word boundaries or multi-line anchors. A contributed phrase may legally contain those —
+  anchoring validation admits them and godog runs such a step correctly — so a phrase the decider
+  cannot reason about is reported and skipped rather than failing validation. `mentat.Validate`
+  keeps returning the suite's other findings; the message says the step still runs but is excluded
+  from overlap checking, because that is a real gap in coverage.
+
 ### Changed
 
 - **The step-argument check now defers on ANY multiply-matched step, by match count.**

@@ -111,11 +111,52 @@ func compileNFA(pat string) (*nfa, error) {
 	if err != nil {
 		return nil, fmt.Errorf("compiling pattern %q: %w", pat, err)
 	}
+	if err := checkWholeTextAnchored(pat, re.Simplify()); err != nil {
+		return nil, err
+	}
 	n := &nfa{pat: pat, prog: prog}
 	if err := n.checkModelled(); err != nil {
 		return nil, err
 	}
 	return n, nil
+}
+
+// checkWholeTextAnchored refuses any pattern whose regexp meaning is not whole-text.
+//
+// # Why this is a refusal and not a detail
+//
+// This decider reasons over the LANGUAGE OF THE COMPILED PROGRAM: the set of strings the
+// NFA accepts end to end. `regexp.MatchString` asks a different question for an
+// unanchored pattern — whether the pattern matches ANYWHERE in the string. The two
+// coincide only when the pattern is anchored at both ends.
+//
+// Without this check the decider answers "disjoint" for pairs that genuinely share a
+// string, silently:
+//
+//	Intersects("a", "ba")    -> disjoint, but regexp says "ba" matches both
+//	Intersects("^a", "^ab$") -> disjoint, but "ab" matches both
+//
+// That is precisely the silent fallback this file argues against for empty-width
+// assertions, in a case nobody had tested. A caller feeding unanchored patterns is
+// asking a question this code cannot answer, so it says so.
+//
+// # Confirmed structurally, not textually
+//
+// A prefix "^" and a suffix "$" are not sufficient: `^a|b$` has both and means "starts
+// with a, OR ends with b", neither branch whole-text. So the check is on the simplified
+// syntax tree — the top level must be a concatenation beginning with OpBeginText and
+// ending with OpEndText — and anything it cannot confirm is refused rather than assumed.
+// Conservative by design: a false refusal is a loud, fixable error; a false "disjoint"
+// is a gate reporting success it did not earn.
+func checkWholeTextAnchored(pat string, re *syntax.Regexp) error {
+	subs := re.Sub
+	if re.Op != syntax.OpConcat || len(subs) < 2 ||
+		subs[0].Op != syntax.OpBeginText || subs[len(subs)-1].Op != syntax.OpEndText {
+		return fmt.Errorf("cannot decide pattern %q: it is not anchored at both ends, so its "+
+			"regexp meaning is substring matching while this decider reasons over whole-text "+
+			"languages; the two disagree and no verdict would be sound", pat)
+	}
+	return nil
 }
 
 // checkModelled refuses any pattern containing a construct the product automaton does
@@ -193,8 +234,16 @@ func (n *nfa) closure(core []uint32, atStart, atEnd bool) map[uint32]bool {
 		case syntax.InstFail:
 			// dead end
 		case syntax.InstEmptyWidth:
-			// checkModelled has already rejected anything but the text anchors.
 			op := syntax.EmptyOp(inst.Arg)
+			// DEFENSIVE, not redundant. checkModelled has already rejected anything but
+			// the text anchors, but falling through to push() for an unrecognised op
+			// would treat an unmodelled assertion as ALWAYS SATISFIED — the unsafe
+			// direction, and the exact opposite of what emptyOpSupported argues for
+			// itself. If the invariant ever breaks, this must not be where it becomes a
+			// silent verdict.
+			if op&^(syntax.EmptyBeginText|syntax.EmptyEndText) != 0 {
+				continue
+			}
 			if op&syntax.EmptyBeginText != 0 && !atStart {
 				continue
 			}
@@ -202,8 +251,16 @@ func (n *nfa) closure(core []uint32, atStart, atEnd bool) map[uint32]bool {
 				continue
 			}
 			push(inst.Out)
-		default:
+		case syntax.InstMatch, syntax.InstRune, syntax.InstRune1, syntax.InstRuneAny, syntax.InstRuneAnyNotNL:
 			out[pc] = true
+		default:
+			// An op this function does not recognise. Forwarding it into `out` (the old
+			// `default`) would hand instRanges an instruction it returns nil for, which
+			// yields no transitions and contributes toward a false "disjoint" — the
+			// unsafe direction again. Refusing is not possible here without changing the
+			// signature, so mark the state dead: a missing transition can only cause a
+			// FALSE INTERSECT once witness verification runs, which fails loudly.
+			continue
 		}
 	}
 	return out
@@ -473,6 +530,45 @@ func labelledPatternsFor(phrases []contributedPhrase) []LabelledPattern {
 // be the silent fallback the decider exists to remove.
 func patternOverlapFindings(labelled []LabelledPattern, src Source) ([]Finding, error) {
 	var out []Finding
+
+	// An UNDECIDABLE pattern is reported once, by itself, and then excluded from
+	// pairing.
+	//
+	// # Why a finding and not an error
+	//
+	// A contributed phrase may legally contain `\b`, `\B` or a `(?m)` anchor: V2
+	// (isAnchored) admits all three, and godog runs such a step correctly. Before this,
+	// a refusal propagated out of EngineStepChecks and mentat.Validate returned
+	// `nil, err` — so the VALIDATOR REFUSED A SUITE THE RUNNER EXECUTES. That is the
+	// mirror image of the drift D7 was created to remove ("a validator certifying a
+	// suite the runner rejects"), and it is equally a drift.
+	//
+	// D5's ownership rule settles which way to resolve it: the pattern is the
+	// consumer's, so we report it and keep working, rather than making their engine
+	// unusable over a construct we chose not to model. Note the finding is still
+	// LOUD — the author is told their phrase is excluded from overlap checking, which
+	// is a real gap in their coverage and not a shrug.
+	//
+	// # Once per pattern, not once per pair
+	//
+	// Pairing an undecidable pattern with 40 built-ins would emit 40 identical
+	// complaints about one defect, which is how a findings list becomes unreadable.
+	decidable := make([]LabelledPattern, 0, len(labelled))
+	for _, lp := range labelled {
+		if _, err := compileNFA(lp.Pattern); err != nil {
+			out = append(out, Finding{
+				File:  src.File,
+				Class: "pattern-undecidable",
+				Message: fmt.Sprintf(
+					"%s cannot be checked for overlap against other step patterns: %v; the step itself still runs, but a collision between it and another pattern would not be reported here",
+					describeLabelled(lp), err),
+			})
+			continue
+		}
+		decidable = append(decidable, lp)
+	}
+	labelled = decidable
+
 	for i := 0; i < len(labelled); i++ {
 		for j := i + 1; j < len(labelled); j++ {
 			if labelled[i].Source == SourceBuiltin && labelled[j].Source == SourceBuiltin {
@@ -480,6 +576,8 @@ func patternOverlapFindings(labelled []LabelledPattern, src Source) ([]Finding, 
 			}
 			got, err := Intersects(labelled[i].Pattern, labelled[j].Pattern)
 			if err != nil {
+				// Unreachable: both patterns compiled above. Loud rather than ignored,
+				// because reaching it means the pre-scan and the decider disagree.
 				return nil, fmt.Errorf("deciding overlap between %s and %s: %w",
 					describeLabelled(labelled[i]), describeLabelled(labelled[j]), err)
 			}

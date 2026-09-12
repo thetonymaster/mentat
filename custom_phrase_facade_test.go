@@ -908,6 +908,12 @@ func TestValidateReportsPatternOverlapWithoutAnyFeatureStep(t *testing.T) {
 }
 
 // quotedAfter extracts the %q-rendered value following marker.
+//
+// It scans for the closing quote respecting BACKSLASH ESCAPES. The first version stopped
+// at the first inner `"`, which works only for a value containing none — and every
+// built-in step pattern is full of quotes, so a witness carrying one would have made
+// this helper fail against a perfectly correct message. Review caught it before a
+// witness ever contained one.
 func quotedAfter(t *testing.T, s, marker string) string {
 	t.Helper()
 	i := strings.Index(s, marker)
@@ -915,9 +921,21 @@ func quotedAfter(t *testing.T, s, marker string) string {
 		t.Fatalf("marker %q not found in %q", marker, s)
 	}
 	rest := s[i+len(marker):]
-	v, err := strconv.Unquote(rest[:strings.Index(rest[1:], `"`)+2])
-	if err != nil {
-		t.Fatalf("unquoting witness from %q: %v", rest, err)
+	if len(rest) == 0 || rest[0] != '"' {
+		t.Fatalf("no quoted value after %q in %q", marker, s)
 	}
-	return v
+	for j := 1; j < len(rest); j++ {
+		switch rest[j] {
+		case '\\':
+			j++ // skip the escaped byte, whatever it is
+		case '"':
+			v, err := strconv.Unquote(rest[:j+1])
+			if err != nil {
+				t.Fatalf("unquoting %q: %v", rest[:j+1], err)
+			}
+			return v
+		}
+	}
+	t.Fatalf("unterminated quoted value after %q in %q", marker, s)
+	return ""
 }

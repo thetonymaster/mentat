@@ -1,7 +1,6 @@
 package steps
 
 import (
-	"math/rand"
 	"regexp"
 	"regexp/syntax"
 	"strconv"
@@ -108,10 +107,32 @@ func TestIntersectsRefusesWhatItCannotModel(t *testing.T) {
 		pattern string
 		wantSub string
 	}{
-		{name: "word boundary", pattern: `\bword\b`, wantSub: "word boundary"},
-		{name: "non word boundary", pattern: `\Bword`, wantSub: "word boundary"},
-		{name: "multi-line begin anchor", pattern: `(?m)^line`, wantSub: "multi-line"},
-		{name: "multi-line end anchor", pattern: `(?m)line$`, wantSub: "multi-line"},
+		// Each of these is WHOLE-TEXT ANCHORED and still unmodellable, which is the
+		// point: the anchoring check runs first, so an unanchored fixture would be
+		// refused for the wrong reason and this row would assert nothing about the
+		// construct it names. The first version of this table did exactly that — `\bword\b`
+		// and `(?m)^line` are both unanchored — and the rows only started asserting what
+		// they claim once the anchoring refusal existed to shadow them.
+		{name: "word boundary", pattern: `^\bword\b$`, wantSub: "word boundary"},
+		{name: "non word boundary", pattern: `^\Bword$`, wantSub: "word boundary"},
+		{name: "multi-line begin anchor", pattern: `^(?m:^)line$`, wantSub: "multi-line"},
+		{name: "multi-line end anchor", pattern: `^line(?m:$)$`, wantSub: "multi-line"},
+
+		// Unanchored patterns. The decider reasons over the LANGUAGE of the compiled
+		// program; regexp.MatchString asks whether an unanchored pattern matches
+		// ANYWHERE. The two disagree, so no verdict is sound.
+		//
+		// Found by review, not by this table's first version: before the anchoring check
+		// existed, Intersects("a", "ba") answered "disjoint" with no error while
+		// regexp.MatchString("ba") is true for both. A silent false-disjoint, in the
+		// file that argues at length against exactly that.
+		{name: "wholly unanchored", pattern: `a`, wantSub: "not anchored at both ends"},
+		{name: "anchored at the start only", pattern: `^a`, wantSub: "not anchored at both ends"},
+		{name: "anchored at the end only", pattern: `a$`, wantSub: "not anchored at both ends"},
+		// Both anchors PRESENT and still not whole-text: this means "starts with a, OR
+		// ends with b". A textual prefix/suffix check would accept it, which is why the
+		// real check is on the syntax tree.
+		{name: "both anchors, neither branch whole-text", pattern: `^a|b$`, wantSub: "not anchored at both ends"},
 	}
 
 	for _, tt := range tests {
@@ -143,7 +164,7 @@ func TestIntersectsRefusesWhatItCannotModel(t *testing.T) {
 	}
 }
 
-// TestClosureRefusesUnrecognisedEmptyOp is US2's T018(b), and it is a DIRECT unit test
+// TestEmptyOpSupportedRefusesUnrecognisedOp is US2's T018(b), and it is a DIRECT unit test
 // rather than a fifth row in the table above, for a reason worth stating.
 //
 // Go's regexp/syntax defines exactly six EmptyOp bits and all six are classified by the
@@ -152,7 +173,7 @@ func TestIntersectsRefusesWhatItCannotModel(t *testing.T) {
 // shipped twice (011's T009 and T015). The branch is still worth having: it is what
 // refuses the seventh bit a future Go might add, rather than silently treating it as
 // satisfiable.
-func TestClosureRefusesUnrecognisedEmptyOp(t *testing.T) {
+func TestEmptyOpSupportedRefusesUnrecognisedOp(t *testing.T) {
 	t.Parallel()
 
 	// A bit outside the six syntax defines today.
@@ -192,7 +213,7 @@ func TestClosureRefusesUnrecognisedEmptyOp(t *testing.T) {
 //
 //  2. `emptyOpSupported` returns nil for every assertion.
 //     -> RED on TestIntersectsRefusesWhatItCannotModel and
-//     TestClosureRefusesUnrecognisedEmptyOp. A decider that silently models \b would
+//     TestEmptyOpSupportedRefusesUnrecognisedOp. A decider that silently models \b would
 //     answer "disjoint" for patterns it cannot reason about.
 //
 //  3. `foldRanges` ignores FoldCase.
@@ -320,43 +341,53 @@ func TestDeciderAgreesWithTheSentenceCorpus(t *testing.T) {
 	}
 }
 
-// sampleAlphabet is the rune set the mutator draws from: characters that actually appear
-// in step patterns, plus the ones most likely to expose a boundary bug.
+// sampleAlphabet is the rune set the mutator substitutes: characters that actually
+// appear in step patterns, plus the ones most likely to expose a boundary bug. `z` is
+// deliberately present and deliberately absent from deciderFillers — it is what lets a
+// control pair exist whose shared string the generator alone cannot produce.
 var sampleAlphabet = []rune(`abcxz01239 "'/.-_:*+?[](){}|^$\` + "\t\n")
 
+// mutationBase caps how many generated sentences are mutated per pair. The systematic
+// mutation below is sentences x positions x alphabet, so an uncapped base over the real
+// pattern set is minutes of work in a unit lane.
+const mutationBase = 8
+
 // sampleStrings returns a deterministic set of candidate strings for a pattern pair:
-// every sentence the generator derives from EITHER pattern, plus single-edit mutations
-// of each — one insertion, one deletion and one replacement per sentence per round.
+// every sentence the generator derives from EITHER pattern, plus SYSTEMATIC single-rune
+// replacements at every position of the first few, drawn from sampleAlphabet.
 //
-// Deterministic by construction (fixed seed), because FR-015 must hold in `make ci`
-// where no fuzzing runs. R7: a differential check that only samples under `-fuzz` is
-// green in CI while never having sampled anything.
+// # Systematic, not random
 //
-// Seeded from the patterns rather than drawn uniformly at random. Uniform strings over
-// any realistic alphabet essentially never form a sentence two anchored step patterns
-// both match, so a uniform sampler would report "no shared string found" for every pair
-// including genuinely colliding ones — a check that cannot fail.
-func sampleStrings(t *testing.T, a, b string, rounds int) []string {
+// The first version used a seeded PRNG. It was deterministic, but it could not be shown
+// to find any particular neighbour: hitting one specific character at one specific
+// position is a ~0.1% shot per attempt, so its positive control passed only because the
+// shared string was already in the BASE corpus — the half that needs no verification.
+// Review caught that the mutation machinery was never exercised at all, and that
+// `rounds = 0` would have left the control green.
+//
+// Enumerating position x alphabet removes the question. Any string one replacement away
+// from a generated sentence is now guaranteed to be produced, so a control pair whose
+// shared string is exactly that is a real test of the mutator.
+//
+// Deterministic matters independently: FR-015 must hold in `make ci`, where no fuzzing
+// runs (R7). A differential check that only samples under `-fuzz` is green in CI while
+// never having sampled anything.
+func sampleStrings(t *testing.T, a, b string) []string {
 	t.Helper()
 	base := corpusFor(t, []string{a, b})
-	rng := rand.New(rand.NewSource(0x013D150))
 	out := append([]string{}, base...)
-	for i := 0; i < rounds; i++ {
-		for _, s := range base {
-			r := []rune(s)
-			pick := sampleAlphabet[rng.Intn(len(sampleAlphabet))]
-			// Insertion.
-			at := rng.Intn(len(r) + 1)
-			out = append(out, string(r[:at])+string(pick)+string(r[at:]))
-			if len(r) == 0 {
-				continue
+	for i, s := range base {
+		if i >= mutationBase {
+			break
+		}
+		r := []rune(s)
+		for pos := range r {
+			for _, sub := range sampleAlphabet {
+				if r[pos] == sub {
+					continue
+				}
+				out = append(out, string(r[:pos])+string(sub)+string(r[pos+1:]))
 			}
-			// Deletion.
-			at = rng.Intn(len(r))
-			out = append(out, string(r[:at])+string(r[at+1:]))
-			// Replacement.
-			at = rng.Intn(len(r))
-			out = append(out, string(r[:at])+string(pick)+string(r[at+1:]))
 		}
 	}
 	return out
@@ -381,15 +412,18 @@ func sampleStrings(t *testing.T, a, b string, rounds int) []string {
 func TestDeciderDisjointVerdictsSurviveSampling(t *testing.T) {
 	t.Parallel()
 
-	const rounds = 3
-
 	t.Run("positive control: the sampler finds a real shared string", func(t *testing.T) {
 		t.Parallel()
 
-		a, b := overlappingPair[0], overlappingPair[1]
+		// The shared string is `the result contains "z"`. `z` appears in sampleAlphabet
+		// and in NO deciderFillers entry, so the generator cannot produce this sentence
+		// and only the mutation loop can reach it. That is the point: the previous
+		// control's shared string was already in the base corpus, so it proved nothing
+		// about the mutator.
+		a, b := `^the result contains "(.)"$`, `^the result contains "z"$`
 		reA, reB := regexp.MustCompile(a), regexp.MustCompile(b)
 		found := ""
-		for _, s := range sampleStrings(t, a, b, rounds) {
+		for _, s := range sampleStrings(t, a, b) {
 			if reA.MatchString(s) && reB.MatchString(s) {
 				found = s
 				break
@@ -425,7 +459,7 @@ func TestDeciderDisjointVerdictsSurviveSampling(t *testing.T) {
 					continue
 				}
 				reA, reB := regexp.MustCompile(a), regexp.MustCompile(b)
-				for _, s := range sampleStrings(t, a, b, rounds) {
+				for _, s := range sampleStrings(t, a, b) {
 					if reA.MatchString(s) && reB.MatchString(s) {
 						t.Fatalf("DECIDER DEFECT: it reported %q and %q disjoint, but %q matches both",
 							a, b, s)
@@ -471,6 +505,26 @@ func FuzzDecider(f *testing.F) {
 			if got.Witness != "" {
 				t.Fatalf("a disjoint verdict for %q / %q carries witness %q", a, b, got.Witness)
 			}
+			// THE DEFECT CLASS THIS TARGET EXISTS FOR.
+			//
+			// The first version of this fuzz body asserted only witness validity and
+			// error/verdict exclusivity — both properties of the POSITIVE direction,
+			// which the contract already says proves itself. Nothing in it could detect
+			// a false "disjoint", which is the one direction that cannot. Review
+			// demonstrated the gap concretely: the unanchored-pattern defect was a
+			// false disjoint, and this target passed it.
+			//
+			// Brute force is affordable here because the bound is tiny and the alphabet
+			// is drawn from the patterns themselves, where any shared string must live.
+			reA, errA := regexp.Compile(a)
+			reB, errB := regexp.Compile(b)
+			if errA != nil || errB != nil {
+				return
+			}
+			if shared := sharedStringUpTo(reA, reB, fuzzAlphabet(a, b), 3); shared != "" {
+				t.Fatalf("DECIDER DEFECT: reported %q and %q disjoint, but %q matches both",
+					a, b, shared)
+			}
 			return
 		}
 		// FR-011 under arbitrary input: the witness is the proof, so it must hold.
@@ -483,4 +537,112 @@ func FuzzDecider(f *testing.F) {
 			t.Fatalf("DECIDER DEFECT: witness %q does not match both %q and %q", got.Witness, a, b)
 		}
 	})
+}
+
+// TestUndecidablePatternIsReportedNotFatal is the guard BLOCK 2 lacked.
+//
+// A contributed phrase containing `\b`, `\B` or a `(?m)` anchor is LEGAL — V2
+// (isAnchored) admits it and godog runs the step correctly — so a decider refusal must
+// not take `mentat.Validate` down with it. Before this, the refusal propagated out of
+// EngineStepChecks and Validate returned `nil, err`: a validator refusing a suite the
+// runner executes, which is the mirror image of the drift D7 removed.
+func TestUndecidablePatternIsReportedNotFatal(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		pattern string
+	}{
+		{name: "word boundary", pattern: `^\bthe widget is "([^"]*)"\b$`},
+		{name: "multi-line anchor", pattern: `^the gadget is fine(?m:$)$`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Precondition: the phrase really is legal by the existing rules. If it were
+			// not, this test would be asserting about a pattern no consumer can ship.
+			if !isAnchored(tt.pattern) {
+				t.Fatalf("fixture %q fails V2, so a refusal here would be moot", tt.pattern)
+			}
+
+			labelled := []LabelledPattern{
+				{Pattern: overlappingPair[0], Source: SourceBuiltin},
+				{Pattern: tt.pattern, Source: SourceContributed, Comparator: "widgets"},
+			}
+			got, err := patternOverlapFindings(labelled, Source{})
+			if err != nil {
+				t.Fatalf("a refusal on a LEGAL contributed phrase must be a finding, not an "+
+					"error — Validate would return no findings at all: %v", err)
+			}
+
+			var undecidable []Finding
+			for _, f := range got {
+				if f.Class == "pattern-undecidable" {
+					undecidable = append(undecidable, f)
+				}
+			}
+			// Once per pattern, not once per pair: pairing against 40 built-ins would
+			// otherwise emit 40 complaints about one defect.
+			if len(undecidable) != 1 {
+				t.Fatalf("want exactly 1 pattern-undecidable finding, got %d: %+v", len(undecidable), got)
+			}
+			for _, want := range []string{strconv.Quote(tt.pattern), "widgets"} {
+				if !strings.Contains(undecidable[0].Message, want) {
+					t.Errorf("message does not name %s:\n  %s", want, undecidable[0].Message)
+				}
+			}
+		})
+	}
+}
+
+// sharedStringUpTo brute-forces every string of length <= maxLen over alphabet and
+// returns the first that matches both patterns, or "".
+//
+// Exhaustive rather than sampled, which is what lets a caller treat "" as meaningful for
+// short strings. This is the check that finds a FALSE DISJOINT — the one direction the
+// decider cannot prove about itself.
+func sharedStringUpTo(reA, reB *regexp.Regexp, alphabet []rune, maxLen int) string {
+	var rec func(prefix []rune) string
+	rec = func(prefix []rune) string {
+		s := string(prefix)
+		if reA.MatchString(s) && reB.MatchString(s) {
+			return s
+		}
+		if len(prefix) == maxLen {
+			return ""
+		}
+		for _, r := range alphabet {
+			if found := rec(append(prefix, r)); found != "" {
+				return found
+			}
+		}
+		return ""
+	}
+	return rec(nil)
+}
+
+// fuzzAlphabet picks a handful of runes for the brute-force check: any shared string is
+// built from characters both patterns can match, so the pattern text is where to look.
+// Capped hard — the search is |alphabet|^maxLen and this runs on every fuzz input.
+func fuzzAlphabet(a, b string) []rune {
+	seen := map[rune]bool{}
+	var out []rune
+	for _, r := range a + b {
+		if r == '^' || r == '$' || r == '\\' || r == '(' || r == ')' || r == '[' || r == ']' ||
+			r == '*' || r == '+' || r == '?' || r == '|' || r == '{' || r == '}' || r == '.' {
+			continue
+		}
+		if !seen[r] {
+			seen[r] = true
+			out = append(out, r)
+		}
+		if len(out) == 4 {
+			break
+		}
+	}
+	// An empty pattern pair still deserves a probe of the empty string, which
+	// sharedStringUpTo tests before recursing.
+	return out
 }
