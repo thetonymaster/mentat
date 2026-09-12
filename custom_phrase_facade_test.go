@@ -88,6 +88,103 @@ var (
 	_ mentat.ExpectationParser = (*phraseRevenue)(nil)
 )
 
+// --- 014: doubles for the composition-time phrase freeze ---
+//
+// Both are POINTER types with pointer receivers, like phraseRevenue above. They hold
+// mutable state — a call count, a vocabulary that changes with it — and a value
+// receiver would mutate a copy the test can never read back, so every assertion about
+// how often the seam ran, or which vocabulary a surface saw, would pass vacuously.
+
+// countingPhraseFacade records how many times the phrase seam is consulted while a
+// facade entry point assembles and uses an engine. A count is the only direct evidence
+// for "consulted once per engine build": comparing two returned slices cannot
+// distinguish "asked once" from "asked twice and told the same thing".
+type countingPhraseFacade struct {
+	calls int
+	seen  []string
+}
+
+func (c *countingPhraseFacade) Name() string { return "counting-phrase" }
+
+func (c *countingPhraseFacade) ContributedPhrases() []mentat.ContributedPhrase {
+	c.calls++
+	return []mentat.ContributedPhrase{{
+		Pattern: `^the counted reading is (\w+)$`,
+		Group:   "Counted",
+		Summary: "Asserts a reading from a comparator that counts how often it is asked.",
+		Example: "Then the counted reading is fine",
+	}}
+}
+
+func (c *countingPhraseFacade) ParseCaptures(caps []string) (mentat.Expectation, error) {
+	c.seen = append(c.seen, strings.Join(caps, ","))
+	return strings.Join(caps, ","), nil
+}
+
+func (c *countingPhraseFacade) Compare(_ context.Context, _ mentat.Evidence, _ mentat.Expectation) (mentat.Verdict, error) {
+	return mentat.Verdict{Pass: true}, nil
+}
+
+// Patterns of the drifting double, named so a test asserts about the sentence a
+// comparator actually contributed rather than a string re-typed at the assertion.
+const (
+	driftFirstSentence = "the first reading is fine"
+	driftLaterSentence = "the later reading is fine"
+	driftFirstPattern  = `^the first reading is (\w+)$`
+	driftLaterPattern  = `^the later reading is (\w+)$`
+)
+
+// driftingPhraseFacade contributes one sentence on its first call and a DIFFERENT one
+// on every call after it: the comparator that is not a pure function of itself. The
+// drift is in the PATTERN, so a test can assert which vocabulary a surface observed
+// instead of only how many times it asked.
+type driftingPhraseFacade struct {
+	calls int
+	seen  []string
+}
+
+func (c *driftingPhraseFacade) Name() string { return "drifting-phrase" }
+
+func (c *driftingPhraseFacade) ContributedPhrases() []mentat.ContributedPhrase {
+	c.calls++
+	if c.calls == 1 {
+		return []mentat.ContributedPhrase{{
+			Pattern: driftFirstPattern,
+			Group:   "Drift",
+			Summary: "The vocabulary this comparator declares the first time it is asked.",
+			Example: "Then " + driftFirstSentence,
+		}}
+	}
+	return []mentat.ContributedPhrase{{
+		Pattern: driftLaterPattern,
+		Group:   "Drift",
+		Summary: "The vocabulary this comparator declares on every later call.",
+		Example: "Then " + driftLaterSentence,
+	}}
+}
+
+func (c *driftingPhraseFacade) ParseCaptures(caps []string) (mentat.Expectation, error) {
+	c.seen = append(c.seen, strings.Join(caps, ","))
+	return strings.Join(caps, ","), nil
+}
+
+func (c *driftingPhraseFacade) Compare(_ context.Context, _ mentat.Evidence, _ mentat.Expectation) (mentat.Verdict, error) {
+	return mentat.Verdict{Pass: true}, nil
+}
+
+// Compile-time witnesses, for the same reason phraseRevenue carries them: both seams
+// are discovered by TYPE ASSERTION, so a signature drift would make these doubles
+// silently stop contributing and every test below would blame the freeze for a defect
+// in this file.
+var (
+	_ mentat.Comparator        = (*countingPhraseFacade)(nil)
+	_ mentat.PhraseContributor = (*countingPhraseFacade)(nil)
+	_ mentat.CaptureParser     = (*countingPhraseFacade)(nil)
+	_ mentat.Comparator        = (*driftingPhraseFacade)(nil)
+	_ mentat.PhraseContributor = (*driftingPhraseFacade)(nil)
+	_ mentat.CaptureParser     = (*driftingPhraseFacade)(nil)
+)
+
 const phraseRegistryName = "phrase-cmp"
 
 func runPhraseFeature(t *testing.T, cmp mentat.Comparator, body string) (mentat.Results, string, error) {
@@ -786,4 +883,172 @@ func TestInspectionDoesNotMutateTheCallersConfig(t *testing.T) {
 	if got := fmt.Sprintf("%+v", cfg.Targets["bot"]); got != before {
 		t.Errorf("StepReference mutated the caller's Config:\n before: %s\n after:  %s", before, got)
 	}
+}
+
+// --- 014: what the FACADE can and cannot say about the phrase freeze ---
+
+// TestFacadeEntryPointsEachConsultThePhraseSeamOncePerEngine is a CHARACTERIZATION
+// test. It is green before and after 014, deliberately, and the reason is the most
+// useful thing in this file.
+//
+// # The facade cannot observe the defect 014 fixes
+//
+// Measured against this tree: mentat.Run builds its engine at run.go:344;
+// mentat.Validate and mentat.StepReference each build their own through
+// buildEngineForInspection (run.go:682). Three entry points, three engines, and each
+// one consults the phrase seam exactly once — both before 014 (at the surface, inside
+// resolvePhrases) and after it (at composition, inside engine.Build). The facade
+// exposes no engine handle, so no two surfaces can share one engine here.
+//
+// So a facade test of "Validate and Run observe the same vocabulary from a
+// state-changing contributor" is NOT writable as a red-then-green test:
+//
+//   - sharing one stateful comparator across two entry points, they legitimately see
+//     different vocabularies BOTH before and after — each engine asks once, which is
+//     exactly what FR-001 requires — so such a test is permanently red;
+//   - constructing a fresh comparator per build, they legitimately agree BOTH before
+//     and after, so such a test is permanently green and proves nothing.
+//
+// The real red lives one layer down, where one *engine.Engine does reach all three
+// surfaces: internal/steps.TestOneEngineYieldsOneVocabularyToEverySurface. This test
+// exists so the next person does not spend the afternoon rediscovering that, and does
+// not "fix" it by writing the un-reddable version.
+//
+// # What it does pin
+//
+// That no entry point resolves phrases more than once per engine. That property is
+// true today, must stay true, and is not asserted anywhere else through the public
+// surface.
+func TestFacadeEntryPointsEachConsultThePhraseSeamOncePerEngine(t *testing.T) {
+	t.Parallel()
+
+	cfg := mentat.Config{
+		Store:   phraseRegistryName,
+		Targets: map[string]mentat.Target{"bot": {Adapter: phraseRegistryName, Command: []string{"noop"}, MaxConcurrency: 1}},
+		Poll:    mentat.PollSpec{Interval: "1ms", StableFor: 1},
+	}
+
+	t.Run("each entry point consults the seam exactly once", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "counted.feature")
+		body := `Feature: counted
+  Scenario: written in the contributed sentence
+    Given the agent target "bot"
+    When I run scenario "any"
+    Then the counted reading is fine
+`
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatalf("write feature: %v", err)
+		}
+
+		b := newBus()
+		// ONE comparator instance across all three entry points, so the count is
+		// cumulative and a second consultation anywhere is visible.
+		cmp := &countingPhraseFacade{}
+		opts := func(extra ...mentat.Option) []mentat.Option {
+			return append([]mentat.Option{
+				mentat.WithDriver(phraseRegistryName, func(mentat.Config) (mentat.Driver, error) {
+					return busDriver{bus: b, answer: "ok"}, nil
+				}),
+				mentat.WithStore(phraseRegistryName, func(mentat.Config) (mentat.TraceStore, error) {
+					return busStore{bus: b}, nil
+				}),
+				mentat.WithComparator(cmp.Name(), func(mentat.Config) (mentat.Comparator, error) {
+					return cmp, nil
+				}),
+			}, extra...)
+		}
+
+		docs, err := mentat.StepReference(context.Background(), cfg, opts()...)
+		if err != nil {
+			t.Fatalf("StepReference: %v", err)
+		}
+		if cmp.calls != 1 {
+			t.Errorf("StepReference consulted the phrase seam %d times for its engine, want exactly 1", cmp.calls)
+		}
+		var documented bool
+		for _, d := range docs {
+			if d.Pattern == `^the counted reading is (\w+)$` {
+				documented = true
+			}
+		}
+		if !documented {
+			t.Error("the engine step reference omits the contributed phrase")
+		}
+
+		findings, err := mentat.Validate(context.Background(), cfg, opts(mentat.WithFeatures(path))...)
+		if err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+		if cmp.calls != 2 {
+			t.Errorf("after Validate the cumulative consultation count is %d, want 2 — one per engine built so far", cmp.calls)
+		}
+		if len(findings) != 0 {
+			t.Errorf("a suite written in the contributed sentence reported %d findings: %+v", len(findings), findings)
+		}
+
+		var out bytes.Buffer
+		res, err := mentat.Run(context.Background(), cfg,
+			opts(mentat.WithFeatures(path), mentat.WithConcurrency(1), mentat.WithOutput(&out))...)
+		if err != nil {
+			t.Fatalf("Run: %v\n%s", err, out.String())
+		}
+		if cmp.calls != 3 {
+			t.Errorf("after Run the cumulative consultation count is %d, want 3 — one per engine built so far", cmp.calls)
+		}
+		if res.Passed != 1 || res.Failed != 0 {
+			t.Errorf("the validated sentence did not run green: passed=%d failed=%d\n%s", res.Passed, res.Failed, out.String())
+		}
+	})
+
+	t.Run("an entry point binds the vocabulary its own engine captured", func(t *testing.T) {
+		t.Parallel()
+
+		// The behavioural counterpart of the count above, and the reason the drifting
+		// double earns its place at this layer: if any entry point ever resolved
+		// phrases twice for one engine, this contributor's second answer would be
+		// registered and the sentence below would come back UNBOUND rather than
+		// merely miscounted.
+		path := filepath.Join(t.TempDir(), "drift.feature")
+		body := `Feature: drift
+  Scenario: the sentence declared at composition is the one that binds
+    Given the agent target "bot"
+    When I run scenario "any"
+    Then ` + driftFirstSentence + "\n"
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatalf("write feature: %v", err)
+		}
+
+		b := newBus()
+		cmp := &driftingPhraseFacade{}
+		var out bytes.Buffer
+		res, err := mentat.Run(context.Background(), cfg,
+			mentat.WithFeatures(path),
+			mentat.WithConcurrency(1),
+			mentat.WithOutput(&out),
+			mentat.WithDriver(phraseRegistryName, func(mentat.Config) (mentat.Driver, error) {
+				return busDriver{bus: b, answer: "ok"}, nil
+			}),
+			mentat.WithStore(phraseRegistryName, func(mentat.Config) (mentat.TraceStore, error) {
+				return busStore{bus: b}, nil
+			}),
+			mentat.WithComparator(cmp.Name(), func(mentat.Config) (mentat.Comparator, error) {
+				return cmp, nil
+			}),
+		)
+		if err != nil {
+			t.Fatalf("Run: %v\n%s", err, out.String())
+		}
+		if cmp.calls != 1 {
+			t.Errorf("Run consulted the phrase seam %d times for one engine, want exactly 1", cmp.calls)
+		}
+		if res.Passed != 1 || res.Failed != 0 {
+			t.Errorf("the vocabulary declared at composition did not bind: passed=%d failed=%d — a second resolution replaced it with %q\n%s",
+				res.Passed, res.Failed, driftLaterPattern, out.String())
+		}
+		if len(cmp.seen) != 1 {
+			t.Errorf("the comparator parsed %d sentences, want 1: %q", len(cmp.seen), cmp.seen)
+		}
+	})
 }

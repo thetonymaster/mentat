@@ -147,7 +147,60 @@ func Build(cfg config.Config, st core.TraceStore, cor core.Correlator, opts ...O
 		sems[name] = make(chan struct{}, n)
 	}
 	reg.Seal() // wiring complete: post-build registration now fails loudly (FR-009)
-	return &Engine{cfg: cfg, cor: cor, st: st, sems: sems, pricing: pricing, patterns: pats, logger: o.logger, reg: reg}, nil
+
+	// Capture this engine's contributed Gherkin phrases HERE, once, while the registry
+	// is sealed and complete. Every surface that later asks reads that one snapshot, so
+	// validation, the step reference and suite registration describe the same run
+	// (FR-001/FR-005).
+	phrases, err := capturePhrases(reg)
+	if err != nil {
+		return nil, err
+	}
+	return &Engine{cfg: cfg, cor: cor, st: st, sems: sems, pricing: pricing, patterns: pats, logger: o.logger, reg: reg, phrases: phrases}, nil
+}
+
+// capturePhrases walks reg's comparators in sorted name order and collects every
+// Gherkin phrase they contribute, paired with its contributor.
+//
+// Sorted order is a CORRECTNESS requirement, not tidiness: the runner returns the first
+// matching step definition, so registration order decides which pattern wins a
+// collision, and map iteration order would make an unchanged suite resolve differently
+// between runs. Registry.Comparators() already sorts; each comparator's own declaration
+// order is preserved within its block.
+//
+// It runs exactly once per engine, inside Build and after the seal, which is what makes
+// the snapshot sound: a stray post-seal Register* panics rather than mutating the set,
+// so the captured answer cannot go stale.
+//
+// The []core.ContributedPhrase -> []PhraseBinding transform IS the snapshot's copy —
+// range copies each element and the composite literal copies it again into out's own
+// backing array, and every field in the graph is a string. A comparator that keeps the
+// slice it returned and mutates it afterwards therefore cannot reach this answer
+// (FR-002); no separate copying step is needed here.
+func capturePhrases(reg *registry.Registry) ([]PhraseBinding, error) {
+	var out []PhraseBinding
+	for _, name := range reg.Comparators() {
+		c, ok := reg.Comparator(name)
+		if !ok {
+			// Unreachable today: name came from this same sealed registry's own
+			// listing. Reported rather than skipped anyway, because the failure mode
+			// of skipping is nasty and silent — the comparator's phrases vanish and
+			// every sentence using them reports as an unbound step, sending the author
+			// to look at their feature file for a defect that is in the registry.
+			return nil, fmt.Errorf("engine: comparator %q is listed by the registry but cannot be resolved from it", name)
+		}
+		pc, ok := c.(core.PhraseContributor)
+		if !ok {
+			// The seam is optional and discovered by type assertion. A comparator
+			// that does not implement it contributes nothing — this is what keeps
+			// every existing comparator working untouched.
+			continue
+		}
+		for _, p := range pc.ContributedPhrases() {
+			out = append(out, PhraseBinding{Comparator: name, Phrase: p})
+		}
+	}
+	return out, nil
 }
 
 // isNilSeam reports whether v is a nil seam — either a direct nil interface or an

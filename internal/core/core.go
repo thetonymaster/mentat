@@ -142,6 +142,18 @@ type ExpectationParser interface {
 // the comparator that declared it, so the binding is structural. A name field
 // would be a second, forgeable statement of the same fact, and the first thing an
 // author could get wrong.
+//
+// Every field here is a VALUE type, and that is load-bearing rather than incidental.
+// The engine's phrase snapshot is copied shallowly in two places — element-wise when
+// Build captures it, and by slices.Clone on every read — and both are COMPLETE copies
+// only because nothing in this graph holds a reference.
+//
+// Adding a POINTER or INTERFACE field makes both copies aliases again while everything
+// still compiles and every behavioural test still passes: measured, not assumed. (A
+// slice or map field trips the compiler first, because tests compare these structs with
+// `!=` — an accident of how those tests happen to be written, not a guarantee.)
+// TestPhraseSnapshotStructsHoldOnlyValueTypes (internal/engine/engine_test.go) is what
+// names such a change for what it is, rather than letting it land quietly.
 type ContributedPhrase struct {
 	// Pattern is the regexp the runner matches against. It must be anchored
 	// (begin "^", end with an unescaped "$"): an unanchored pattern is the
@@ -165,10 +177,17 @@ type ContributedPhrase struct {
 // registration: a comparator that does not implement it keeps working exactly as
 // before.
 //
-// It is consulted ONCE PER ENGINE BUILD, never per scenario. The returned slice is
-// treated as immutable; a comparator that mutates it afterwards has no effect on
-// the built engine, which is the correct outcome — the engine's seam registry is
-// sealed once built.
+// It is consulted ONCE PER ENGINE BUILD, never per scenario — and that is enforced,
+// not merely requested. Build walks the sealed registry once and keeps the phrases it
+// is given; every later question about the engine's vocabulary is answered from that
+// snapshot, so this method is never called again for the life of the engine. The step
+// reference, static validation and suite registration therefore describe the same run.
+//
+// A comparator that keeps the slice it returned and mutates it afterwards has no
+// effect on the built engine. That is enforced by the same capture: the engine copies
+// each phrase into its own storage rather than retaining the caller's slice, so there
+// is nothing left to reach. Declaring phrases from immutable state remains the sane
+// thing to do, but correctness no longer depends on it.
 type PhraseContributor interface {
 	ContributedPhrases() []ContributedPhrase
 }
