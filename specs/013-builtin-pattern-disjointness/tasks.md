@@ -204,7 +204,7 @@ wording corrections to a claim whose status was still moving.
 - [X] T055 Confirm `TestFacadeNameabilitySweep` and the public-surface golden are UNCHANGED — the decider is `internal/`-only, so movement here means something leaked onto the facade and is a signal to stop, not a golden to update (plan.md, 010 D5)
 - [X] T056 Confirm SC-005 by diffing the **findings and verdicts** — not raw runner output — against `specs/013-builtin-pattern-disjointness/baseline.txt`: normalize away per-package elapsed times (`\t[0-9.]+s`) and `(cached)` markers before comparing, or compare the `mentat.Validate` finding lists and scenario verdicts directly. A literal diff of `go test ./... 2>&1` ALWAYS differs on timings and cache state, so the task as first written could never have passed (FR-003, SC-005)
 - [X] T057 Walk `specs/013-builtin-pattern-disjointness/quickstart.md` end to end and confirm each documented command behaves as written
-- [ ] T058 Request a `go-reviewer` `gate` audit of the staged diff and resolve every finding before commit (constitution: Development Workflow & Quality Gates)
+- [X] T058 Request a `go-reviewer` `gate` audit of the staged diff and resolve every finding before commit (constitution: Development Workflow & Quality Gates)
 
 ---
 
