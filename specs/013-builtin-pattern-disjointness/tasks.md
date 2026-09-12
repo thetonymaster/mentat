@@ -197,13 +197,13 @@ wording corrections to a claim whose status was still moving.
 
 ## Phase 7: Polish & Cross-Cutting Concerns
 
-- [ ] T051 [P] Run `gofmt -l .` (expect empty), `go vet ./...` and `golangci-lint run ./...`
-- [ ] T052 Confirm the 80% coverage floor for every touched package via `go test ./... -coverprofile=cover.out && go tool cover -func=cover.out`, comparing per-package figures against the baseline in `specs/013-builtin-pattern-disjointness/baseline.txt` (FR-009)
-- [ ] T053 Run `make ci` and confirm green
-- [ ] T054 Run the e2e lane — `make harness-up && go test -tags e2e ./... && make harness-down` — and account for any golden churn rather than blanket-refreshing it. **Required, not optional**: `make ci` is `lint test cover example` and never compiles this lane, so a green `make ci` is not evidence the stdout goldens are current (research.md R8; 012 was bitten by exactly this)
-- [ ] T055 Confirm `TestFacadeNameabilitySweep` and the public-surface golden are UNCHANGED — the decider is `internal/`-only, so movement here means something leaked onto the facade and is a signal to stop, not a golden to update (plan.md, 010 D5)
-- [ ] T056 Confirm SC-005 by diffing the **findings and verdicts** — not raw runner output — against `specs/013-builtin-pattern-disjointness/baseline.txt`: normalize away per-package elapsed times (`\t[0-9.]+s`) and `(cached)` markers before comparing, or compare the `mentat.Validate` finding lists and scenario verdicts directly. A literal diff of `go test ./... 2>&1` ALWAYS differs on timings and cache state, so the task as first written could never have passed (FR-003, SC-005)
-- [ ] T057 Walk `specs/013-builtin-pattern-disjointness/quickstart.md` end to end and confirm each documented command behaves as written
+- [X] T051 [P] Run `gofmt -l .` (expect empty), `go vet ./...` and `golangci-lint run ./...`
+- [X] T052 Confirm the 80% coverage floor for every touched package via `go test ./... -coverprofile=cover.out && go tool cover -func=cover.out`, comparing per-package figures against the baseline in `specs/013-builtin-pattern-disjointness/baseline.txt` (FR-009)
+- [X] T053 Run `make ci` and confirm green
+- [X] T054 Run the e2e lane — `make harness-up && go test -tags e2e ./... && make harness-down` — and account for any golden churn rather than blanket-refreshing it. **Required, not optional**: `make ci` is `lint test cover example` and never compiles this lane, so a green `make ci` is not evidence the stdout goldens are current (research.md R8; 012 was bitten by exactly this)
+- [X] T055 Confirm `TestFacadeNameabilitySweep` and the public-surface golden are UNCHANGED — the decider is `internal/`-only, so movement here means something leaked onto the facade and is a signal to stop, not a golden to update (plan.md, 010 D5)
+- [X] T056 Confirm SC-005 by diffing the **findings and verdicts** — not raw runner output — against `specs/013-builtin-pattern-disjointness/baseline.txt`: normalize away per-package elapsed times (`\t[0-9.]+s`) and `(cached)` markers before comparing, or compare the `mentat.Validate` finding lists and scenario verdicts directly. A literal diff of `go test ./... 2>&1` ALWAYS differs on timings and cache state, so the task as first written could never have passed (FR-003, SC-005)
+- [X] T057 Walk `specs/013-builtin-pattern-disjointness/quickstart.md` end to end and confirm each documented command behaves as written
 - [ ] T058 Request a `go-reviewer` `gate` audit of the staged diff and resolve every finding before commit (constitution: Development Workflow & Quality Gates)
 
 ---

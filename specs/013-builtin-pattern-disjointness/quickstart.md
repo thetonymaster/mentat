@@ -31,7 +31,7 @@ The change is in `internal/steps/stepargs.go`: `matchBuiltin` and `matchPhrase` 
 their first match as though it were their only one, and `stepProblem` decides from the total count.
 
 ```bash
-go test ./internal/steps/ -run 'TestStepArguments|TestBuiltin.*Argument' -v
+go test ./internal/steps/ -run 'TestStepArgument|TestCollidingPatterns' -v
 ```
 
 **Expect**: passing tests covering all four multiplicity cases — two built-ins, two contributed
@@ -44,7 +44,7 @@ phrases, one of each, and exactly one. The single-match rows must be unchanged f
 # For each mutation: apply it, confirm the edit is present, then run.
 # "The mutation didn't fire" and "the guard is real" are indistinguishable from
 # test output alone — 012 hit this exact trap.
-go test ./internal/steps/ -run TestStepArguments
+go test ./internal/steps/ -run 'TestStepArgumentDefersWhenTwo'
 ```
 
 **Expect**: RED, naming the deferral case. A green run here means the mutation did not apply —
@@ -56,7 +56,7 @@ diagnose that before trusting anything.
 
 ```bash
 # The gate over the built-in set.
-go test ./internal/steps/ -run TestBuiltinStepPatternsAreDecidedDisjoint -v
+go test ./internal/steps/ -run 'TestBuiltinStepPatternsAreDecidedDisjoint' -v
 ```
 
 **Expect**: all pairs decided, zero intersecting, and the pair count plus wall clock **reported**
@@ -68,7 +68,7 @@ including compilation.
 # Prove the gate bites. Add a deliberately overlapping row to stepDefs, e.g.
 #   ^the result contains "revenue"$     against the existing
 #   ^the result contains "([^"]*)"$
-go test ./internal/steps/ -run TestBuiltinStepPatternsAreDecidedDisjoint
+go test ./internal/steps/ -run 'TestDecidedDisjointnessGateFiresOnACollision' -v
 ```
 
 **Expect**: RED, naming **both** patterns and a witness string — and the witness must verify
@@ -77,7 +77,7 @@ present**: the point of a decider is that it needs no corpus (SC-003).
 
 ```bash
 # The contributed side: overlap is reported, composition still succeeds.
-go test ./internal/steps/ -run 'TestPatternOverlap|TestValidate.*Overlap' -v
+go test ./ -run 'TestValidateReportsPatternOverlap' -v   # ROOT package: SC-009 names mentat.Validate
 ```
 
 **Expect**: composition succeeds, exactly one `pattern-overlap` finding per overlapping pair,
@@ -85,7 +85,7 @@ carrying a verified witness and naming the contributing comparator (SC-009).
 
 ```bash
 # Refusal, not guessing.
-go test ./internal/steps/ -run TestDeciderRefuses -v
+go test ./internal/steps/ -run 'TestIntersectsRefuses|TestClosureRefuses' -v
 ```
 
 **Expect**: `\b`, `\B`, and multi-line `^`/`$` each produce an error naming the pattern and the
@@ -100,7 +100,7 @@ This is the story that catches defects in US2, and it has already earned its pla
 decided 780 pairs correctly and called `^(?i)abc$` and `^abc$` disjoint. See R3.
 
 ```bash
-go test ./internal/steps/ -run 'TestDecider' -v
+go test ./internal/steps/ -run 'TestDecider|TestIntersectsKnownVerdicts' -v
 ```
 
 **Expect**: the known-verdict corpus passes, every positive verdict's witness re-verifies, and the
@@ -118,12 +118,24 @@ defect (D4) — the sampler's job here is to falsify the mechanism, not the clai
 
 **Mutations to rehearse** (SC-008), each confirmed landed before its red is trusted:
 
-| Mutation | Expected red |
+| Mutation | Result (measured 2026-09-11) |
 |---|---|
-| Drop a rune class from the alphabet partition | a missed transition → a false "disjoint" |
-| Treat an unmodelled `EmptyOp` as satisfiable | a refusal case silently decided |
-| Ignore `FoldCase` in the single-rune path | **the R3 defect** — `^(?i)abc$` vs `^abc$` |
-| Collapse the two closures into one (`atEnd` fixed) | `$`-anchored patterns look unsatisfiable |
+| Drop the rune-class **upper** boundaries (`cuts[rg[1]+1]`) | **GREEN — and correctly so.** See below. |
+| Collapse the alphabet to a **single class** | RED, 4 rows — this is the false-disjoint direction |
+| Treat an unmodelled `EmptyOp` as satisfiable | RED on both refusal tests |
+| Ignore `FoldCase` in the single-rune path | RED — reproduces **the R3 defect** exactly |
+| Collapse the two closures into one (`atEnd` fixed) | RED broadly — `$`-anchored patterns become unsatisfiable |
+
+The first row is the one to understand before adding a test for it. The partition keeps every
+range's **lower** bound, so if a class's representative falls outside a range, that range's own
+lower bound is a kept cut above it and the range cannot intersect the class at all. The partition
+can therefore only **over**-approximate, never under — so it cannot produce a false "disjoint". It
+can produce a false "intersect", and witness re-verification catches that loudly as a decider
+defect. The upper cuts buy precision, not correctness.
+
+The obvious reading of that green — "the alphabet is unguarded" — is wrong, and acting on it means
+writing a test that cannot distinguish the two cases. The single-class mutation is the one that
+probes the direction that matters.
 
 ---
 
