@@ -31,9 +31,13 @@ type JudgeFactory func(cfg config.Config) (core.Judge, error)
 // engine.Build constructs a fresh Registry per call (via New), registers every seam,
 // then Seal()s it — so two Runs never share seam state (spec 007 US2, T010/T011): sequential runs
 // cannot leak a custom registration into one another, and concurrent runs cannot race
-// a shared map. A single RWMutex guards the maps and a sealed flag (FR-009):
-// registration is allowed only while open (during the composition root); once sealed,
-// any Register* panics loudly instead of racing a concurrent reader.
+// a shared map. The SEALED FLAG is what delivers that (FR-009), not the mutex: every
+// Register* call site is inside the composition root (engine.Build / BuildStore) and
+// runs before Seal, and godog's scenario goroutines start only after Build returns, so
+// no production path registers concurrently with a read. Once sealed, any Register*
+// panics loudly instead of mutating a map a reader may hold. The RWMutex guards no
+// production race today; it is cheap insurance for that ordering being broken later,
+// and for tests that register off the composition root.
 type Registry struct {
 	mu     sync.RWMutex
 	sealed bool

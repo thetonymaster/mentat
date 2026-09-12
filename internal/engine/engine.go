@@ -25,7 +25,11 @@ import (
 const maxConcurrentResolves = 8
 
 // Engine wires configuration, a trace store, and a correlator into the
-// Drive/Comparator lifecycle. Build is the only way to construct it.
+// Drive/Comparator lifecycle. Build is the only SUPPORTED way to construct it: a
+// composite literal compiles and engine_test.go:186 builds one, but it bypasses both
+// the sealed registry and the phrase snapshot Build installs (see phrases below), so
+// every production path goes through Build. Say "supported", not "only": the lazy
+// resolveSem below exists precisely because another construction path is reachable.
 type Engine struct {
 	cfg      config.Config
 	cor      core.Correlator

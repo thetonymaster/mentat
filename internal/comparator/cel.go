@@ -110,8 +110,8 @@ var traceVars = map[string]bool{
 }
 
 // bindVars binds ONLY the referenced variables, so a variable an expression does
-// not mention is never computed. Trace aggregates and body JSON are added in
-// later tasks.
+// not mention is never computed. That covers the whole schema: the trace aggregates
+// via traceVars above, and body JSON via parseBody below.
 func bindVars(refs []string, ev core.Evidence, pricing core.Pricing) (map[string]any, error) {
 	for _, name := range refs {
 		if traceVars[name] && ev.Trace == nil {
