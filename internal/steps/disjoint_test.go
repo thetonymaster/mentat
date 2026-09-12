@@ -1,6 +1,7 @@
 package steps
 
 import (
+	"errors"
 	"regexp"
 	"regexp/syntax"
 	"strconv"
@@ -562,7 +563,10 @@ func FuzzDecider(f *testing.F) {
 			if errA != nil || errB != nil {
 				return
 			}
-			if shared := sharedStringUpTo(reA, reB, fuzzAlphabet(a, b), 3); shared != "" {
+			// Test the BOOL, not the string: the empty string is a legitimate witness
+			// (both `^$` and `^a*$` match it), so `shared != ""` would silently skip
+			// exactly the case where a false-disjoint is easiest to produce.
+			if shared, ok := sharedStringUpTo(reA, reB, fuzzAlphabet(a, b), 3); ok {
 				t.Fatalf("DECIDER DEFECT: reported %q and %q disjoint, but %q matches both",
 					a, b, shared)
 			}
@@ -587,6 +591,131 @@ func FuzzDecider(f *testing.F) {
 // not take `mentat.Validate` down with it. Before this, the refusal propagated out of
 // EngineStepChecks and Validate returned `nil, err`: a validator refusing a suite the
 // runner executes, which is the mirror image of the drift D7 removed.
+// TestSearchBudgetRefusesRatherThanReportingDisjoint pins the bound added after review
+// found `searchProduct` had none at all — no state cap, no memory cap, no deadline, and
+// no cancellation — while `mentat.Validate` runs it over CONSUMER-SUPPLIED patterns.
+//
+// The product automaton is worst-case exponential in the two programs' state counts, so
+// "no blowup could be produced by hand" is a measurement, not a bound. This is the same
+// distinction the whole feature is about, turned on the decider's cost instead of its
+// verdict.
+//
+// # The direction the budget must fail in
+//
+// Exhausting the budget means "I could not decide this pair", which is a REFUSAL. It
+// must never become a disjoint verdict — that is FR-012 exactly, and a budget that
+// silently answered "disjoint" on the hard cases would be the worst possible version of
+// this feature: a gate that gets quieter the more it is stressed.
+func TestSearchBudgetRefusesRatherThanReportingDisjoint(t *testing.T) {
+	t.Parallel()
+
+	// A pair that genuinely INTERSECTS, so a wrong answer is unmistakable: anything
+	// other than a refusal here is either a false disjoint or a silent success.
+	a, err := compileNFA(`^the result contains "([^"]*)"$`)
+	if err != nil {
+		t.Fatalf("compile a: %v", err)
+	}
+	b, err := compileNFA(`^the result contains "revenue"$`)
+	if err != nil {
+		t.Fatalf("compile b: %v", err)
+	}
+
+	// Budget 1: one product state is not enough to reach acceptance for this pair.
+	_, found, err := searchProduct(a, b, 1)
+	if err == nil {
+		t.Fatalf("an exhausted budget returned no error (found=%v); a decider that cannot "+
+			"finish must refuse, never report a verdict", found)
+	}
+	if found {
+		t.Error("an exhausted budget reported a positive verdict")
+	}
+	if !errors.Is(err, errSearchBudget) {
+		t.Errorf("budget exhaustion must be identifiable with errors.Is so callers can "+
+			"classify it as undecidable rather than fatal; got %v", err)
+	}
+
+	// The real constant must still decide this pair, or the bound is set below the
+	// feature's own working set and the gate would refuse its own built-ins.
+	got, err := Intersects(`^the result contains "([^"]*)"$`, `^the result contains "revenue"$`)
+	if err != nil {
+		t.Fatalf("the shipped budget refused a pair the built-in gate must decide: %v", err)
+	}
+	if !got.Intersects {
+		t.Fatal("the shipped budget changed a known-intersecting verdict")
+	}
+
+	// And the SHIPPED budget must actually fire on a legal pattern pair, or everything
+	// above only proves that passing budget=1 works.
+	//
+	// Measured 2026-09-12 with these patterns at increasing n: n=4 365µs, n=8 5.37ms,
+	// n=12 83.5ms — then the bound stops it at n=16 and n=20 in ~255ms. That is ~15×
+	// per +4, i.e. genuinely exponential, and both patterns are ANCHORED and legal, so a
+	// consumer can contribute them and reach this through mentat.Validate.
+	//
+	// This row exists because the feature shipped claiming the opposite. contracts/
+	// decider.md recorded the unbounded path as acceptable on the grounds that "no
+	// blowup could be produced (best adversarial attempt: 532µs)" — which was true of
+	// the attempts made and false of the code, exactly the evidence-versus-proof gap
+	// 013 was raised to close. It took one deliberate construction to refute.
+	//
+	// The refusal is deterministic (it counts STATES, not time), so a slow machine
+	// changes the duration above and not the outcome asserted here.
+	adversarialA, adversarialB := `^[ab]*a[ab]{16}$`, `^[ab]*b[ab]{16}x$`
+	if !isAnchored(adversarialA) || !isAnchored(adversarialB) {
+		t.Fatal("the adversarial fixtures must be LEGAL phrases, or this proves nothing about reachable input")
+	}
+	if _, err := Intersects(adversarialA, adversarialB); !errors.Is(err, errSearchBudget) {
+		t.Errorf("the shipped budget did not fire on a pair measured to blow up: %v", err)
+	}
+}
+
+// TestBudgetRefusalOnAPairIsAFindingNotAnError is the FR-018 half of the budget, and it
+// exists because the obvious implementation reintroduces the exact defect FR-018 was
+// written to remove.
+//
+// `patternOverlapFindings` pre-scans each pattern with compileNFA and reports the
+// undecidable ones. A budget refusal cannot be caught there: it is a property of the
+// PAIR, not of either pattern, so it surfaces from Intersects inside the pair loop —
+// whose error branch was written as "unreachable" and returns `nil, err` all the way out
+// of mentat.Validate. Routing a budget refusal through it would make the validator
+// refuse a suite the runner executes, which is the mirror of drift D7.
+func TestBudgetRefusalOnAPairIsAFindingNotAnError(t *testing.T) {
+	t.Parallel()
+
+	labelled := []LabelledPattern{
+		{Pattern: overlappingPair[0], Source: SourceBuiltin},
+		{Pattern: overlappingPair[1], Source: SourceContributed, Comparator: "widgets"},
+	}
+
+	got, err := patternOverlapFindingsWithBudget(labelled, Source{}, 1)
+	if err != nil {
+		t.Fatalf("a budget refusal must be a finding, not an error out of Validate: %v", err)
+	}
+
+	var undecidable []Finding
+	for _, f := range got {
+		if f.Class == "pattern-undecidable" {
+			undecidable = append(undecidable, f)
+		}
+	}
+	if len(undecidable) != 1 {
+		t.Fatalf("want exactly 1 pattern-undecidable finding for the refused PAIR, got %d: %+v", len(undecidable), got)
+	}
+	// Both patterns, because the undecidability belongs to the pair: naming one would
+	// send the author looking for a defect in a pattern that may be perfectly fine.
+	for _, want := range []string{strconv.Quote(overlappingPair[0]), strconv.Quote(overlappingPair[1])} {
+		if !strings.Contains(undecidable[0].Message, want) {
+			t.Errorf("message does not name %s:\n  %s", want, undecidable[0].Message)
+		}
+	}
+	// And it must NOT be reported as an overlap, which would be a verdict it did not reach.
+	for _, f := range got {
+		if f.Class == "pattern-overlap" {
+			t.Errorf("a refused pair was reported as an overlap: %s", f.Message)
+		}
+	}
+}
+
 func TestUndecidablePatternIsReportedNotFatal(t *testing.T) {
 	t.Parallel()
 
@@ -644,22 +773,76 @@ func TestUndecidablePatternIsReportedNotFatal(t *testing.T) {
 // Exhaustive rather than sampled, which is what lets a caller treat "" as meaningful for
 // short strings. This is the check that finds a FALSE DISJOINT — the one direction the
 // decider cannot prove about itself.
-func sharedStringUpTo(reA, reB *regexp.Regexp, alphabet []rune, maxLen int) string {
-	var rec func(prefix []rune) string
-	rec = func(prefix []rune) string {
+// TestSharedStringUpToDistinguishesEmptyWitnessFromNoWitness pins the fix directly,
+// because the bug it closes is invisible from the sampler's own green.
+//
+// Before the bool, the first row below returned ("", ...) and the caller's `!= ""` read
+// it as "no shared string" — so the sampler was structurally unable to report a
+// false-disjoint on the empty string, while looking exactly like a sampler that had
+// checked and found nothing.
+func TestSharedStringUpToDistinguishesEmptyWitnessFromNoWitness(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		a, b   string
+		want   string
+		wantOK bool
+	}{
+		// Both match ONLY the empty string: the witness is "" and it is real.
+		{name: "empty string is a real witness", a: `^$`, b: `^a*$`, want: "", wantOK: true},
+		// Genuinely disjoint: "" is not a witness and none exists.
+		{name: "no shared string at all", a: `^a$`, b: `^b$`, want: "", wantOK: false},
+		// A non-empty witness still works, so the bool did not replace the string.
+		{name: "non-empty witness", a: `^a$`, b: `^[ab]$`, want: "a", wantOK: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			reA, reB := regexp.MustCompile(tt.a), regexp.MustCompile(tt.b)
+			got, ok := sharedStringUpTo(reA, reB, []rune{'a', 'b'}, 2)
+			if ok != tt.wantOK {
+				t.Fatalf("sharedStringUpTo(%q, %q) ok = %v, want %v (got %q)", tt.a, tt.b, ok, tt.wantOK, got)
+			}
+			if got != tt.want {
+				t.Errorf("sharedStringUpTo(%q, %q) = %q, want %q", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
+}
+
+// sharedStringUpTo returns a string both patterns match, searching all strings over
+// alphabet up to maxLen runes, and reports whether it found one.
+//
+// # Why the bool, and why it is not ceremony
+//
+// The first version returned only a string and signalled "nothing found" with "". The
+// search starts at the EMPTY PREFIX, so when both patterns match the empty string the
+// witness IS "" — indistinguishable from failure. The caller then read a genuine
+// false-disjoint as "sampler found nothing" and stayed green.
+//
+// That is this file's own subject pointed at this file: a falsifiability helper that
+// cannot fire in one case is exactly the unexamined guard US3 exists to catch, and it
+// sat here through the whole feature. Found in review, not by any test — which is the
+// honest version of how it was found.
+func sharedStringUpTo(reA, reB *regexp.Regexp, alphabet []rune, maxLen int) (string, bool) {
+	var rec func(prefix []rune) (string, bool)
+	rec = func(prefix []rune) (string, bool) {
 		s := string(prefix)
 		if reA.MatchString(s) && reB.MatchString(s) {
-			return s
+			return s, true
 		}
 		if len(prefix) == maxLen {
-			return ""
+			return "", false
 		}
 		for _, r := range alphabet {
-			if found := rec(append(prefix, r)); found != "" {
-				return found
+			if found, ok := rec(append(prefix, r)); ok {
+				return found, true
 			}
 		}
-		return ""
+		return "", false
 	}
 	return rec(nil)
 }

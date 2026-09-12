@@ -61,6 +61,18 @@ type Intersection struct {
 // silent fallback inside the very gate built to remove one (Constitution IV) — and
 // worse than the gap it replaced, because the answer would carry the word "decided".
 func Intersects(a, b string) (Intersection, error) {
+	return intersectsWithBudget(a, b, maxProductStates)
+}
+
+// intersectsWithBudget is Intersects with the product-state bound supplied, so the
+// budget's own behaviour can be tested without constructing an adversarial pattern pair
+// that actually costs 100k states to decide.
+//
+// Testing the bound by exhausting it for real would make the test's runtime and memory
+// the thing under test, and a machine-dependent one at that. Passing a small budget
+// exercises the same code path deterministically, and a companion assertion pins that the
+// SHIPPED constant still decides the pairs the gate depends on.
+func intersectsWithBudget(a, b string, budget int) (Intersection, error) {
 	na, err := compileNFA(a)
 	if err != nil {
 		return Intersection{}, err
@@ -70,7 +82,7 @@ func Intersects(a, b string) (Intersection, error) {
 		return Intersection{}, err
 	}
 
-	witness, found, err := searchProduct(na, nb)
+	witness, found, err := searchProduct(na, nb, budget)
 	if err != nil {
 		return Intersection{}, err
 	}
@@ -443,7 +455,41 @@ func sortedPCs(m map[uint32]bool) []uint32 {
 //
 // Breadth-first rather than depth-first so the witness is the shortest shared string,
 // which is the one most useful in an error message.
-func searchProduct(a, b *nfa) (witness string, found bool, err error) {
+// errSearchBudget reports that the product search hit its state budget before deciding.
+//
+// It is a REFUSAL, in the same family as an unmodelled construct, and callers must treat
+// it that way: "I could not decide this pair" is never "these patterns are disjoint".
+// A budget that answered "disjoint" under pressure would be a gate that gets quieter the
+// harder the input is, which is the failure this whole feature exists to remove.
+var errSearchBudget = errors.New("intersection decider: product search exceeded its state budget")
+
+// maxProductStates bounds the product automaton's reachable-state set.
+//
+// # Why a bound exists at all
+//
+// The search is worst-case exponential in the two programs' state counts, and since
+// FR-014 it runs over CONSUMER-SUPPLIED patterns inside mentat.Validate. Before this it
+// had no state cap, no memory cap, no deadline and no cancellation — so a sufficiently
+// complex but perfectly legal contributed phrase could burn CPU or memory until the
+// process died, and `Validate` would never return.
+//
+// That gap was known and written down in contracts/decider.md as an unbounded-cost path,
+// on the grounds that no blowup could be produced by hand (best adversarial attempt:
+// 532µs). Review pointed out the obvious: "nobody managed to trigger it" is a
+// measurement, not a bound — which is the exact distinction between evidence and proof
+// that 013 was raised to fix. Applying the feature's own standard to the feature's own
+// cost is how this ended up bounded.
+//
+// # Why this number
+//
+// Measured over the built-in set: 780 pairs, 2589 product states in total, max 74 for any
+// single pair. This is ~1350× the largest pair observed, so it cannot refuse work the
+// gate legitimately does, while still turning an exponential blowup into a prompt,
+// descriptive refusal. It is deliberately a CONSTANT and not a tunable: a knob would need
+// a second caller wanting a different value, and there is none.
+const maxProductStates = 100_000
+
+func searchProduct(a, b *nfa, budget int) (witness string, found bool, err error) {
 	reps := alphabet(a, b)
 
 	type node struct {
@@ -483,6 +529,13 @@ func searchProduct(a, b *nfa) (witness string, found bool, err error) {
 			key := productKey(ka, kb, false)
 			if seen[key] {
 				continue
+			}
+			// Checked at the point of GROWTH, so the bound covers both the visited set
+			// and the queue — the two things that actually consume memory here, since
+			// every queued node also retains its witness prefix.
+			if len(seen) >= budget {
+				return "", false, fmt.Errorf("%w (%d states) deciding %q against %q",
+					errSearchBudget, budget, a.pat, b.pat)
 			}
 			seen[key] = true
 			queue = append(queue, node{a: ka, b: kb, witness: cur.witness + string(r)})
@@ -583,6 +636,13 @@ func labelledPatternsFor(phrases []contributedPhrase) []LabelledPattern {
 // decider cannot model is a fact the author needs, and treating it as "no overlap" would
 // be the silent fallback the decider exists to remove.
 func patternOverlapFindings(labelled []LabelledPattern, src Source) ([]Finding, error) {
+	return patternOverlapFindingsWithBudget(labelled, src, maxProductStates)
+}
+
+// patternOverlapFindingsWithBudget is patternOverlapFindings with the decider's
+// product-state bound supplied, so the budget-refusal path can be driven in a test
+// without an adversarial pattern pair. Production has exactly one caller, above.
+func patternOverlapFindingsWithBudget(labelled []LabelledPattern, src Source, budget int) ([]Finding, error) {
 	var out []Finding
 
 	// An UNDECIDABLE pattern is reported once, by itself, and then excluded from
@@ -628,10 +688,28 @@ func patternOverlapFindings(labelled []LabelledPattern, src Source) ([]Finding, 
 			if labelled[i].Source == SourceBuiltin && labelled[j].Source == SourceBuiltin {
 				continue
 			}
-			got, err := Intersects(labelled[i].Pattern, labelled[j].Pattern)
-			if err != nil {
-				// Unreachable: both patterns compiled above. Loud rather than ignored,
-				// because reaching it means the pre-scan and the decider disagree.
+			got, err := intersectsWithBudget(labelled[i].Pattern, labelled[j].Pattern, budget)
+			switch {
+			case errors.Is(err, errSearchBudget):
+				// A budget refusal is undecidability of the PAIR, so it cannot be caught
+				// by the per-pattern pre-scan above and it must NOT take the error branch
+				// below: propagating it would make mentat.Validate return `nil, err` for
+				// two individually-legal phrases, which is precisely the validator-refuses-
+				// a-suite-the-runner-executes drift FR-018 exists to prevent. Same class,
+				// same treatment, different granularity — reported against the pair,
+				// because neither pattern alone is the problem.
+				out = append(out, Finding{
+					File:  src.File,
+					Class: "pattern-undecidable",
+					Message: fmt.Sprintf(
+						"%s and %s could not be checked for overlap against each other: %v; both steps still run, but a collision between them would not be reported here",
+						describeLabelled(labelled[i]), describeLabelled(labelled[j]), err),
+				})
+				continue
+			case err != nil:
+				// Unreachable: both patterns compiled above and the budget case is
+				// handled. Loud rather than ignored, because reaching it means the
+				// pre-scan and the decider disagree.
 				return nil, fmt.Errorf("deciding overlap between %s and %s: %w",
 					describeLabelled(labelled[i]), describeLabelled(labelled[j]), err)
 			}
