@@ -621,7 +621,7 @@ func TestSearchBudgetRefusesRatherThanReportingDisjoint(t *testing.T) {
 	}
 
 	// Budget 1: one product state is not enough to reach acceptance for this pair.
-	_, found, err := searchProduct(a, b, 1)
+	_, found, _, err := searchProduct(a, b, 1)
 	if err == nil {
 		t.Fatalf("an exhausted budget returned no error (found=%v); a decider that cannot "+
 			"finish must refuse, never report a verdict", found)
@@ -713,6 +713,88 @@ func TestBudgetRefusalOnAPairIsAFindingNotAnError(t *testing.T) {
 		if f.Class == "pattern-overlap" {
 			t.Errorf("a refused pair was reported as an overlap: %s", f.Message)
 		}
+	}
+}
+
+// TestOverlapBudgetIsSharedAcrossPairs pins that the decider's allowance bounds the
+// WORK, not merely each search.
+//
+// The first version of the bound handed every pair a fresh maxProductStates. That reads
+// like a fix and is not one: an overlap analysis decides N(N-1)/2 + 40N pairs, so ~990
+// searches at 20 contributed phrases, each entitled to the full per-pair budget —
+// minutes of CPU inside mentat.Validate. Bounding the inner loop while leaving the outer
+// one unbounded is the same defect one level out, which is how it got shipped and then
+// caught in review.
+//
+// # What distinguishes the two designs
+//
+// Under a per-pair budget B, every pair costing ≤ B decides. Under a shared allowance B,
+// an early pair spends it and later pairs are refused even though each would have been
+// affordable alone. So the discriminating observation is: identical, individually-cheap
+// pairs where the FIRST decides and a LATER one does not.
+func TestOverlapBudgetIsSharedAcrossPairs(t *testing.T) {
+	t.Parallel()
+
+	// Three mutually-overlapping patterns → three pairs, each individually cheap.
+	labelled := []LabelledPattern{
+		{Pattern: `^the widget is "([^"]*)"$`, Source: SourceContributed, Comparator: "w1"},
+		{Pattern: `^the widget is "([a-z]*)"$`, Source: SourceContributed, Comparator: "w2"},
+		{Pattern: `^the widget is "revenue"$`, Source: SourceContributed, Comparator: "w3"},
+	}
+
+	countClass := func(fs []Finding, class string) int {
+		n := 0
+		for _, f := range fs {
+			if f.Class == class {
+				n++
+			}
+		}
+		return n
+	}
+
+	// With the shipped allowance every pair decides, or the bound is set below the
+	// feature's own working set and everything below would be measuring a broken
+	// baseline rather than the sharing.
+	full, err := patternOverlapFindings(labelled, Source{})
+	if err != nil {
+		t.Fatalf("patternOverlapFindings: %v", err)
+	}
+	if got := countClass(full, "pattern-undecidable"); got != 0 {
+		t.Fatalf("the shipped allowance refused %d pair(s) of three cheap ones: %+v", got, full)
+	}
+	if got := countClass(full, "pattern-overlap"); got != 3 {
+		t.Fatalf("want 3 overlapping pairs decided, got %d: %+v", got, full)
+	}
+
+	// Cost of the FIRST pair alone, measured rather than assumed, so the budget below
+	// is expressed in the same units the implementation spends.
+	_, firstPairStates, err := intersectsCounting(labelled[0].Pattern, labelled[1].Pattern, maxProductStates)
+	if err != nil {
+		t.Fatalf("measuring the first pair: %v", err)
+	}
+	if firstPairStates <= 0 {
+		t.Fatalf("first pair reported %d states; the measurement below would be meaningless", firstPairStates)
+	}
+
+	// An allowance sufficient for ONE pair and no more. Per-pair semantics would decide
+	// all three, because each costs about the same.
+	got, err := patternOverlapFindingsWithBudget(labelled, Source{}, firstPairStates)
+	if err != nil {
+		t.Fatalf("an exhausted allowance must report, not error: %v", err)
+	}
+	undecidable := countClass(got, "pattern-undecidable")
+	if undecidable == 0 {
+		t.Fatalf("no pair was refused with an allowance of %d states, so the budget is being "+
+			"RESET PER PAIR and bounds one search rather than the work: %+v", firstPairStates, got)
+	}
+	if undecidable == len(got) && countClass(got, "pattern-overlap") == 0 {
+		t.Errorf("every pair was refused; the allowance should be spent by earlier pairs, not "+
+			"denied to all of them: %+v", got)
+	}
+	// Every pair is still accounted for: three pairs in, three findings out. A pair that
+	// silently vanished would be undecided AND unreported, which is worse than either.
+	if len(got) != 3 {
+		t.Errorf("want 3 findings for 3 pairs, got %d: %+v", len(got), got)
 	}
 }
 

@@ -59,9 +59,31 @@ stop rather than update the golden (010 D5: only terminal types may be facade-de
    minutes, with memory tracking it — every queued node retains its witness prefix. Pinned by
    `TestSearchBudgetRefusesRatherThanReportingDisjoint`.
 
-   The bound is ~1350× the largest pair the built-in gate actually needs (74), so it cannot refuse
-   legitimate work. It is still a **cost** bound and not a deadline: it does not observe
-   cancellation, and a single refusal costs ~250ms of CPU.
+   The bound is ~1350× the largest pair **the built-in gate** needs (74), so it cannot refuse work
+   that gate legitimately does. **That guarantee does not extend to contributed patterns**, and
+   saying otherwise was an overclaim caught in review — inside the paragraph correcting an
+   overclaim. A legal, anchored contributed phrase can exceed it: the n=16 fixture above is exactly
+   that. For consumer patterns the bound is a cost ceiling, not a promise of decidability, and
+   hitting it yields `pattern-undecidable` rather than a verdict.
+
+   There are **two** bounds, because one was not enough:
+
+   | | |
+   |---|---|
+   | `maxProductStates` (100,000) | the most any single pair may spend |
+   | `maxValidationStates` (1,000,000) | the most ONE overlap analysis may spend across every pair |
+
+   The per-pair bound alone bounds a search and not the work: an analysis decides
+   `N(N-1)/2 + 40N` pairs, so ~990 searches at 20 contributed phrases, each entitled to the full
+   100k — minutes of CPU inside `mentat.Validate` from a bound that looked like it had fixed the
+   problem. Bounding the inner loop and leaving the outer one unbounded is the same defect one
+   level out, and it shipped in the first version of this bound. Pairs reached after the allowance
+   is spent are reported undecidable **without being searched**, which costs nothing and still
+   tells the author the truth. For scale: the built-in gate's 780 pairs cost 2589 states in total,
+   0.3% of the validation-wide allowance.
+
+   Both are **cost** bounds and not deadlines: neither observes cancellation, and a single
+   exhausted pair costs ~250ms of CPU.
 5. **It never panics** on author input. Contributed patterns reach it.
 
 ## What it does NOT guarantee — read this before relying on a negative

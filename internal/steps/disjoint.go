@@ -73,21 +73,29 @@ func Intersects(a, b string) (Intersection, error) {
 // exercises the same code path deterministically, and a companion assertion pins that the
 // SHIPPED constant still decides the pairs the gate depends on.
 func intersectsWithBudget(a, b string, budget int) (Intersection, error) {
+	got, _, err := intersectsCounting(a, b, budget)
+	return got, err
+}
+
+// intersectsCounting also reports how many product states the search consumed, so a
+// caller deciding MANY pairs can spend one shared allowance across them instead of
+// handing each pair a fresh one.
+func intersectsCounting(a, b string, budget int) (Intersection, int, error) {
 	na, err := compileNFA(a)
 	if err != nil {
-		return Intersection{}, err
+		return Intersection{}, 0, err
 	}
 	nb, err := compileNFA(b)
 	if err != nil {
-		return Intersection{}, err
+		return Intersection{}, 0, err
 	}
 
-	witness, found, err := searchProduct(na, nb, budget)
+	witness, found, states, err := searchProduct(na, nb, budget)
 	if err != nil {
-		return Intersection{}, err
+		return Intersection{}, states, err
 	}
 	if !found {
-		return Intersection{}, nil
+		return Intersection{}, states, nil
 	}
 
 	// FR-011: a positive verdict proves itself. Re-check the witness against both
@@ -95,16 +103,16 @@ func intersectsWithBudget(a, b string, budget int) (Intersection, error) {
 	reA, errA := regexp.Compile(a)
 	reB, errB := regexp.Compile(b)
 	if errA != nil || errB != nil {
-		return Intersection{}, fmt.Errorf("re-verifying witness for %q and %q: %w", a, b, errors.Join(errA, errB))
+		return Intersection{}, states, fmt.Errorf("re-verifying witness for %q and %q: %w", a, b, errors.Join(errA, errB))
 	}
 	if !reA.MatchString(witness) || !reB.MatchString(witness) {
 		// Unreachable unless the search is wrong, which is precisely when a loud
 		// failure beats a confident answer.
-		return Intersection{}, fmt.Errorf(
+		return Intersection{}, states, fmt.Errorf(
 			"intersection decider produced witness %q for %q and %q, but it does not match both; this is a defect in the decider, not a disjointness result",
 			witness, a, b)
 	}
-	return Intersection{Intersects: true, Witness: witness}, nil
+	return Intersection{Intersects: true, Witness: witness}, states, nil
 }
 
 // nfa is one compiled pattern, kept with its source text so every error can name the
@@ -489,7 +497,22 @@ var errSearchBudget = errors.New("intersection decider: product search exceeded 
 // a second caller wanting a different value, and there is none.
 const maxProductStates = 100_000
 
-func searchProduct(a, b *nfa, budget int) (witness string, found bool, err error) {
+// maxValidationStates bounds the TOTAL product-search work one overlap analysis may do,
+// across every pair it decides.
+//
+// maxProductStates alone bounds a single search and not the work: a validation decides
+// N(N-1)/2 + 40N pairs for N contributed patterns, so ~990 searches at 20 phrases, each
+// otherwise entitled to the full per-pair budget. Bounding the inner loop and leaving the
+// outer one unbounded is the same defect one level out, and it shipped in the first
+// version of this bound — caught in review before merge.
+//
+// 10× the per-pair bound: enough that no realistic phrase set is truncated (the built-in
+// gate's 780 pairs cost 2589 states in total, 0.3% of this), while capping a pathological
+// set at a few seconds rather than minutes. Measured rate on the adversarial pair: ~400k
+// states/second, so this is ~2.5s of worst-case CPU.
+const maxValidationStates = 10 * maxProductStates
+
+func searchProduct(a, b *nfa, budget int) (witness string, found bool, states int, err error) {
 	reps := alphabet(a, b)
 
 	type node struct {
@@ -510,7 +533,7 @@ func searchProduct(a, b *nfa, budget int) (witness string, found bool, err error
 		queue = queue[1:]
 
 		if a.accepts(cur.a, cur.atStart) && b.accepts(cur.b, cur.atStart) {
-			return cur.witness, true, nil
+			return cur.witness, true, len(seen), nil
 		}
 
 		clA := a.closure(cur.a, cur.atStart, false)
@@ -534,14 +557,14 @@ func searchProduct(a, b *nfa, budget int) (witness string, found bool, err error
 			// and the queue — the two things that actually consume memory here, since
 			// every queued node also retains its witness prefix.
 			if len(seen) >= budget {
-				return "", false, fmt.Errorf("%w (%d states) deciding %q against %q",
+				return "", false, len(seen), fmt.Errorf("%w (%d states) deciding %q against %q",
 					errSearchBudget, budget, a.pat, b.pat)
 			}
 			seen[key] = true
 			queue = append(queue, node{a: ka, b: kb, witness: cur.witness + string(r)})
 		}
 	}
-	return "", false, nil
+	return "", false, len(seen), nil
 }
 
 // stepOn returns the program counters reached by consuming r from the given closure.
@@ -636,14 +659,28 @@ func labelledPatternsFor(phrases []contributedPhrase) []LabelledPattern {
 // decider cannot model is a fact the author needs, and treating it as "no overlap" would
 // be the silent fallback the decider exists to remove.
 func patternOverlapFindings(labelled []LabelledPattern, src Source) ([]Finding, error) {
-	return patternOverlapFindingsWithBudget(labelled, src, maxProductStates)
+	return patternOverlapFindingsWithBudget(labelled, src, maxValidationStates)
 }
 
-// patternOverlapFindingsWithBudget is patternOverlapFindings with the decider's
-// product-state bound supplied, so the budget-refusal path can be driven in a test
+// patternOverlapFindingsWithBudget is patternOverlapFindings with the WHOLE CALL's
+// product-state allowance supplied, so the budget-refusal path can be driven in a test
 // without an adversarial pattern pair. Production has exactly one caller, above.
+//
+// # The allowance is shared across pairs, and that is the point
+//
+// The first version of this bound gave every pair a fresh maxProductStates. That bounds
+// one search and not the work, which is the same mistake one level out: N contributed
+// patterns produce N(N-1)/2 + 40N pairs, so 20 phrases is ~990 searches, each entitled to
+// 100k states — minutes of CPU inside mentat.Validate, from a bound that looked like it
+// had fixed the problem. Found by review immediately after the per-pair bound landed.
+//
+// So `budget` here is the total. Each pair may still spend at most maxProductStates of
+// it, so one pathological pair cannot consume the whole allowance and silence every pair
+// after it; when the allowance runs out, the remaining pairs are reported undecidable
+// WITHOUT being searched, which costs nothing and still tells the author the truth.
 func patternOverlapFindingsWithBudget(labelled []LabelledPattern, src Source, budget int) ([]Finding, error) {
 	var out []Finding
+	remaining := budget
 
 	// An UNDECIDABLE pattern is reported once, by itself, and then excluded from
 	// pairing.
@@ -688,7 +725,22 @@ func patternOverlapFindingsWithBudget(labelled []LabelledPattern, src Source, bu
 			if labelled[i].Source == SourceBuiltin && labelled[j].Source == SourceBuiltin {
 				continue
 			}
-			got, err := intersectsWithBudget(labelled[i].Pattern, labelled[j].Pattern, budget)
+			perPair := min(maxProductStates, remaining)
+			if perPair <= 0 {
+				// The allowance is gone. Report rather than search: an unsearched pair
+				// is undecided, and calling it disjoint because we ran out of budget is
+				// the silent fallback this whole feature exists to remove.
+				out = append(out, Finding{
+					File:  src.File,
+					Class: "pattern-undecidable",
+					Message: fmt.Sprintf(
+						"%s and %s were not checked for overlap against each other: the validation-wide decider budget (%d states) was exhausted by earlier pattern pairs; both steps still run, but a collision between them would not be reported here",
+						describeLabelled(labelled[i]), describeLabelled(labelled[j]), budget),
+				})
+				continue
+			}
+			got, used, err := intersectsCounting(labelled[i].Pattern, labelled[j].Pattern, perPair)
+			remaining -= used
 			switch {
 			case errors.Is(err, errSearchBudget):
 				// A budget refusal is undecidability of the PAIR, so it cannot be caught
