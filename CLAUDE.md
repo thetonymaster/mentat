@@ -505,6 +505,26 @@ tree must also build.
   measure — 012's R11 — and that applies to the guards a feature adds while removing
   someone else's unmeasured claim.
 
+  **PR review (#43) then made the same point three more times, and the record should say
+  so rather than let this entry read as a feature that fixed the failure mode cleanly.**
+  Each round fixed the instance in front of it and shipped the identical error one level
+  out:
+
+  | Round | Shipped | Wrong because |
+  | --- | --- | --- |
+  | 1 | no bound on the product search, declined because "no blowup could be produced (best attempt 532µs)" | evidence mistaken for proof. One deliberate construction refuted it: `^[ab]*a[ab]{n}$` vs `^[ab]*b[ab]{n}x$` grows ~15× per +4 and both patterns are legal and anchored |
+  | 2 | a per-pair state bound | bounded the **search**, not the **work** — N phrases give N(N−1)/2 + 40N pairs, each handed a fresh budget |
+  | 3 | a per-pair *report* of the unchecked remainder | bounded the work, not the **output** — Θ(N²) findings to say one thing, which the same function already rejects for an undecidable pattern ten lines above |
+
+  Two things worth keeping from that. **The fix for "I could not produce a failure" is to
+  try harder at producing one, not to write the limitation down** — 013 documented the
+  unbounded path honestly in `contracts/decider.md` and that honesty did nothing, because
+  a recorded limitation is still a limitation. And **a bound is not one decision**: cost
+  has an inner loop, an outer loop and an output, and fixing whichever one review names
+  leaves the other two. The decider now carries `maxProductStates` (per pair),
+  `maxValidationStates` (per analysis) and a single summary finding for the remainder,
+  because each was needed and none implied the others.
+
   Read `specs/013-builtin-pattern-disjointness/research.md` R1–R8 before touching the
   decider, and `contracts/decider.md` for what a negative verdict does and does not mean.
 
