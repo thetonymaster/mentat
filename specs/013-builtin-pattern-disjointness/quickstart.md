@@ -84,9 +84,25 @@ go test ./ -run 'TestValidateReportsPatternOverlap' -v   # ROOT package: SC-009 
 carrying a verified witness and naming the contributing comparator (SC-009).
 
 ```bash
-# Refusal, not guessing.
-go test ./internal/steps/ -run 'TestIntersectsRefuses|TestClosureRefuses' -v
+# The run path is untouched: overlap registered, steps outside it, output unchanged.
+go test ./ -run 'TestOverlappingPhrasesDoNotPerturbASuiteOutsideTheOverlap' -v   # FR-017, SC-011
 ```
+
+**Expect**: the same suite runs identically with and without the overlapping pattern pair
+registered, up to godog's trailing duration line. The complementary case — a sentence *inside*
+the overlap — must FAIL, and is pinned by `TestGenuinelyOverlappingPhrasesFailLoudly`.
+
+```bash
+# Refusal, not guessing.
+go test ./internal/steps/ -run 'TestIntersectsRefusesWhatItCannotModel|TestEmptyOpSupportedRefusesUnrecognisedOp' -v
+```
+
+> The second name was `TestClosureRefuses` until 013's convergence pass, and **no such test
+> ever existed**. `go test -run 'A|B'` exits 0 when `A` matches and `B` matches nothing, so the
+> command passed while half its named coverage was imaginary — a green that asserts less than
+> it appears to, which is this feature's own subject. Every `-run` pattern in this file was
+> re-checked against `grep -rho '^func \(Test\|Fuzz\)[A-Za-z0-9_]*'` afterwards; this was the
+> only bad one of the twelve.
 
 **Expect**: `\b`, `\B`, and multi-line `^`/`$` each produce an error naming the pattern and the
 construct. **No case for "disjoint"** on these (FR-012, SC-010). Note `(?i)` is *not* here — it is

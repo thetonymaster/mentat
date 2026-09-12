@@ -222,6 +222,35 @@ dependency is still there. This feature closes the dependency rather than re-wor
   tests need. D5 asserted this in four places and cited it in none — which, in a feature about
   claims resting on unexamined evidence, was worth fixing.
 
+- **D6 — The cross-check keeps its name. Recorded as a deviation from T035, not an oversight.**
+
+  T035 directed that `TestBuiltinStepPatternsArePairwiseDisjoint` be **renamed** for its new
+  cross-check role, so it would not sit one word from the gate (`…AreDecidedDisjoint`) in the same
+  file. That was not done, and 013's convergence pass caught the silence. Deciding it here rather
+  than leaving a task and the code disagreeing.
+
+  **The name stays**, for two reasons that only became visible on measuring the reference set:
+
+  1. **FR-005 names the test by name.** Renaming it makes a requirement stale, so the rename is a
+     requirement edit rather than a test rename.
+  2. **Three of the references live in merged 012 artifacts** —
+     `contracts/step-registration.md:94`, `contracts/validate-surface.md:151` and `spec.md:637`.
+     T048 established this feature's own rule for that situation: add a superseded pointer, never
+     silently rewrite a merged feature's contract. A rename would have forced exactly the rewrite
+     T048 declined.
+
+  **T035's own count was wrong, and so was the retrospective's.** Both said six sites; measured
+  2026-09-11, there are **18** outside 013's `tasks.md` — 5 in `internal/steps`, 2 in `CLAUDE.md`,
+  3 in merged 012, and 8 across 013's own artifacts. A rename justified as touching six places
+  would have been costed at a third of its actual reach, which is worth recording in a feature
+  whose subject is claims that nobody measured.
+
+  What the rename was *for* is addressed directly instead: `metadata_test.go:278` opens the
+  cross-check by naming itself the sentence-corpus cross-check, and `:461` opens the gate by
+  naming itself the load-bearing assertion and pointing at the other. The risk T035 identified is
+  real; prose at both sites is the mitigation, and it is weaker than a distinct name. Anyone
+  widening the pattern set should read this before assuming the similarity is accidental.
+
 ---
 
 ## User Scenarios & Testing *(mandatory)*
@@ -561,8 +590,24 @@ anything.
 - **SC-010**: No pattern containing an unmodelled construct is ever reported disjoint; each yields
   an error naming the pattern and the construct (FR-012).
 - **SC-011**: With two overlapping contributed phrases registered, a suite whose steps fall outside
-  the overlap produces byte-identical run output to the same suite without them — the pattern-level
-  finding is Validate-only (FR-017).
+  the overlap produces run output identical to the same suite without them, **up to godog's
+  trailing total-duration line** — the pattern-level finding is Validate-only (FR-017).
+
+  The qualifier was added when the criterion was finally measured, and it is the same correction
+  SC-005 needed: **literal byte-identity is unachievable and an assertion of it could never have
+  passed.** godog's pretty formatter ends every run with an elapsed time, so two runs of an
+  unchanged suite already differ — measured `1.967666ms` vs `1.658417ms`. The comparison therefore
+  reuses `normalizeGoldenStdout` (`mentat_golden_test.go`), the normalizer this repo already
+  justified for its stdout goldens, which collapses that line and the step-definition line number
+  while keeping colours, step text, bindings and both tallies byte-exact.
+
+  The feature-file path was the other difference and was removed at the source rather than
+  normalized — both runs are given one path — so the duration is the only token a normalizer is
+  allowed to hide. Measured by `TestOverlappingPhrasesDoNotPerturbASuiteOutsideTheOverlap`
+  (`custom_phrase_isolation_test.go`), which also rehearses the prohibited wiring to prove it can
+  fail. Until 013's convergence pass this criterion had **no test at all**: the only overlap test
+  in the root package called `mentat.Validate`, which never enters scenario init, while its own
+  doc comment claimed FR-017 was pinned.
 
 ---
 

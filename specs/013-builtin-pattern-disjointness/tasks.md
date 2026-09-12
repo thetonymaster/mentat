@@ -305,3 +305,77 @@ mode.
 - Commit after each task or logical group; Conventional Commits; stage files individually (`git add .` is forbidden).
 - **Every mutation rehearsal must confirm the mutation landed.** 011 recorded one that initially failed to go red because the mutation had not applied, and the two states are indistinguishable from test output.
 - The spec, plan and research were corrected four times during specification and planning (D1's premise, D2's cost, FR-014's seam, and FR-012's treatment of case folding). If a task below contradicts the spec, check research.md before assuming the task is wrong — but check, do not assume either way.
+
+---
+
+## Phase 8: Convergence
+
+**Purpose**: Close the gaps a convergence assessment found between this feature's artifacts
+and the code as it now stands. All five are in the **verification-and-records** layer — the
+shipped behaviour satisfies FR-001–FR-005, FR-008–FR-016, FR-018 and FR-019, and
+Constitution I–V. Measured 2026-09-11: `gofmt` clean, `go vet` clean, `internal/steps` and
+the root package green, `go.mod`'s require block byte-identical to `baseline.txt`.
+
+> **The shape of these findings is this feature's own subject, one level out.** 013 was
+> raised because four claims rested on a nine-filler sample. Four of the five gaps below are
+> claims about a *guard's reach* that were asserted rather than measured — a doc comment
+> claiming coverage its test cannot have, a predicted red never rehearsed, and a documented
+> command naming a test that does not exist. That is 012's R11 lesson (*a gate's coverage is
+> a property to measure, not to infer from its name*) applied to 013's own verification.
+
+- [X] T059 Add a ROOT-package test driving `mentat.Run` with BOTH overlapping contributed phrases registered (`overlapComparator`, `custom_phrase_isolation_test.go:270`) and every step OUTSIDE the overlap, asserting the run output is byte-identical to the same suite with no contributed phrases — per SC-011, US2/AC6 (missing)
+
+  This is T023's deliverable and it is not on disk. `overlapComparator` has exactly **one**
+  user today — `TestGenuinelyOverlappingPhrasesFailLoudly` (`custom_phrase_isolation_test.go:303`),
+  which drives a sentence *inside* the overlap and is 012's T038 guard, not 013's. The only
+  013 root-package overlap test (`custom_phrase_facade_test.go:822`) calls `mentat.Validate`
+  and never `mentat.Run`.
+
+  FR-017 does hold **structurally** — `EngineStepChecks` has one non-test caller (`run.go:596`,
+  inside `Validate`) and scenario init calls `resolvePhrases` directly — and that argument is
+  recorded in `contracts/decider.md`. But SC-011 is a *measurable outcome*, and a structural
+  argument is not a measurement. Use `runIsolatedFeature` (`custom_phrase_isolation_test.go:76`)
+  so the comparison is against a real run, not against `Validate`.
+
+- [X] T060 Correct the doc comment at `custom_phrase_facade_test.go:809` that claims the test "pins SC-009 and FR-017" — it calls only `mentat.Validate`, which never enters scenario init, so it cannot observe the run path; leave the SC-009 half, which it does pin — per FR-017 (contradicts)
+
+  Once T059 exists, point this comment at it for the FR-017 half rather than deleting the
+  cross-reference.
+
+- [X] T061 Rehearse the `run.go` fold-in claimed at `custom_phrase_facade_test.go:812-813`: delete the `DedupeSortFindings(append(overlaps, …))` wrap at `run.go:625`, CONFIRM THE EDIT IS PRESENT, run `go test ./ -run TestValidateReportsPatternOverlapWithoutAnyFeatureStep`, confirm RED, revert, and record the rehearsal with its mutation-landed confirmation beside the guard — per FR-007 (partial)
+
+  The comment currently *predicts* that "deleting that fold-in would leave the suite green".
+  FR-007 requires the rehearsal recorded beside the guard, and every other new guard in this
+  feature has one — `disjoint_test.go:205` (five decider mutations), `precheck_test.go:133`,
+  `stepargs_test.go:420`. This one guard, covering the only wiring outside `internal/steps`,
+  has a prediction where the others have a transcript. US1's rehearsal is the precedent for
+  why that matters: it stayed GREEN with the mutation confirmed present, because the *test*
+  was wrong.
+
+- [X] T062 Fix `specs/013-builtin-pattern-disjointness/quickstart.md:88`: it runs `-run 'TestIntersectsRefuses|TestClosureRefuses'`, and `TestClosureRefuses` has ZERO definitions in the repo. Replace it with the guard that exists, `TestEmptyOpSupportedRefusesUnrecognisedOp` (`internal/steps/disjoint_test.go:193`) — per tasks T057 (contradicts)
+
+  `go test -run` reports success when one alternative matches and the other names nothing, so
+  the documented command passes **while half its named coverage does not exist** — a green
+  that asserts less than it appears to, which is the defect class this feature exists to
+  remove. T057 is marked `[X]` and commit `aa595dc` is titled "correct the quickstart to name
+  tests that exist", so the record and the file disagree. While there, re-check every other
+  `-run` pattern in `quickstart.md` against `grep -n '^func \(Test\|Fuzz\)'` rather than
+  spot-checking this one.
+
+- [X] T063 Resolve T035's unperformed rename in `internal/steps/metadata_test.go`: either rename `TestBuiltinStepPatternsArePairwiseDisjoint` (`:317`) for its cross-check role and update all six references, or record the decision to keep it as a deviation in `spec.md`'s Decisions — per tasks T035 (contradicts)
+
+  T035 required the rename so the cross-check "does not sit one word away from T020's
+  `TestBuiltinStepPatternsAreDecidedDisjoint` in the same file, where a reader grepping for
+  the gate would land on the cross-check". Both names are now in that file, differing by one
+  word (`ArePairwiseDisjoint` / `AreDecidedDisjoint`) — the exact confusion the task named.
+
+  **Keeping the name may well be the right call** — `CLAUDE.md` records the justification
+  (six references point at it, two from merged 012 contracts), and FR-005 mandates only that
+  the test and its `generated < 500` floor survive, never a rename. The gap is that a task
+  says one thing and the code another with no decision recorded where a reader of the spec
+  would find it. Prose at `:457` already distinguishes the two, which mitigates the risk but
+  does not discharge the directive. Deciding it either way closes this; leaving it silent
+  does not.
+
+**Checkpoint**: every claim this feature makes about its own guards is measured rather than
+asserted.

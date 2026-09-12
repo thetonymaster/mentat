@@ -387,8 +387,42 @@ All five are properties of the **pinned** `godog v0.15.1`; a bump re-opens them.
 
   `TestBuiltinStepPatternsArePairwiseDisjoint` is kept and reframed as an independent
   sentence-corpus cross-check (D3) — a promotion, since two mechanisms of different kinds
-  mean a disagreement proves one is broken. Its name is unchanged because six references
-  point at it from here and from two merged 012 contracts.
+  mean a disagreement proves one is broken. Its name is unchanged; see **D6**, added by
+  the convergence phase, which records that decision against T035's rename directive.
+
+  This paragraph said "six references point at it" and `tasks.md` T035 said six rename
+  sites. **Measured 2026-09-11: 18**, outside 013's own `tasks.md` — 5 in `internal/steps`,
+  2 here, 3 in merged 012 artifacts, 8 across 013's own. Two of them decide the question:
+  FR-005 names the test *by name*, so a rename edits a requirement, and the merged-012
+  references sit in contracts T048 deliberately annotated rather than rewrote. A rename
+  costed at six sites was costed at a third of its reach.
+
+  **Convergence (Phase 8, T059–T063) found five gaps, and four were the same shape as the
+  defect 013 was raised to fix, one level out: claims about a GUARD's reach that nobody had
+  run.** Behaviour was converged — every FR and Constitution principle was satisfied in
+  code — and the verification layer was not.
+
+  - **SC-011 had no test.** FR-017 held by call graph, which is true and is not a
+    measurement. The only root-package overlap test called `mentat.Validate`, which never
+    enters scenario init, while its own doc comment claimed FR-017 was pinned — a claim
+    that could not have failed however the run path behaved. Now measured by
+    `TestOverlappingPhrasesDoNotPerturbASuiteOutsideTheOverlap`.
+  - **"Byte-identical run output" was unmeetable as written.** godog's formatter ends every
+    run with an elapsed time, so two runs of an unchanged suite already differ. Same
+    correction SC-005 needed; SC-011 now says "up to the trailing duration line".
+  - **A predicted red was wrong.** `custom_phrase_facade_test.go` predicted that deleting
+    `run.go`'s fold-in "would leave the suite green". Rehearsed: **two** root-package tests
+    catch it, and `internal/steps` stays green. The structural half was right, the coverage
+    half was not — which is why FR-007 asks for a transcript and not a prediction.
+  - **`quickstart.md` named a test that never existed** (`TestClosureRefuses`). `go test
+    -run 'A|B'` exits 0 when only `A` matches, so the documented command passed while half
+    its named coverage was imaginary. All twelve `-run` patterns re-audited against the
+    actual `func Test…` set; it was the only bad one.
+
+  The general lesson, and the one worth carrying into 014: **this feature's own discipline
+  had to be applied to this feature's own tests.** A guard's coverage is a property to
+  measure — 012's R11 — and that applies to the guards a feature adds while removing
+  someone else's unmeasured claim.
 
   Read `specs/013-builtin-pattern-disjointness/research.md` R1–R8 before touching the
   decider, and `contracts/decider.md` for what a negative verdict does and does not mean.
