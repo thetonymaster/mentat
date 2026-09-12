@@ -12,9 +12,11 @@ import (
 	"github.com/thetonymaster/mentat/internal/engine"
 )
 
-// This file is the ONLY place that knows godog's step-handler signature rules.
-// Nothing above it — not the comparator seams, not registration, not the world —
-// sees them. That containment is what frees the CaptureParser seam to take a plain
+// This file and stepargs.go are the ONLY places that know godog's step-handler
+// signature rules — this one to SYNTHESIZE a binding, stepargs.go to DIAGNOSE an
+// argument a handler cannot receive. A godog bump has both to re-measure.
+// Nothing above them — not the comparator seams, not registration, not the world —
+// sees those rules. That containment is what frees the CaptureParser seam to take a plain
 // []string: godog's restrictions are invisible to extension authors because Mentat
 // synthesizes the binding rather than asking them to satisfy it. It is also why
 // *godog.DocString is dereferenced here and converted to (body, hasBody) before going
