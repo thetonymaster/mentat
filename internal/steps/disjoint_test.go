@@ -1,6 +1,7 @@
 package steps
 
 import (
+	"math/rand"
 	"regexp"
 	"regexp/syntax"
 	"strconv"
@@ -161,4 +162,325 @@ func TestClosureRefusesUnrecognisedEmptyOp(t *testing.T) {
 		t.Fatal("an unrecognised EmptyOp was accepted; the next assertion Go adds would " +
 			"silently join the set this decider believes it models")
 	}
+}
+
+// # Mutation rehearsals for the decider (2026-09-11) — FR-007, SC-008
+//
+// Each mutation was applied to disjoint.go, CONFIRMED PRESENT by grep before the test
+// run, then reverted and the suite re-observed green. Recording the mutation itself and
+// not merely "red occurred", because 011 hit a rehearsal that stayed green only because
+// the mutation had not applied, and that is indistinguishable from a working guard.
+//
+//  1. Drop the rune-class UPPER boundaries (`cuts[rg[1]+1]`) in alphabet().
+//     -> STAYED GREEN, and that is CORRECT rather than a missing guard.
+//
+//     The partition keeps every range's LOWER bound. For a class [c_i, c_{i+1}-1] with
+//     representative c_i: if c_i is not in range R, then R's lower bound is itself a
+//     kept cut and must be >= c_{i+1}, so R does not intersect the class at all.
+//     Therefore a lower-bounds-only partition can only ever OVER-approximate, never
+//     under — it cannot produce a false "disjoint". It can produce a false "intersect",
+//     and witness re-verification in Intersects catches that loudly as a decider defect.
+//
+//     So the upper cuts buy precision (they avoid spurious verification failures), not
+//     correctness. Worth writing down: the obvious reading of that green is "the
+//     alphabet is unguarded", and the obvious reading is wrong.
+//
+//     1b. Collapse the alphabet to a SINGLE class. -> RED on four rows of
+//     TestIntersectsKnownVerdicts. This is the mutation that probes the direction that
+//     matters: fewer representatives means missed transitions, which is exactly the
+//     false-disjoint direction 1 could not reach.
+//
+//  2. `emptyOpSupported` returns nil for every assertion.
+//     -> RED on TestIntersectsRefusesWhatItCannotModel and
+//     TestClosureRefusesUnrecognisedEmptyOp. A decider that silently models \b would
+//     answer "disjoint" for patterns it cannot reason about.
+//
+//  3. `foldRanges` ignores FoldCase.
+//     -> RED on the fold rows. This mutation reproduces research.md R3 exactly — the
+//     defect the prototype shipped with — so it is the one rehearsal with a known-good
+//     expected output to compare against rather than a prediction.
+//
+//  4. `accepts` calls closure with atEnd=false, collapsing the two closures into one.
+//     -> RED broadly, because every $-anchored pattern becomes unsatisfiable.
+//
+// deciderFillers is the filler set the sentence-corpus cross-check uses. Named once so
+// the agreement test below and metadata_test.go cannot drift apart about what "the
+// generated corpus" means.
+var deciderFillers = []string{"x", "", "a b", "1", "2nd", "true", "0.5", "tool-name", "a/b.c"}
+
+// corpusFor generates every sentence the cross-check's generator derives from patterns.
+func corpusFor(t *testing.T, patterns []string) []string {
+	t.Helper()
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range patterns {
+		re, err := syntax.Parse(p, syntax.Perl)
+		if err != nil {
+			t.Fatalf("parse %q: %v", p, err)
+		}
+		for _, f := range deciderFillers {
+			for _, s := range expandPattern(re.Simplify(), f, 0) {
+				if !seen[s] {
+					seen[s] = true
+					out = append(out, s)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// TestDeciderAgreesWithTheSentenceCorpus is US3's T039 and FR-015(c).
+//
+// The two mechanisms must not disagree. Any sentence the generator produces that matches
+// two patterns is a shared string, so the decider MUST report that pair as intersecting.
+// A disagreement means one of them is broken, and this test is what turns that into a
+// failure rather than a puzzle.
+//
+// # The positive control is mandatory, not decorative
+//
+// Verified 2026-09-11: over the real built-in set, NO generated sentence matches two
+// patterns. So the natural input to this check is the EMPTY SET, and without a control
+// this test would be green while asserting nothing at all — the shape of defect this
+// whole feature exists to remove, reproduced in its own verification. The control adds a
+// deliberately colliding pattern so the loop is provably entered.
+func TestDeciderAgreesWithTheSentenceCorpus(t *testing.T) {
+	t.Parallel()
+
+	docs := StepDocs()
+	builtin := make([]string, 0, len(docs))
+	for _, d := range docs {
+		builtin = append(builtin, d.Pattern)
+	}
+
+	tests := []struct {
+		name     string
+		patterns []string
+		// wantChecked is the minimum number of multi-match sentences this row must
+		// find. The real set is expected to be 0; the control must be > 0 or the
+		// agreement check never ran.
+		wantChecked int
+	}{
+		{name: "the real built-in set", patterns: builtin},
+		{
+			name:        "positive control: a deliberately colliding pattern",
+			patterns:    append(append([]string{}, builtin...), overlappingPair[1]),
+			wantChecked: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			compiled := make([]*regexp.Regexp, len(tt.patterns))
+			for i, p := range tt.patterns {
+				compiled[i] = regexp.MustCompile(p)
+			}
+			corpus := corpusFor(t, tt.patterns)
+			if len(corpus) < 500 {
+				t.Fatalf("generated only %d sentences; the generator produced far less than "+
+					"expected and this check would be near-vacuous", len(corpus))
+			}
+
+			checked := 0
+			for _, sentence := range corpus {
+				var hits []int
+				for i, re := range compiled {
+					if re.MatchString(sentence) {
+						hits = append(hits, i)
+					}
+				}
+				if len(hits) < 2 {
+					continue
+				}
+				checked++
+				// Every pair sharing this sentence must be reported intersecting.
+				for x := 0; x < len(hits); x++ {
+					for y := x + 1; y < len(hits); y++ {
+						a, b := tt.patterns[hits[x]], tt.patterns[hits[y]]
+						got, err := Intersects(a, b)
+						if err != nil {
+							t.Fatalf("decider refused %q / %q, which share the sentence %q: %v", a, b, sentence, err)
+						}
+						if !got.Intersects {
+							t.Errorf("DECIDER DEFECT: %q and %q both match %q, but the decider "+
+								"reports them disjoint. The two mechanisms disagree, so one is "+
+								"wrong — and the corpus has a concrete counterexample.", a, b, sentence)
+						}
+					}
+				}
+			}
+			if checked < tt.wantChecked {
+				t.Fatalf("found %d multi-match sentences, want at least %d; with none the "+
+					"agreement assertion never executed", checked, tt.wantChecked)
+			}
+			t.Logf("%d sentences, %d multi-match", len(corpus), checked)
+		})
+	}
+}
+
+// sampleAlphabet is the rune set the mutator draws from: characters that actually appear
+// in step patterns, plus the ones most likely to expose a boundary bug.
+var sampleAlphabet = []rune(`abcxz01239 "'/.-_:*+?[](){}|^$\` + "\t\n")
+
+// sampleStrings returns a deterministic set of candidate strings for a pattern pair:
+// every sentence the generator derives from EITHER pattern, plus single-edit mutations
+// of each — one insertion, one deletion and one replacement per sentence per round.
+//
+// Deterministic by construction (fixed seed), because FR-015 must hold in `make ci`
+// where no fuzzing runs. R7: a differential check that only samples under `-fuzz` is
+// green in CI while never having sampled anything.
+//
+// Seeded from the patterns rather than drawn uniformly at random. Uniform strings over
+// any realistic alphabet essentially never form a sentence two anchored step patterns
+// both match, so a uniform sampler would report "no shared string found" for every pair
+// including genuinely colliding ones — a check that cannot fail.
+func sampleStrings(t *testing.T, a, b string, rounds int) []string {
+	t.Helper()
+	base := corpusFor(t, []string{a, b})
+	rng := rand.New(rand.NewSource(0x013D150))
+	out := append([]string{}, base...)
+	for i := 0; i < rounds; i++ {
+		for _, s := range base {
+			r := []rune(s)
+			pick := sampleAlphabet[rng.Intn(len(sampleAlphabet))]
+			// Insertion.
+			at := rng.Intn(len(r) + 1)
+			out = append(out, string(r[:at])+string(pick)+string(r[at:]))
+			if len(r) == 0 {
+				continue
+			}
+			// Deletion.
+			at = rng.Intn(len(r))
+			out = append(out, string(r[:at])+string(r[at+1:]))
+			// Replacement.
+			at = rng.Intn(len(r))
+			out = append(out, string(r[:at])+string(pick)+string(r[at+1:]))
+		}
+	}
+	return out
+}
+
+// TestDeciderDisjointVerdictsSurviveSampling is US3's T038 and FR-015(b).
+//
+// It attacks the one direction a decider cannot prove about itself. A TRUE verdict
+// carries a witness anyone can check; a FALSE verdict is only as good as the code. So
+// this samples strings against pairs the decider called disjoint and fails if any string
+// matches both.
+//
+// A failure here is a DECIDER defect, never a disjointness result — and the message says
+// so, because the two would otherwise be confused at exactly the moment it matters (D4).
+//
+// # The positive control
+//
+// Over the real built-in set every pair is disjoint, so nothing in the negative rows
+// demonstrates that the sampler can find a shared string when one exists. The control
+// pair has one, and the sampler must locate it. Without that, "no shared string found"
+// would be indistinguishable from "this sampler never finds anything".
+func TestDeciderDisjointVerdictsSurviveSampling(t *testing.T) {
+	t.Parallel()
+
+	const rounds = 3
+
+	t.Run("positive control: the sampler finds a real shared string", func(t *testing.T) {
+		t.Parallel()
+
+		a, b := overlappingPair[0], overlappingPair[1]
+		reA, reB := regexp.MustCompile(a), regexp.MustCompile(b)
+		found := ""
+		for _, s := range sampleStrings(t, a, b, rounds) {
+			if reA.MatchString(s) && reB.MatchString(s) {
+				found = s
+				break
+			}
+		}
+		if found == "" {
+			t.Fatal("the sampler found no shared string for a pair that provably has one; " +
+				"every negative result it produces below would be worthless")
+		}
+		t.Logf("control: sampler located %q", found)
+	})
+
+	t.Run("pairs the decider called disjoint", func(t *testing.T) {
+		t.Parallel()
+
+		docs := StepDocs()
+		patterns := make([]string, 0, len(docs))
+		for _, d := range docs {
+			patterns = append(patterns, d.Pattern)
+		}
+		// A representative slice rather than all 780 pairs: the full cross-product of
+		// pairs x sentences x mutations is minutes of work for a unit lane. The fuzz
+		// target is where unbounded exploration belongs.
+		checked := 0
+		for i := 0; i < len(patterns) && i < 8; i++ {
+			for j := i + 1; j < len(patterns) && j < 8; j++ {
+				a, b := patterns[i], patterns[j]
+				got, err := Intersects(a, b)
+				if err != nil {
+					t.Fatalf("decider refused %q / %q: %v", a, b, err)
+				}
+				if got.Intersects {
+					continue
+				}
+				reA, reB := regexp.MustCompile(a), regexp.MustCompile(b)
+				for _, s := range sampleStrings(t, a, b, rounds) {
+					if reA.MatchString(s) && reB.MatchString(s) {
+						t.Fatalf("DECIDER DEFECT: it reported %q and %q disjoint, but %q matches both",
+							a, b, s)
+					}
+				}
+				checked++
+			}
+		}
+		if checked == 0 {
+			t.Fatal("no disjoint pair was sampled; this assertion never ran")
+		}
+		t.Logf("sampled %d disjoint pairs", checked)
+	})
+}
+
+// FuzzDecider is US3's T040. Its SEED CORPUS runs under plain `go test`, which is what
+// `make ci` exercises; `-fuzz` extends it without the gate depending on that having
+// happened (R7).
+//
+// It asserts the two properties that must hold for any input, valid or not: a positive
+// verdict's witness really matches both patterns, and no input produces both an error
+// and a verdict.
+func FuzzDecider(f *testing.F) {
+	f.Add(overlappingPair[0], overlappingPair[1])
+	f.Add(disjointPair[0], disjointPair[1])
+	f.Add(`^(?i)abc$`, `^abc$`)
+	f.Add(`^a$`, `^a$`)
+	f.Add(`\bword\b`, `^x$`)
+	f.Add(`^`, `$`)
+	f.Add(``, ``)
+	f.Add(`(`, `^x$`)
+
+	f.Fuzz(func(t *testing.T, a, b string) {
+		got, err := Intersects(a, b)
+		if err != nil {
+			// A refusal must not also claim a verdict.
+			if got.Intersects || got.Witness != "" {
+				t.Fatalf("Intersects(%q, %q) returned both an error and a verdict %+v", a, b, got)
+			}
+			return
+		}
+		if !got.Intersects {
+			if got.Witness != "" {
+				t.Fatalf("a disjoint verdict for %q / %q carries witness %q", a, b, got.Witness)
+			}
+			return
+		}
+		// FR-011 under arbitrary input: the witness is the proof, so it must hold.
+		reA, errA := regexp.Compile(a)
+		reB, errB := regexp.Compile(b)
+		if errA != nil || errB != nil {
+			t.Fatalf("decider accepted patterns regexp rejects: %q (%v), %q (%v)", a, errA, b, errB)
+		}
+		if !reA.MatchString(got.Witness) || !reB.MatchString(got.Witness) {
+			t.Fatalf("DECIDER DEFECT: witness %q does not match both %q and %q", got.Witness, a, b)
+		}
+	})
 }
