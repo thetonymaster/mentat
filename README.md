@@ -25,6 +25,26 @@ make harness-down
 > (bad answers, wrong tool order, blown budgets, hung SUTs) that exists to prove
 > Mentat goes red on bad behaviour — running it is expected to fail.
 
+### Pointing a spawned SUT at your collector (`otlpEndpoint`)
+
+`otlpEndpoint` is the top-level `mentat.yaml` key that tells a **spawned** SUT where to
+export its spans. When it is set, Mentat puts `OTEL_EXPORTER_OTLP_ENDPOINT` into the run
+spec's environment and the shell driver appends it to the SUT process env. When it is
+absent Mentat injects **nothing**, so the SUT's own ambient endpoint survives rather than
+being overridden with an empty value (`internal/engine/engine.go:351-358`).
+
+```yaml
+tempo: { endpoint: "http://localhost:3200" }   # where Mentat READS traces (Tempo query)
+otlpEndpoint: "http://localhost:4318"          # where the SUT WRITES spans (OTLP ingest)
+```
+
+These are two different ports on two different services, and mixing them up is easy.
+Leaving `otlpEndpoint` unset while the SUT has no ambient endpoint of its own is the
+usual cause of `correlate: no trace for run ... (0 spans seen)` — see
+[Trace-not-found diagnosis](#trace-not-found-diagnosis). An already-running `http`
+SUT is not spawned by Mentat, so it receives no environment from it and must be
+pointed at the collector by its own configuration.
+
 ## How it works
 
 `Gherkin (.feature) → godog → engine → drive SUT → resolve trace (Tempo) →
@@ -145,7 +165,7 @@ storePath: fixtures/   # directory of saved-run fixtures (from `mentatctl agent 
 
 Each fixture is keyed by its recorded `runScenario` field — the run id captured when
 it was saved. Because resolution is by that exact id, offline replay runs on the
-**pinned path** (`mentatctl agent replay <saved-run-id> --feature <f> --config <file-store-config>`),
+**pinned path** (`mentatctl agent replay --feature <f> --config <file-store-config> <saved-run-id>`),
 which resolves the saved id from the store without driving anything. The live
 `mentat run` path injects a *fresh* run id per run that matches no saved fixture, so
 it deliberately fails loud (not-found naming the dir + id) rather than serving the

@@ -26,6 +26,56 @@ Finding IDs are stable: CO-n (composition), ER-n (ergonomics). Severity: HIGH = 
 principle is violated and a concrete cost has already been paid or is reproducible;
 MEDIUM = violated, cost plausible but not yet paid; LOW = cosmetic or a stale claim.
 
+## Status since publication
+
+**Read this before trusting any finding below.** Everything from `## Scorecard` down is a
+record of what was measured at `f6bb402` and is deliberately left as written — an audit
+that gets edited in place stops being evidence of anything. This section is the only part
+that tracks what has changed. Re-measured at `9c3bbb1` on 2026-09-11; both 013 and 014
+merged after this audit was written.
+
+Six findings are **closed**:
+
+| ID | Closed by | Evidence |
+| --- | --- | --- |
+| CO-21 | before this re-measure | `docs/extending/new-seam.md:9-13` now records the two divergent "six seams" lists explicitly and makes itself canonical |
+| CO-17 | `582dcef` | the `Registry` doc comment now credits the sealed flag, not the mutex |
+| CO-19 | `582dcef` | `engine.go` now says "the only SUPPORTED way", naming what a composite literal bypasses |
+| CO-23 | `582dcef` | `phrase.go` and `stepargs.go` are both named, with the synthesize/diagnose split that justifies two sites |
+| ER-2 | `c8c94ae` | the README replay recipe puts flags before the positional, which is the order stdlib `flag` actually parses |
+| ER-4 | `c8c94ae` | `otlpEndpoint` is documented in the Quickstart, including that it is the OTLP ingest port and not `tempo.endpoint` |
+
+Three entries were **wrong or stale as written**:
+
+- **CO-10 was filed over six literals; 013 closed five of them.** `BuiltinStepPatterns`
+  (`internal/steps/precheck.go:113-119`) now derives every precheck pattern from
+  `d.Pattern`. Only `reTarget` remained hand-written, and `12a8fdc` pins it to its
+  `stepDefs` row. Closed — but not in the shape the entry describes.
+- **CO-8's premise is false.** "`RegisterStore` is called nowhere else" — it is:
+  `internal/engine/store.go:42-50` funnels custom stores from the public `WithStore`
+  facade, with nil-factory and collision checks. The other half stands (a seven-map
+  `Registry` allocated to use one map, then discarded), but the fix shape "a map literal
+  inside `BuildStore`" has to carry that public path, so this is not the small change the
+  entry implies.
+- **CO-29's items are not all where cited.** The `cel.go` "added in later tasks" comment
+  was real and is fixed (`582dcef`) — both trace aggregates and body JSON are bound. The
+  `semantic.go` "re-registers" comment and the `votes < 1` clamp were not found at their
+  citations; moved or closed, not chased. `report/ledger.go`'s `Price` does take a pointer
+  and mutate it, but that is a refactor, not the stale-comment class it is filed under.
+
+Two of the three HIGH findings are **open**, re-verified at `9c3bbb1`:
+
+| ID | Still true because |
+| --- | --- |
+| CO-1 | `internal/steps/steps.go:290` `checkExp` still has no zero-Evidence guard while its sibling `checkRuns:631-632` has one, and `internal/report/derive.go:26` has no `Pass && len(Runs)==0` refusal either — so both layers of the finding stand |
+| CO-3 / ER-1 | `cmd/mentat/validate.go:131` still constructs a bare `checker{}` and never calls `engine.Build`, so the adapter-has-a-driver check is still skipped by the binary |
+
+**CO-2 / CO-11 were not re-measured**, and neither was anything else: CO-4, CO-5, CO-6,
+CO-7, CO-9, CO-12 through CO-16, CO-18, CO-20, CO-22, CO-24 through CO-28, CO-30 through
+CO-33, ER-3, ER-5 and ER-6 all still carry their `f6bb402` evidence. 013 rewrote parts of
+`internal/steps`, so treat line citations in those entries as suspect until checked. The
+absence of an entry above means "not looked at", never "still true".
+
 ## Scorecard
 
 | Principle | Verdict | Basis |
