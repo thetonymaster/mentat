@@ -787,14 +787,33 @@ func TestOverlapBudgetIsSharedAcrossPairs(t *testing.T) {
 		t.Fatalf("no pair was refused with an allowance of %d states, so the budget is being "+
 			"RESET PER PAIR and bounds one search rather than the work: %+v", firstPairStates, got)
 	}
-	if undecidable == len(got) && countClass(got, "pattern-overlap") == 0 {
+	if countClass(got, "pattern-overlap") == 0 {
 		t.Errorf("every pair was refused; the allowance should be spent by earlier pairs, not "+
 			"denied to all of them: %+v", got)
 	}
-	// Every pair is still accounted for: three pairs in, three findings out. A pair that
-	// silently vanished would be undecided AND unreported, which is worse than either.
-	if len(got) != 3 {
-		t.Errorf("want 3 findings for 3 pairs, got %d: %+v", len(got), got)
+
+	// EXACTLY ONE summary for the exhausted remainder, not one finding per unchecked
+	// pair. Reporting per pair is Θ(N²) findings to say a single thing — the mistake the
+	// per-pattern branch already rejects ("40 identical complaints about one defect"),
+	// and at 1000 phrases it is ~500k formatted messages nobody can read.
+	if undecidable != 1 {
+		t.Errorf("want 1 summary finding for the unchecked remainder, got %d; a per-pair "+
+			"report is quadratic in the phrase count: %+v", undecidable, got)
+	}
+	// The summary must QUANTIFY what was lost. "Some pairs were skipped" leaves an
+	// author unable to tell a rounding error from most of their coverage.
+	for _, f := range got {
+		if f.Class != "pattern-undecidable" {
+			continue
+		}
+		for _, want := range []string{"not checked for overlap", "budget"} {
+			if !strings.Contains(f.Message, want) {
+				t.Errorf("summary does not mention %q:\n  %s", want, f.Message)
+			}
+		}
+		if !strings.ContainsAny(f.Message, "0123456789") {
+			t.Errorf("summary reports no counts, so the lost coverage is unquantified:\n  %s", f.Message)
+		}
 	}
 }
 

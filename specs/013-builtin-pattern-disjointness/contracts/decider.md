@@ -77,10 +77,17 @@ stop rather than update the golden (010 D5: only terminal types may be facade-de
    `N(N-1)/2 + 40N` pairs, so ~990 searches at 20 contributed phrases, each entitled to the full
    100k — minutes of CPU inside `mentat.Validate` from a bound that looked like it had fixed the
    problem. Bounding the inner loop and leaving the outer one unbounded is the same defect one
-   level out, and it shipped in the first version of this bound. Pairs reached after the allowance
-   is spent are reported undecidable **without being searched**, which costs nothing and still
-   tells the author the truth. For scale: the built-in gate's 780 pairs cost 2589 states in total,
-   0.3% of the validation-wide allowance.
+   level out, and it shipped in the first version of this bound. For scale: the built-in gate's 780
+   pairs cost 2589 states in total, 0.3% of the validation-wide allowance.
+
+   When the allowance runs out, enumeration **stops** and a single summary finding reports how many
+   pairs went unchecked, out of how many. It is not one finding per unchecked pair: that is Θ(N²)
+   findings — ~500k messages at 1000 phrases — to say one thing, and it is the same mistake this
+   contract already rejects for an undecidable *pattern* ("pairing it against 40 built-ins would
+   emit 40 complaints about one defect"). It also is not silence: an unsearched pair is undecided,
+   and treating it as disjoint because the budget ran out is the silent fallback this feature
+   exists to remove. The summary is loud and quantified, so an author can tell a trimmed edge case
+   from most of their coverage disappearing.
 
    Both are **cost** bounds and not deadlines: neither observes cancellation, and a single
    exhausted pair costs ~250ms of CPU.

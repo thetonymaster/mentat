@@ -720,26 +720,49 @@ func patternOverlapFindingsWithBudget(labelled []LabelledPattern, src Source, bu
 	}
 	labelled = decidable
 
+	// Eligible pairs, computed rather than counted, so the exhaustion summary below can
+	// say how much coverage was lost without walking the pairs it is declining to walk.
+	// Built-in × built-in is skipped (the CI gate owns it), hence the subtraction.
+	builtins := 0
+	for _, lp := range labelled {
+		if lp.Source == SourceBuiltin {
+			builtins++
+		}
+	}
+	n := len(labelled)
+	eligible := n*(n-1)/2 - builtins*(builtins-1)/2
+	checked := 0
+
 	for i := 0; i < len(labelled); i++ {
 		for j := i + 1; j < len(labelled); j++ {
 			if labelled[i].Source == SourceBuiltin && labelled[j].Source == SourceBuiltin {
 				continue
 			}
-			perPair := min(maxProductStates, remaining)
-			if perPair <= 0 {
-				// The allowance is gone. Report rather than search: an unsearched pair
-				// is undecided, and calling it disjoint because we ran out of budget is
-				// the silent fallback this whole feature exists to remove.
+			if min(maxProductStates, remaining) <= 0 {
+				// The allowance is gone. ONE summary, then stop enumerating.
+				//
+				// The first version reported a finding per unchecked pair and kept
+				// looping, which is Θ(N²) work and Θ(N²) findings to say a single thing:
+				// coverage stopped here. That is the same mistake the doc comment above
+				// rejects for an undecidable PATTERN — "40 identical complaints about one
+				// defect, which is how a findings list becomes unreadable" — committed
+				// one loop away from where it is argued against.
+				//
+				// Reporting nothing is not the alternative: an unsearched pair is
+				// undecided, and treating it as disjoint because the budget ran out is
+				// the silent fallback this feature exists to remove. So the summary is
+				// loud and quantified, and the pairs stay unenumerated.
 				out = append(out, Finding{
 					File:  src.File,
 					Class: "pattern-undecidable",
 					Message: fmt.Sprintf(
-						"%s and %s were not checked for overlap against each other: the validation-wide decider budget (%d states) was exhausted by earlier pattern pairs; both steps still run, but a collision between them would not be reported here",
-						describeLabelled(labelled[i]), describeLabelled(labelled[j]), budget),
+						"%d of %d step-pattern pairs were not checked for overlap: the validation-wide decider budget (%d states) was exhausted after %d pairs; every step still runs, but collisions among the unchecked pairs would not be reported here",
+						eligible-checked, eligible, budget, checked),
 				})
-				continue
+				return out, nil
 			}
-			got, used, err := intersectsCounting(labelled[i].Pattern, labelled[j].Pattern, perPair)
+			checked++
+			got, used, err := intersectsCounting(labelled[i].Pattern, labelled[j].Pattern, min(maxProductStates, remaining))
 			remaining -= used
 			switch {
 			case errors.Is(err, errSearchBudget):
