@@ -30,8 +30,15 @@ stop rather than update the golden (010 D5: only terminal types may be facade-de
 3. **It refuses what it cannot model**, with an error naming the pattern and the construct — never
    a "disjoint" verdict (FR-012). The refusal set is the four empty-width assertions in
    `data-model.md` §3, **measured** (R4), plus any `EmptyOp` bit it does not recognise.
-4. **It terminates.** Reachable product states are finite and deduplicated. Measured over the
-   built-in set: max 74 states per pair.
+4. **It terminates.** Reachable product states are finite and deduplicated.
+
+   The figure "max 74 states per pair" is a **measurement over the built-in set, not a bound on
+   author input** — and author input is now the reachable path, since contributed patterns are
+   decided too. The search is worst-case exponential in the two programs' state counts, takes no
+   `context.Context` and caps nothing. No blowup could be produced (best adversarial attempt:
+   532µs, from two independent tries), so a cancellation seam with no second implementation was
+   declined rather than added on speculation — but it is an unbounded-cost path on consumer
+   patterns and is recorded here as one.
 5. **It never panics** on author input. Contributed patterns reach it.
 
 ## What it does NOT guarantee — read this before relying on a negative

@@ -63,6 +63,23 @@ func TestIntersectsKnownVerdicts(t *testing.T) {
 			name: "fold cannot rescue a genuinely different letter",
 			a:    `^(?i)abc$`, b: `^abd$`, want: false,
 		},
+		// Per-branch-anchored alternation must be DECIDED, not refused. V2's
+		// anchoredShape accepts `^a$|^b$` explicitly, and its meaning IS whole-text, so
+		// refusing it would exclude a legal phrase from overlap checking entirely — and
+		// the first version of the anchoring check did exactly that, with a message
+		// claiming the pattern was unanchored and substring-matching. Both false of it.
+		{
+			name: "alternation anchored on every branch, overlapping",
+			a:    `^the result contains "x"$|^the result contains "y"$`,
+			b:    overlappingPair[0],
+			want: true,
+		},
+		{
+			name: "alternation anchored on every branch, disjoint",
+			a:    `^the widget is "a"$|^the widget is "b"$`,
+			b:    `^the widget is "c"$`,
+			want: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -126,13 +143,13 @@ func TestIntersectsRefusesWhatItCannotModel(t *testing.T) {
 		// existed, Intersects("a", "ba") answered "disjoint" with no error while
 		// regexp.MatchString("ba") is true for both. A silent false-disjoint, in the
 		// file that argues at length against exactly that.
-		{name: "wholly unanchored", pattern: `a`, wantSub: "not anchored at both ends"},
-		{name: "anchored at the start only", pattern: `^a`, wantSub: "not anchored at both ends"},
-		{name: "anchored at the end only", pattern: `a$`, wantSub: "not anchored at both ends"},
+		{name: "wholly unanchored", pattern: `a`, wantSub: "anchored at both ends"},
+		{name: "anchored at the start only", pattern: `^a`, wantSub: "anchored at both ends"},
+		{name: "anchored at the end only", pattern: `a$`, wantSub: "anchored at both ends"},
 		// Both anchors PRESENT and still not whole-text: this means "starts with a, OR
 		// ends with b". A textual prefix/suffix check would accept it, which is why the
 		// real check is on the syntax tree.
-		{name: "both anchors, neither branch whole-text", pattern: `^a|b$`, wantSub: "not anchored at both ends"},
+		{name: "both anchors, neither branch whole-text", pattern: `^a|b$`, wantSub: "anchored at both ends"},
 	}
 
 	for _, tt := range tests {
@@ -415,12 +432,26 @@ func TestDeciderDisjointVerdictsSurviveSampling(t *testing.T) {
 	t.Run("positive control: the sampler finds a real shared string", func(t *testing.T) {
 		t.Parallel()
 
-		// The shared string is `the result contains "z"`. `z` appears in sampleAlphabet
-		// and in NO deciderFillers entry, so the generator cannot produce this sentence
-		// and only the mutation loop can reach it. That is the point: the previous
-		// control's shared string was already in the base corpus, so it proved nothing
-		// about the mutator.
-		a, b := `^the result contains "(.)"$`, `^the result contains "z"$`
+		// Two character classes overlapping only on `z`. Neither pattern contains a
+		// literal the generator can emit as the shared string: expandPattern substitutes a
+		// FILLER into a character class, and no filler is `y`, `z` or `w`.
+		//
+		// The reasoning is not the guarantee, though. THREE successive versions of this
+		// control were satisfied straight from the base corpus, each for a different
+		// reason: the shared string was itself a generated sentence; then `corpusFor`
+		// runs on BOTH patterns and the second was a pure literal, so the generator
+		// emitted the target directly; then the second pattern was `(z)` — a capture
+		// around a literal, which expandPattern emits just the same. Every version came
+		// with a correct-sounding argument for why the mutation loop was needed.
+		//
+		// The third was caught by the assertion below rather than by review, which is
+		// the only reason to prefer an assertion to an argument.
+		//
+		// So the property is ASSERTED below instead of argued: the located string must
+		// not be in the base corpus. That holds regardless of which fixtures anyone
+		// picks later, which is the difference between reasoning about a guard and
+		// measuring it — the thing this whole feature is about.
+		a, b := `^the result contains "[yz]"$`, `^the result contains "[wz]"$`
 		reA, reB := regexp.MustCompile(a), regexp.MustCompile(b)
 		found := ""
 		for _, s := range sampleStrings(t, a, b) {
@@ -433,7 +464,17 @@ func TestDeciderDisjointVerdictsSurviveSampling(t *testing.T) {
 			t.Fatal("the sampler found no shared string for a pair that provably has one; " +
 				"every negative result it produces below would be worthless")
 		}
-		t.Logf("control: sampler located %q", found)
+		// The mutation loop, specifically. If the base corpus already contains the
+		// shared string then deleting every mutation would leave this control green,
+		// and the machinery it exists to verify would be untested.
+		for _, s := range corpusFor(t, []string{a, b}) {
+			if s == found {
+				t.Fatalf("the control's shared string %q is already in the BASE corpus, so "+
+					"the mutation loop is not exercised by it — deleting every mutation "+
+					"would leave this control green", found)
+			}
+		}
+		t.Logf("control: sampler located %q, and it is NOT in the base corpus", found)
 	})
 
 	t.Run("pairs the decider called disjoint", func(t *testing.T) {

@@ -149,14 +149,52 @@ func compileNFA(pat string) (*nfa, error) {
 // Conservative by design: a false refusal is a loud, fixable error; a false "disjoint"
 // is a gate reporting success it did not earn.
 func checkWholeTextAnchored(pat string, re *syntax.Regexp) error {
-	subs := re.Sub
-	if re.Op != syntax.OpConcat || len(subs) < 2 ||
-		subs[0].Op != syntax.OpBeginText || subs[len(subs)-1].Op != syntax.OpEndText {
-		return fmt.Errorf("cannot decide pattern %q: it is not anchored at both ends, so its "+
-			"regexp meaning is substring matching while this decider reasons over whole-text "+
-			"languages; the two disagree and no verdict would be sound", pat)
+	if wholeTextAnchored(re) {
+		return nil
 	}
-	return nil
+	// Says what was not CONFIRMED, not what the pattern means. The first version of
+	// this message asserted "it is not anchored at both ends, so its regexp meaning is
+	// substring matching" — both clauses false for `^a$|^b$`, which is anchored on every
+	// branch. An author would have been told to anchor a pattern that already was.
+	return fmt.Errorf("cannot decide pattern %q: this decider reasons over whole-text "+
+		"languages and could not confirm the pattern is anchored at both ends on every "+
+		"alternative; for an unanchored pattern regexp matches anywhere in the string, so "+
+		"the two disagree and no verdict would be sound", pat)
+}
+
+// wholeTextAnchored reports whether every way of matching re spans the entire text.
+//
+// Recurses through alternation because per-branch anchoring is legal and decidable:
+// `^a$|^b$` means exactly "the text is a, or the text is b". V2's anchoredShape
+// (phrase.go) already accepts that shape explicitly, so refusing it here would reject a
+// phrase that passes validation — and, worse, exclude it from overlap checking
+// altogether while reporting a diagnosis that does not apply to it.
+//
+// A bare prefix/suffix test is not enough: `^a|b$` has both anchors and means "starts
+// with a, OR ends with b". Hence the walk, and hence the default of false — a shape this
+// function does not recognise is refused rather than assumed.
+func wholeTextAnchored(re *syntax.Regexp) bool {
+	switch re.Op {
+	case syntax.OpAlternate:
+		if len(re.Sub) == 0 {
+			return false
+		}
+		for _, sub := range re.Sub {
+			if !wholeTextAnchored(sub) {
+				return false
+			}
+		}
+		return true
+	case syntax.OpCapture:
+		return len(re.Sub) == 1 && wholeTextAnchored(re.Sub[0])
+	case syntax.OpConcat:
+		subs := re.Sub
+		return len(subs) >= 2 &&
+			subs[0].Op == syntax.OpBeginText &&
+			subs[len(subs)-1].Op == syntax.OpEndText
+	default:
+		return false
+	}
 }
 
 // checkModelled refuses any pattern containing a construct the product automaton does
@@ -168,11 +206,31 @@ func checkWholeTextAnchored(pat string, re *syntax.Regexp) error {
 // being that this particular pair happened not to explore that branch.
 func (n *nfa) checkModelled() error {
 	for i := range n.prog.Inst {
-		if n.prog.Inst[i].Op != syntax.InstEmptyWidth {
-			continue
-		}
-		if err := emptyOpSupported(syntax.EmptyOp(n.prog.Inst[i].Arg)); err != nil {
-			return fmt.Errorf("cannot decide pattern %q: %w", n.pat, err)
+		switch n.prog.Inst[i].Op {
+		case syntax.InstEmptyWidth:
+			if err := emptyOpSupported(syntax.EmptyOp(n.prog.Inst[i].Arg)); err != nil {
+				return fmt.Errorf("cannot decide pattern %q: %w", n.pat, err)
+			}
+		case syntax.InstAlt, syntax.InstAltMatch, syntax.InstCapture, syntax.InstNop,
+			syntax.InstFail, syntax.InstMatch, syntax.InstRune, syntax.InstRune1,
+			syntax.InstRuneAny, syntax.InstRuneAnyNotNL:
+			// Modelled by closure/instRanges.
+		default:
+			// An instruction kind this decider does not know. Refusing it HERE is what
+			// lets closure avoid choosing a failure direction for it at all.
+			//
+			// Both of closure's fallbacks are wrong in one direction or the other, and
+			// the first attempt at hardening them picked the worse one. Dropping a
+			// transition UNDER-approximates, which produces a false "disjoint" — silent,
+			// and the direction this whole feature exists to eliminate. Forwarding one
+			// OVER-approximates, which produces a false "intersect" — caught loudly by
+			// witness re-verification. An earlier comment in closure claimed the reverse,
+			// while this file's own mutation record had it right.
+			//
+			// Refusing eagerly makes both arms unreachable by construction, so no
+			// direction has to be chosen and no comment has to be trusted.
+			return fmt.Errorf("cannot decide pattern %q: unrecognised program instruction %v "+
+				"is refused rather than guessed at", n.pat, n.prog.Inst[i].Op)
 		}
 	}
 	return nil
@@ -235,12 +293,10 @@ func (n *nfa) closure(core []uint32, atStart, atEnd bool) map[uint32]bool {
 			// dead end
 		case syntax.InstEmptyWidth:
 			op := syntax.EmptyOp(inst.Arg)
-			// DEFENSIVE, not redundant. checkModelled has already rejected anything but
-			// the text anchors, but falling through to push() for an unrecognised op
-			// would treat an unmodelled assertion as ALWAYS SATISFIED — the unsafe
-			// direction, and the exact opposite of what emptyOpSupported argues for
-			// itself. If the invariant ever breaks, this must not be where it becomes a
-			// silent verdict.
+			// Unreachable: checkModelled refuses anything but the text anchors before
+			// any search begins. Kept as a belt-and-braces guard, not as the place the
+			// decision is made — see checkModelled's default arm for why choosing a
+			// direction here is the wrong place to do it.
 			if op&^(syntax.EmptyBeginText|syntax.EmptyEndText) != 0 {
 				continue
 			}
@@ -254,12 +310,10 @@ func (n *nfa) closure(core []uint32, atStart, atEnd bool) map[uint32]bool {
 		case syntax.InstMatch, syntax.InstRune, syntax.InstRune1, syntax.InstRuneAny, syntax.InstRuneAnyNotNL:
 			out[pc] = true
 		default:
-			// An op this function does not recognise. Forwarding it into `out` (the old
-			// `default`) would hand instRanges an instruction it returns nil for, which
-			// yields no transitions and contributes toward a false "disjoint" — the
-			// unsafe direction again. Refusing is not possible here without changing the
-			// signature, so mark the state dead: a missing transition can only cause a
-			// FALSE INTERSECT once witness verification runs, which fails loudly.
+			// Unreachable: checkModelled enumerates every instruction kind this decider
+			// models and refuses the rest, so no unknown op reaches the search. That is
+			// deliberate — either fallback here would be wrong in one direction, and the
+			// refusal removes the choice.
 			continue
 		}
 	}
