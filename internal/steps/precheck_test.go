@@ -572,3 +572,34 @@ func TestCollidingPatternsYieldOneAmbiguousStepFinding(t *testing.T) {
 		})
 	}
 }
+
+// TestReTargetIsPinnedToItsStepDefsRow proves reTarget has not drifted from the
+// stepDefs row it mirrors.
+//
+// reTarget is the LAST hand-written copy of a stepDefs pattern in this file:
+// BuiltinStepPatterns derives every other precheck pattern from the table via
+// d.Pattern, but the target extractor is still a literal. An unpinned copy is the
+// drift class that fails SILENTLY in the worst direction — the step itself keeps
+// matching through stepDefs, so no scenario goes red, while validate quietly stops
+// extracting the target name and reports CLEAN on a feature naming a target that
+// does not exist.
+//
+// Equality against the table, not a hand-written expected string: a second literal
+// asserting the first is the same source of truth twice, which is the defect.
+func TestReTargetIsPinnedToItsStepDefsRow(t *testing.T) {
+	t.Parallel()
+
+	n := 0
+	for _, d := range StepDocs() {
+		if d.Pattern == reTarget.String() {
+			n++
+		}
+	}
+
+	if n != 1 {
+		t.Fatalf("reTarget %q matches %d stepDefs rows, want exactly 1;\n"+
+			"the drive-target row and reTarget have drifted apart — validate can no "+
+			"longer extract the target name from that step, and will report CLEAN "+
+			"instead of [unknown-target]", reTarget.String(), n)
+	}
+}
